@@ -2,7 +2,7 @@
 
 First-person driver view mod for **Driving Rogue** (Steam). BepInEx 6 IL2CPP plugin.
 
-Current version: **0.9.0**
+Current version: **0.9.1**
 
 ## Install
 
@@ -38,6 +38,10 @@ Sit in the car in Driver view (best at the race start, standing still) and press
 
 Changes show live and save to the current car when you let go of the stick.
 
+### Per-car settings
+
+Each car has its own file in `BepInEx/config/DriverCam_cars/<Car>.cfg` with everything for that car: seat and view, the three mirrors and the cockpit part positions (`Part.` lines). This repo includes tuned files for the cars; copying the repo over your install replaces your own car files with these, so back up `DriverCam_cars` first if you want to keep yours.
+
 ## Notes
 
 - All 10 player cars have a cockpit fitted to their own body (pillars, roof, side mirrors on the real mirror housings). Use Edit mode to fine-tune any car.
@@ -54,6 +58,7 @@ Delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt
 | `BepInEx/plugins/DriverCam.dll` | the mod |
 | `BepInEx/plugins/DriverCam/` | cockpit models (`cockpit.dcm` generic, `cockpit_<Car>.dcm` per car) and the interior texture |
 | `BepInEx/core`, `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` | [BepInEx](https://github.com/BepInEx/BepInEx) 6.0.0-be.788 (IL2CPP) loader, LGPL-2.1 |
+| `BepInEx/config/DriverCam_cars/` | per-car settings (seat, view, mirrors, cockpit parts) |
 | `source/` | the mod's source code, see `source/README.md` for building |
 | `dotnet/` | .NET 6 runtime used by BepInEx IL2CPP (MIT) |
 

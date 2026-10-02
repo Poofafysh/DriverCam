@@ -7,9 +7,9 @@ using BepInEx.Configuration;
 namespace DriverCam;
 
 /// <summary>
-/// Per-car presets: the driver-view settings (seat, view, cockpit look, mirrors) are saved separately for every
-/// car in BepInEx/config/DriverCam_cars/&lt;Car&gt;.cfg and loaded when that car is driven. A car without a preset
-/// starts from the current values.
+/// One settings file per car: BepInEx/config/DriverCam_cars/&lt;Car&gt;.cfg holds that car's driver-view settings
+/// (seat, view, cockpit look, mirrors) and its cockpit part positions. It is loaded when that car is driven.
+/// Every car with a fitted cockpit gets a file at startup, starting from the default settings.
 /// </summary>
 internal static class CarPresets
 {
@@ -41,7 +41,22 @@ internal static class CarPresets
         if (!_loading && !Suspended && _entries.Contains(args.ChangedSetting)) Save();
     }
 
-    /// <summary>Switches presets when the driven car changes.</summary>
+    /// <summary>Writes a default settings file for every car that has a fitted cockpit and no file yet.</summary>
+    public static void CreateMissing(IEnumerable<string> cars)
+    {
+        var created = new List<string>();
+        foreach (var car in cars)
+        {
+            if (File.Exists(FileFor(car))) continue;
+            var lines = Header(car);
+            foreach (var e in _entries) lines.Add($"{Key(e)} = {TomlTypeConverter.ConvertToString(e.DefaultValue, e.SettingType)}");
+            lines.AddRange(PartLayout.LinesFor(car));
+            if (Write(car, lines)) created.Add(car);
+        }
+        if (created.Count > 0) Plugin.Logger.LogInfo($"Created DriverCam settings files for: {string.Join(", ", created)}.");
+    }
+
+    /// <summary>Switches to a car's settings when the driven car changes.</summary>
     public static void SelectCar(string car)
     {
         if (string.IsNullOrEmpty(car) || car == _car) return;
@@ -50,7 +65,7 @@ internal static class CarPresets
         if (!File.Exists(path))
         {
             Save();
-            Plugin.Logger.LogInfo($"New DriverCam preset for {car} (started from the current settings).");
+            Plugin.Logger.LogInfo($"New DriverCam settings file for {car} (started from the current settings).");
             return;
         }
 
@@ -70,29 +85,46 @@ internal static class CarPresets
                     try { e.SetSerializedValue(v); }
                     catch (Exception) { Plugin.Logger.LogWarning($"Bad value for {Key(e)} in {path}: {v}"); }
                 }
+            PartLayout.LoadCar(car, values);
         }
         finally
         {
             _loading = false;
         }
+        Save();   // brings older files up to date (part positions, new settings)
         Plugin.SettingsVersion++;
         DriverMode.Apply();
-        Plugin.Logger.LogInfo($"Loaded DriverCam preset for {car}.");
+        Plugin.Logger.LogInfo($"Loaded DriverCam settings for {car}.");
     }
 
+    /// <summary>Writes the current car's file.</summary>
     public static void Save()
     {
         if (_car == null) return;
+        var lines = Header(_car);
+        foreach (var e in _entries) lines.Add($"{Key(e)} = {e.GetSerializedValue()}");
+        lines.AddRange(PartLayout.LinesFor(_car));
+        Write(_car, lines);
+    }
+
+    static List<string> Header(string car) => new()
+    {
+        $"# DriverCam settings for {car}",
+        "# Part.<name> = move x y z   turn x y z   size  (cockpit part positions)",
+    };
+
+    static bool Write(string car, List<string> lines)
+    {
         try
         {
             Directory.CreateDirectory(Folder);
-            var lines = new List<string> { $"# DriverCam preset for {_car}" };
-            foreach (var e in _entries) lines.Add($"{Key(e)} = {e.GetSerializedValue()}");
-            File.WriteAllLines(FileFor(_car), lines);
+            File.WriteAllLines(FileFor(car), lines);
+            return true;
         }
         catch (IOException ex)
         {
-            Plugin.Logger.LogError($"Couldn't save the {_car} preset: {ex.Message}");
+            Plugin.Logger.LogError($"Couldn't save the {car} settings: {ex.Message}");
+            return false;
         }
     }
 }

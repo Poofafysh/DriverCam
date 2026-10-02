@@ -1,4 +1,5 @@
 ﻿using BepInEx;
+using System.Collections.Generic;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
@@ -7,7 +8,7 @@ using Il2CppInterop.Runtime.Injection;
 
 namespace DriverCam;
 
-[BepInPlugin(Guid, "DriverCam", "0.9.0")]
+[BepInPlugin(Guid, "DriverCam", "0.9.1")]
 public class Plugin : BasePlugin
 {
     public const string Guid = "drivingrogue.drivercam";
@@ -29,6 +30,18 @@ public class Plugin : BasePlugin
 
     /// <summary>Bumped whenever a setting changes so the view and cockpit rebuild.</summary>
     internal static int SettingsVersion;
+
+    /// <summary>Cars that have a fitted cockpit (cockpit_&lt;Car&gt;.dcm next to the plugin).</summary>
+    static IEnumerable<string> FittedCars()
+    {
+        var folder = System.IO.Path.Combine(Paths.PluginPath, "DriverCam");
+        if (!System.IO.Directory.Exists(folder)) yield break;
+        foreach (var file in System.IO.Directory.GetFiles(folder, "cockpit_*.dcm"))
+        {
+            var car = System.IO.Path.GetFileNameWithoutExtension(file).Substring("cockpit_".Length);
+            if (!car.Contains('_')) yield return car;
+        }
+    }
 
     MirrorSettings BindSideMirror(string section, float outwardYaw) => new()
     {
@@ -123,6 +136,7 @@ public class Plugin : BasePlugin
         CarPresets.Track(RearMirror.All());
         CarPresets.Track(LeftMirror.All());
         CarPresets.Track(RightMirror.All());
+        CarPresets.CreateMissing(FittedCars());
 
         ClassInjector.RegisterTypeInIl2Cpp<DriverCamBehaviour>();
         AddComponent<DriverCamBehaviour>();

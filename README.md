@@ -2,7 +2,7 @@
 
 First-person driver view mod for **Driving Rogue** (Steam). BepInEx 6 IL2CPP plugin.
 
-Current version: **0.8.1**
+Current version: **0.9.0**
 
 ## Install
 
@@ -22,9 +22,25 @@ Current version: **0.8.1**
 
 Settings are saved per car automatically.
 
+### Edit mode (controller, fast tuning)
+
+Sit in the car in Driver view (best at the race start, standing still) and press **L3 + R3** (both sticks in) or **F7**.
+
+| Input | Does |
+|---|---|
+| D-pad left / right | pick what to edit: seat, each cockpit part, the rear/left/right mirror views (the part blinks when picked) |
+| Left stick | move left/right and back/forward |
+| Right stick | move up/down and turn |
+| Hold LB + right stick | tilt / roll |
+| D-pad up / down | size (parts) or zoom (seat, mirror views) |
+| Hold RB | fine adjustment |
+| L3 + R3 | done |
+
+Changes show live and save to the current car when you let go of the stick.
+
 ## Notes
 
-- The Saber has a fully fitted cockpit. Other cars use a generic cockpit for now; line their side mirrors up with the car's own mirrors on the Parts tab.
+- All 10 player cars have a cockpit fitted to their own body (pillars, roof, side mirrors on the real mirror housings). Use Edit mode to fine-tune any car.
 - DriverCam only changes your own camera, cockpit and HUD. Nothing is sent over the network, so it doesn't change the game for other players. Try it in a private session first.
 
 ## Uninstall
@@ -36,8 +52,9 @@ Delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt
 | Path | What |
 |---|---|
 | `BepInEx/plugins/DriverCam.dll` | the mod |
-| `BepInEx/plugins/DriverCam/` | cockpit models (`cockpit.dcm`, `cockpit_Saber.dcm`) and the Saber interior texture |
+| `BepInEx/plugins/DriverCam/` | cockpit models (`cockpit.dcm` generic, `cockpit_<Car>.dcm` per car) and the interior texture |
 | `BepInEx/core`, `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` | [BepInEx](https://github.com/BepInEx/BepInEx) 6.0.0-be.788 (IL2CPP) loader, LGPL-2.1 |
+| `source/` | the mod's source code, see `source/README.md` for building |
 | `dotnet/` | .NET 6 runtime used by BepInEx IL2CPP (MIT) |
 
 Unofficial fan mod. Not affiliated with Gravity Works or Cosmic Shift Studios.

@@ -1,0 +1,19 @@
+﻿# build output
+DriverCam/bin/
+DriverCam/obj/
+# personal backups (game saves, downloaded BepInEx zip)
+backup/
+*.blend1
+
+# game-owned car models exported for reference (don't redistribute)
+DriverCam/Assets/cars/
+
+# game-owned assets extracted with AssetRipper (don't redistribute)
+VehicleAssets/
+# third-party low-poly reference car (check its license before sharing)
+car and interior/
+# Il2Cpp code dump
+dump/
+
+# packaged releases
+release/

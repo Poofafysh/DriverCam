@@ -1,0 +1,9 @@
+# DriverCam cockpit part placement: group  posX posY posZ  rotX rotY rotZ  scale
+Pillars 0 -0.095 -0.015 2 0 0 1
+RearMirror -0.04 -0.1 -0.08 0 0 0 1
+Walls 0 0.095 0.015 0 0 0 0.96
+Dashboard 0 0.095 0.16 0 0 0 1
+Gauges 0 0.03 0.16 0 0 0 1
+SteeringWheel 0 0.095 0.16 0 0 0 1
+Console 0 0.095 0.16 0 0 0 1
+Roof 0 -0.135 0.16 0 0 0 1

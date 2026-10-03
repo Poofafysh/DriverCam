@@ -42,6 +42,10 @@ Both plugins only change your own game. Nothing is sent over the network. CurbFe
 
 - `git pull --rebase` before you start and before you push.
 - Bump the plugin's version in `source/<Plugin>/Plugin.cs` and its README whenever you change its code. Never reuse a version number.
+- **After a code change, run the code audit.** In Claude Code, ask for the **code-auditor** agent
+  (`.claude/agents/code-auditor.md`). It's a strict, read-only PASS/FAIL review of your diff covering: scope and version
+  bump, clean build, IL2CPP pitfalls, whether every change to the game is restored when switched off, all cars and maps,
+  local-only and honest docs, clashes with the other plugin, and no game assets or personal paths.
 - **Before every push, run the push check:**
   ```
   powershell -ExecutionPolicy Bypass -File tools/push-check.ps1

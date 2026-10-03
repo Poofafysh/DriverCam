@@ -8,6 +8,8 @@ Two developers push to this repo: **Poofafysh** and **Aste-risks**. It is **sour
 
 ## Rules for Claude in this repo
 
+- **After changing plugin code, run the `code-auditor` subagent** (`.claude/agents/code-auditor.md`). It is a strict,
+  read-only PASS/FAIL review of the diff. Fix what it lists, then re-run it until PASS.
 - **Before any `git push`, run the `push-check` subagent** (`.claude/agents/push-check.md`) and only push if it reports
   OK or the person accepts the warnings. Never force-push.
 - Pull with `git pull --rebase` before starting work and before pushing.

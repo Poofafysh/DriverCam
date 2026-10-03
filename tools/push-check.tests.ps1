@@ -16,6 +16,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("push-check-tests-" + [guid]::NewG
 New-Item -ItemType Directory -Force $work | Out-Null
 
 function W([string]$path, [string]$text) { New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null; [IO.File]::WriteAllText($path, $text) }
+function W-Utf8([string]$path, [string]$text, [bool]$bom) { [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $bom)) }
 function G([string]$dir) { & git.exe -C $dir @args 2>&1 | Out-Null }
 
 function Plugin-Cs([string]$ver, [string]$guid = "x.foo", [string]$name = "Foo", [string]$extra = "") {
@@ -77,7 +78,8 @@ function Run-Check([string]$dir, [string[]]$extra = @()) {
 }
 
 # --- scenarios -----------------------------------------------------------------------------------------------
-# Each: name, setup scriptblock (gets $e), expected exit code, regexes that must appear, regexes that must not.
+# Each: name, setup scriptblock (gets $e), expected exit code, regexes that must appear, regexes that must not,
+# and optionally a Verify scriptblock (gets $e after the check) that returns problem strings.
 $scenarios = @(
     @{ Name = "up-to-date: code change, no bump"; Expect = 1; Must = @('Foo: code changed .* still 1\.0\.0.*Set it to 1\.0\.1');
        Setup = { param($e) Change-Code $e.B; Commit $e.B } },
@@ -155,7 +157,24 @@ $scenarios = @(
     @{ Name = "bump script: minor resolves a collision after rebase"; Expect = 0; Must = @('1\.1\.0 -> 1\.2\.0');
        Setup = { param($e) Change-Code $e.A "a"; Set-Version $e.A "1.1.0"; Commit $e.A; Push $e.A
                  W "$($e.B)/source/Foo/Other.cs" "class Other { }"; Commit $e.B; G $e.B pull -q --rebase
-                 Bump $e.B "minor"; Commit $e.B } }
+                 Bump $e.B "minor"; Commit $e.B } },
+    # Non-ASCII built from char codes: PS 5.1 may parse this script as ANSI, so literal arrows here would be garbled.
+    @{ Name = "bump script: keeps non-ASCII text, BOM and line endings byte for byte"; Expect = 0; Must = @('1\.0\.0 -> 1\.1\.0'); MustNot = @('written differently');
+       Setup = { param($e) $to = [string][char]0x2192; $both = [string][char]0x2194; $deg = [string][char]0xB0
+                 W-Utf8 "$($e.B)/source/Foo/README.md" "# Foo`r`n`r`nCurrent version: **1.0.0**`r`n`r`n| **F8** | panel: Full $to Compact $to Hidden |`r`n" $false
+                 W-Utf8 "$($e.B)/README.md" "| Plugin | Version |`n|---|---|`n| **Foo** | 1.0.0 |`n`nWalls are paired ($both) per tile.`n" $false
+                 W-Utf8 "$($e.B)/source/Foo/Plugin.cs" ((Plugin-Cs "1.0.0" "x.foo" "Foo" "// curb $to wall above 20$deg") -replace "`r?`n", "`r`n") $true
+                 Commit $e.B "non-ASCII docs"
+                 $snap = @{}; foreach ($f in 'source/Foo/README.md', 'README.md', 'source/Foo/Plugin.cs') { $snap[$f] = [IO.File]::ReadAllBytes("$($e.B)/$f") }
+                 $e | Add-Member -NotePropertyName Before -NotePropertyValue $snap
+                 Change-Code $e.B; Bump $e.B "minor"; Commit $e.B }
+       # Expected bytes = the bytes before, with only the ASCII version swapped (Latin-1 maps each byte to one char and back).
+       Verify = { param($e) $l1 = [Text.Encoding]::GetEncoding(28591)
+                  foreach ($f in $e.Before.Keys) {
+                      $want = $l1.GetBytes($l1.GetString($e.Before[$f]).Replace('1.0.0', '1.1.0'))
+                      $got = [IO.File]::ReadAllBytes("$($e.B)/$f")
+                      if ([BitConverter]::ToString($got) -ne [BitConverter]::ToString($want)) { "$f is not byte-identical apart from the version: got '$($l1.GetString($got))'" }
+                  } } }
 )
 
 # --- run -----------------------------------------------------------------------------------------------------
@@ -171,6 +190,7 @@ foreach ($s in $scenarios) {
     if ($r.Code -ne $s.Expect) { $problems += "exit code $($r.Code), expected $($s.Expect)" }
     foreach ($m in @($s.Must)) { if ($m -and $r.Out -notmatch $m) { $problems += "missing: $m" } }
     foreach ($m in @($s.MustNot)) { if ($m -and $r.Out -match $m) { $problems += "unexpected: $m" } }
+    if ($s.Verify) { $problems += @(& $s.Verify $e) }
     if ($problems) {
         $failed += $s.Name
         Write-Host ("FAIL  {0}" -f $s.Name) -ForegroundColor Red

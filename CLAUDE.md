@@ -68,7 +68,7 @@ Mandatory rules even without the commands: run the **code-auditor** agent after 
 | `/rollback [latest\|name]` | restore a `backup/` snapshot into the game |
 | `/research <topic>` | look up game types: RESEARCH.md, then the real interop assemblies |
 | `/new-plugin <Name>` | scaffold `source/<Name>/` to repo conventions, then push-check |
-| `/test-tools [words]` | run `tools/push-check.tests.ps1` (32 scenarios) |
+| `/test-tools [words]` | run `tools/push-check.tests.ps1` (33 scenarios) |
 | `/hot-reload` | build a plugin as a hot module (`-p:Hot=true`) into `BepInEx\hot\` and confirm HotReload picked it up, no game restart (see `source/HotReload/README.md`) |
 
 Scripts (run from the repo root with `powershell -NoProfile -ExecutionPolicy Bypass -File <script>`):
@@ -121,9 +121,11 @@ target that copies the DLL (DriverCam: also cockpits and `SavedSettings/DriverCa
 - The game **locks loaded plugin DLLs**: a build while it runs compiles fine but the deploy fails with
   **MSB3021/MSB3027**. Close the game (or `/sync` with consent) and rebuild.
 - **Tool scripts run on Windows PowerShell 5.1**: no `&&`/`||`, `??`, `?:` or `?.`; don't redirect native stderr with
-  `2>&1` (use the scripts' `GitOut` pattern); `Set-Content` defaults to ANSI, so write files with
-  `[IO.File]::WriteAllText`; wrap single results in `@()` before `.Count`; run with `-ExecutionPolicy Bypass`. If you
-  change `push-check.ps1`, add a scenario to `push-check.tests.ps1` and run `/test-tools`.
+  `2>&1` (use the scripts' `GitOut` pattern); `Get-Content` reads BOM-less UTF-8 as ANSI and `Set-Content` writes
+  ANSI, so a file you rewrite must go through `[IO.File]::ReadAllText(path, UTF8)` / `WriteAllText` with the file's
+  own BOM kept (`bump-version.ps1`'s `Read-Utf8`/`Set-File`); don't put literal non-ASCII in a `.ps1` (use
+  `[char]0x2192`); wrap single results in `@()` before `.Count`; run with `-ExecutionPolicy Bypass`. If you change
+  `push-check.ps1` or `bump-version.ps1`, add a scenario to `push-check.tests.ps1` and run `/test-tools`.
 
 ## Never commit
 

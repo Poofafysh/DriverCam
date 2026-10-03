@@ -15,8 +15,12 @@ $root = (git rev-parse --show-toplevel 2>$null)
 if (-not $root) { Write-Host "Not inside a git repo." -ForegroundColor Red; exit 1 }
 Set-Location $root
 function GitOut { $out = & git.exe @args 2>$null; if ($LASTEXITCODE -ne 0) { return }; $out }
-# UTF-8 in, UTF-8 out, keeping each file's BOM (PowerShell 5.1's Get-Content reads BOM-less UTF-8 as ANSI and garbles non-ASCII)
-function Read-Utf8([string]$path) { return [IO.File]::ReadAllText((Resolve-Path $path), [Text.Encoding]::UTF8) }
+# UTF-8 in, UTF-8 out, keeping each file's BOM and line endings (PowerShell 5.1's Get-Content reads BOM-less UTF-8 as
+# ANSI and garbles non-ASCII). Strict decoding: a file that isn't valid UTF-8 stops the bump instead of being rewritten.
+function Read-Utf8([string]$path) {
+    try { return [IO.File]::ReadAllText((Resolve-Path $path), (New-Object Text.UTF8Encoding($false, $true))) }
+    catch { Die "$path is not valid UTF-8 - left untouched" }
+}
 function Has-Bom([string]$path) { $b = [IO.File]::ReadAllBytes((Resolve-Path $path)); return $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF }
 function Die($m) { Write-Host "bump-version: $m" -ForegroundColor Red; exit 1 }
 

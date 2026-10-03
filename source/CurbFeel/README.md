@@ -1,8 +1,8 @@
-# CurbFeel
+﻿# CurbFeel
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue** that changes how the car meets road edges and traffic. You can ride up onto the curb and onto the sidewalk instead of bouncing off an invisible wall about a metre before it, and you can lane split. It applies to every car body (and AI racers) on every road tile.
 
-Current version: **0.3.1**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
+Current version: **0.3.2**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
 
 ## What it changes
 
@@ -10,11 +10,11 @@ Current version: **0.3.1**. Background research (collision layers, offsets, deco
 |---|---|---|
 | **A. Car wall hull** | Wall-contact capsules reach 1.6-1.7 m from the car's centre (~0.4 m outside the bodywork) | Trimmed to each car's measured body width (e.g. 1.28 m) |
 | **B. Invisible walls** | Inner wall sits ~0.85-1.4 m *before* the visible curb | Moved up to **3 m past the curb** (about half a car length), stopping 0.5 m short of buildings, walls, cliffs and bus stops along each point of the road |
-| **C. Wall damage** | Every touch: ~2.8 HP × speed curve + 8 % speed (25 % if > 20°), + 0.18 HP / 0.5 s while pressed | Contacts ≤ 5° are soft scrapes: no damage, 2 % speed. Steeper hits unchanged. Pressed-against-wall damage × 0.25 |
+| **C. Wall damage** | Every touch: ~2.8 HP Ã— speed curve + 8 % speed (25 % if > 20Â°), + 0.18 HP / 0.5 s while pressed | Contacts â‰¤ 5Â° are soft scrapes: no damage, 2 % speed. Steeper hits unchanged. Pressed-against-wall damage Ã— 0.25 |
 | **D. Curb** | No collision at all (flat road physics) | Invisible bevelled curb + sidewalk collider (Street layer): bevel 0.35 m before to 0.35 m after the curb face, height matched to the sidewalk (~0.24-0.41 m, fallback 0.32) |
-| **E. Traffic (lane splitting)** | Every touch with a traffic car is a crash: damage, 10-20 % speed, **drift reset**, camera shake | Contacts ≤ 5° are side-swipes: 3 % speed, no damage, drift kept. Traffic hit boxes × 0.92 width. Near-miss range widened by the same amount |
+| **E. Traffic (lane splitting)** | Every touch with a traffic car is a crash: damage, 10-20 % speed, **drift reset**, camera shake | Contacts â‰¤ 5Â° are side-swipes: 3 % speed, no damage, drift kept. Traffic hit boxes Ã— 0.92 width. Near-miss range widened by the same amount |
 
-Lanes are 5 m apart (traffic sits at ±2.5 / ±7.5 m), so two cars side by side leave ~2.5-2.8 m for your ~2.2 m traffic hit box.
+Lanes are 5 m apart (traffic sits at Â±2.5 / Â±7.5 m), so two cars side by side leave ~2.5-2.8 m for your ~2.2 m traffic hit box.
 
 ## Install
 
@@ -26,7 +26,7 @@ A status panel in the top-right corner shows every feature (green = on), live co
 
 | Key | Does |
 |---|---|
-| **F8** | panel: Full → Compact → Hidden |
+| **F8** | panel: Full â†’ Compact â†’ Hidden |
 | **F9** | reload the config file and reapply |
 | **F10** | CurbFeel on/off (instant comparison with stock) |
 
@@ -59,5 +59,5 @@ dotnet build -c Release -o bin -p:GameDir="D:\SteamLibrary\steamapps\common\Driv
 ## Notes
 
 - Local physics only, nothing is sent over the network. It does change gameplay (fewer wall and traffic penalties), so try it solo or in private lobbies first.
-- Walls are paired per tile by name (`Guardrail_Regular*` ↔ `Guardrail_Wider*`), vertex count and position. A wall without a partner is left stock and logged.
+- Walls are paired per tile by name (`Guardrail_Regular*` â†” `Guardrail_Wider*`), vertex count and position. A wall without a partner is left stock and logged.
 - `GpuMeshReader.cs` is adapted from DriverCam's reader.

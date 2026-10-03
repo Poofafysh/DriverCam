@@ -1,0 +1,8 @@
+<Project>
+  <!--
+    Shared by every plugin in source/. Each developer keeps their own game path in source/local.props
+    (git-ignored; copy local.props.example). Without it, the projects fall back to their own defaults
+    or to -p:GameDir=... on the command line.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)local.props" Condition="Exists('$(MSBuildThisFileDirectory)local.props')" />
+</Project>

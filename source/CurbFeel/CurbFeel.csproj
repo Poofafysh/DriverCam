@@ -12,7 +12,7 @@
     <GenerateDependencyFile>false</GenerateDependencyFile>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <GameDir Condition="'$(GameDir)' == ''">D:\SteamLibrary\steamapps\common\Driving Rogue</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Driving Rogue</GameDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -42,5 +42,10 @@
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Mirror"><HintPath>$(GameDir)\BepInEx\interop\Mirror.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
+
+  <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -->
+  <Target Name="DeployToGame" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\BepInEx\plugins" ContinueOnError="true" />
+  </Target>
 
 </Project>

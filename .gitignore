@@ -1,3 +1,35 @@
-source/DriverCam/bin/
-source/DriverCam/obj/
+# build output
+**/bin/
+**/obj/
+
+# personal settings (your game path), see source/local.props.example
+source/local.props
+
+# personal backups (game saves, downloaded BepInEx zip)
+backup/
 *.blend1
+
+# game-owned car models exported for reference (don't redistribute)
+source/DriverCam/Assets/cars/
+
+# game-owned assets / dumps (don't redistribute). Anchored to the repo root: git on Windows ignores case,
+# so a bare "assets/" would also hide source/DriverCam/Assets/.
+/VehicleAssets/
+/dump/
+/assets/
+# third-party low-poly reference car (check its license before sharing)
+car and interior/
+
+# binaries: this repo is source only. BepInEx and built plugins are not committed.
+BepInEx/
+dotnet/
+*.dll
+*.exe
+*.pdb
+*.zip
+winhttp.dll
+doorstop_config.ini
+.doorstop_version
+
+# packaged releases
+release/

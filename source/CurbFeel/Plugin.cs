@@ -10,7 +10,7 @@ namespace CurbFeel
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.curbfeel";
-        public const string Version = "0.3.1";
+        public const string Version = "0.3.2";
 
         internal static new ManualLogSource Log;
         internal static Plugin Instance;

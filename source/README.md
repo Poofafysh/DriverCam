@@ -7,21 +7,18 @@
 | `DriverCam/Assets/cockpits/cockpit_<Car>.dcm` | cockpits fitted to each player car (car body coordinates) |
 | `DriverCam/Assets/autofit.py` | Blender script that fits a cockpit to a car from the game's dumped prefabs |
 | `DriverCam/SavedSettings/` | example config / part-layout files |
+| `Directory.Build.props`, `local.props.example` | shared build settings; your game path goes in `local.props` (git-ignored) |
 | `CurbFeel/` | the CurbFeel plugin (curbs, sidewalks, lane splitting): source, `README.md` (features, tuning, build) and `RESEARCH.md` (how the game's walls, curbs and traffic collisions work) |
 
 ## Build
 
 Needs the .NET 6+ SDK and the game with BepInEx installed and launched once, so that `BepInEx/interop` exists.
 
+Set your game folder once: copy `local.props.example` to `local.props` (git-ignored) and edit `GameDir`. `Directory.Build.props` loads it for every plugin. You can also pass `-p:GameDir="..."` on the command line.
+
 ```
 cd DriverCam
 dotnet build -c Release
-```
-
-If the game isn't in the default Steam folder, pass its location:
-
-```
-dotnet build -c Release -p:GameDir="D:\SteamLibrary\steamapps\common\Driving Rogue"
 ```
 
 The build copies `DriverCam.dll` and the cockpit files into the game's `BepInEx/plugins`. Close the game first, because it locks the DLL while running.

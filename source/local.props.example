@@ -1,0 +1,6 @@
+<Project>
+  <!-- Copy this file to local.props (same folder) and set your own Driving Rogue folder. local.props is git-ignored. -->
+  <PropertyGroup>
+    <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Driving Rogue</GameDir>
+  </PropertyGroup>
+</Project>

@@ -1,76 +1,62 @@
-# DriverCam
+# Driving Rogue mods
 
-First-person driver view mod for **Driving Rogue** (Steam). BepInEx 6 IL2CPP plugin.
+Source for two BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam):
 
-Current version: **0.9.1**
+| Plugin | Version | What it does |
+|---|---|---|
+| **DriverCam** | 0.9.1 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
+| **CurbFeel** | 0.3.2 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
 
-## Install
+This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins yourself as described below.
 
-1. In Steam: right-click Driving Rogue > Manage > Browse local files.
-2. Copy everything from this repo (or the release zip) into that folder, so that `winhttp.dll` and the `BepInEx` folder sit right next to `Driving Rogue.exe`.
-3. Start the game. The first launch takes a few minutes while BepInEx builds its files and may look frozen. A console window may open; that's normal.
+## Setup
+
+1. **BepInEx 6 IL2CPP.** Install BepInEx 6.0.0-be.788 (or newer) for Unity IL2CPP x64 from <https://builds.bepinex.dev/projects/bepinex_be> into the game folder (Steam: right-click Driving Rogue > Manage > Browse local files), so `winhttp.dll` and the `BepInEx` folder sit next to `Driving Rogue.exe`. Start the game once and let BepInEx finish its first run (a few minutes; it generates `BepInEx/interop`), then close it.
+2. **.NET SDK** 6 or newer (8 works).
+3. **Your game path.** Copy `source/local.props.example` to `source/local.props` and set `GameDir` to your Driving Rogue folder. `local.props` is git-ignored, so each of us keeps our own.
+4. **Build.** With the game closed (it locks loaded plugin DLLs):
+   ```
+   cd source/DriverCam
+   dotnet build -c Release
+   cd ../CurbFeel
+   dotnet build -c Release
+   ```
+   Each build copies its DLL (and DriverCam's cockpit files) straight into the game's `BepInEx/plugins`.
+5. **Optional: tuned DriverCam settings.** Copy `source/DriverCam/SavedSettings/DriverCam_cars/` to `BepInEx/config/DriverCam_cars/` (back up your own first).
 
 ## Controls
 
-- **Change Camera** (C on keyboard / Y on controller) cycles: Chase -> Chase 2 -> Hood -> Driver
-- **F6** or the controller **View** button toggles Driver view.
-- Click the **DriverCam** button on the left of the screen for the settings panel:
-  - **Seat & view**: seat position, look angle, field of view, cockpit look
-  - **Parts**: move/turn/resize each cockpit part (including the side mirrors)
-  - **Mirror**: aim and zoom the rear-view and side mirrors
-  - **HUD**: move/shrink the health bar, speedometer and ability bar
+| Key | Plugin | Does |
+|---|---|---|
+| C / Y (Change Camera) | DriverCam | cycles Chase → Chase 2 → Hood → Driver |
+| F6 / controller View | DriverCam | toggle Driver view |
+| F7 / L3+R3 | DriverCam | Edit mode (move seat, cockpit parts, mirrors with the controller) |
+| DriverCam button (left of screen) | DriverCam | settings panel |
+| F8 | CurbFeel | status panel: full / compact / hidden |
+| F9 | CurbFeel | reload `BepInEx/config/rogue.curbfeel.cfg` |
+| F10 | CurbFeel | CurbFeel on/off |
 
-Settings are saved per car automatically.
+Both plugins only change your own game. Nothing is sent over the network. CurbFeel does change gameplay, so try it solo or in a private lobby first.
 
-### Edit mode (controller, fast tuning)
+## Working on this repo (both of us)
 
-Sit in the car in Driver view (best at the race start, standing still) and press **L3 + R3** (both sticks in) or **F7**.
-
-| Input | Does |
-|---|---|
-| D-pad left / right | pick what to edit: seat, each cockpit part, the rear/left/right mirror views (the part blinks when picked) |
-| Left stick | move left/right and back/forward |
-| Right stick | move up/down and turn |
-| Hold LB + right stick | tilt / roll |
-| D-pad up / down | size (parts) or zoom (seat, mirror views) |
-| Hold RB | fine adjustment |
-| L3 + R3 | done |
-
-Changes show live and save to the current car when you let go of the stick.
-
-### Per-car settings
-
-Each car has its own file in `BepInEx/config/DriverCam_cars/<Car>.cfg` with everything for that car: seat and view, the three mirrors and the cockpit part positions (`Part.` lines). This repo includes tuned files for the cars; copying the repo over your install replaces your own car files with these, so back up `DriverCam_cars` first if you want to keep yours.
-
-## Notes
-
-- All 10 player cars have a cockpit fitted to their own body (pillars, roof, side mirrors on the real mirror housings). Use Edit mode to fine-tune any car.
-- DriverCam only changes your own camera, cockpit and HUD. Nothing is sent over the network, so it doesn't change the game for other players. Try it in a private session first.
-
-## CurbFeel (curbs, sidewalks, lane splitting)
-
-A second plugin in this repo, `BepInEx/plugins/CurbFeel.dll` (v0.3.1). Full details and tuning are in [`source/CurbFeel/README.md`](source/CurbFeel/README.md).
-
-- The invisible road-edge walls move from ~1 m *before* the curb to up to **3 m past it**, stopping short of buildings, so you can ride up onto the curb and the sidewalk.
-- An invisible bevelled curb lets the wheels physically climb onto the sidewalk.
-- Each car's wall-contact hull is trimmed to its real body width.
-- Shallow (≤ 5°) wall scrapes and traffic side-swipes don't cost health or reset your drift, so you can lane split. Real hits are unchanged.
-- A status panel in the top-right shows what's on. **F8** cycles the panel, **F9** reloads `BepInEx/config/rogue.curbfeel.cfg`, **F10** turns CurbFeel on/off.
+- `git pull --rebase` before you start and before you push.
+- Bump the plugin's version in `source/<Plugin>/Plugin.cs` and its README whenever you change its code. Never reuse a version number.
+- **Before every push, run the push check:**
+  ```
+  powershell -ExecutionPolicy Bypass -File tools/push-check.ps1
+  ```
+  In Claude Code, ask for the **push-check** agent (`.claude/agents/push-check.md`; `CLAUDE.md` tells Claude to use it automatically). It flags:
+  - being behind `origin/main`, and files both of us changed
+  - a plugin whose code changed without a version bump, a version lower than what's already pushed, or one already used by a tag
+  - duplicate plugin GUIDs, names or DLL names
+  - hotkey clashes, and two plugins patching the same game method
+  - binaries, build output, `local.props` or game assets about to be committed
+  - merge-conflict markers, and READMEs that state a different version than the code
+- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel).
 
 ## Uninstall
 
-Delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` and the `BepInEx` and `dotnet` folders from the game folder. Steam's "Verify integrity of game files" won't remove them, because they aren't the game's own files.
+Delete `BepInEx/plugins/DriverCam.dll`, `BepInEx/plugins/DriverCam/` and `BepInEx/plugins/CurbFeel.dll`. To remove BepInEx itself, also delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` and the `BepInEx` and `dotnet` folders.
 
-## Contents
-
-| Path | What |
-|---|---|
-| `BepInEx/plugins/DriverCam.dll` | the mod |
-| `BepInEx/plugins/CurbFeel.dll` | CurbFeel (curbs, sidewalks, lane splitting); source in `source/CurbFeel/` |
-| `BepInEx/plugins/DriverCam/` | cockpit models (`cockpit.dcm` generic, `cockpit_<Car>.dcm` per car) and the interior texture |
-| `BepInEx/core`, `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` | [BepInEx](https://github.com/BepInEx/BepInEx) 6.0.0-be.788 (IL2CPP) loader, LGPL-2.1 |
-| `BepInEx/config/DriverCam_cars/` | per-car settings (seat, view, mirrors, cockpit parts) |
-| `source/` | the mod's source code, see `source/README.md` for building |
-| `dotnet/` | .NET 6 runtime used by BepInEx IL2CPP (MIT) |
-
-Unofficial fan mod. Not affiliated with Gravity Works or Cosmic Shift Studios.
+Unofficial fan mods. Not affiliated with Gravity Works or Cosmic Shift Studios. Game assets (ripped models, dumps) are not included.

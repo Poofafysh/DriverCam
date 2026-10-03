@@ -1,33 +1,44 @@
-﻿using BepInEx;
+﻿using BepInEx.Configuration;
 using BepInEx.Logging;
+#if !HOT
+using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using Il2CppInterop.Runtime.Injection;
+#endif
 
 namespace CurbFeel
 {
+#if HOT
+    /// <summary>Hot-module build (-p:Hot=true): no BepInEx plugin class and no injected MonoBehaviour. HotModule.cs fills Log/Cfg.</summary>
+    internal static class Plugin
+    {
+        internal static ManualLogSource Log;
+#else
     [BepInPlugin(Guid, "CurbFeel", Version)]
     public class Plugin : BasePlugin
     {
-        public const string Guid = "rogue.curbfeel";
-        public const string Version = "0.3.2";
-
         internal static new ManualLogSource Log;
-        internal static Plugin Instance;
 
         public override void Load()
         {
-            Instance = this;
             Log = base.Log;
+            Cfg = Config;
             Settings.Bind(Config);
 
             ClassInjector.RegisterTypeInIl2Cpp<CurbFeelRunner>();
             AddComponent<CurbFeelRunner>();
 
             new Harmony(Guid).PatchAll(typeof(ScrapePatches));
-            Log.LogInfo($"[CurbFeel] start: {CurbFeelRunner.StateLine()}");
+            Log.LogInfo($"[CurbFeel] start: {CurbFeelCore.StateLine()}");
             Log.LogInfo($"CurbFeel {Version} loaded. {Settings.ReloadKey.Value} = reload config, {Settings.ToggleKey.Value} = toggle on/off, {Settings.OverlayKey.Value} = status panel.");
         }
+#endif
+        public const string Guid = "rogue.curbfeel";
+        public const string Version = "0.4.0";
+
+        /// <summary>BepInEx/config/rogue.curbfeel.cfg (the plugin's Config, or the one the HotReload host passes in).</summary>
+        internal static ConfigFile Cfg;
 
         internal static void Verbose(string msg)
         {

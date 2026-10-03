@@ -5,7 +5,7 @@ Source for two BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam):
 | Plugin | Version | What it does |
 |---|---|---|
 | **DriverCam** | 0.9.2 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
-| **CurbFeel** | 0.3.2 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
+| **CurbFeel** | 0.4.0 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
 | **TrafficDensity** | 0.1.0 | Multiplies the NPC traffic on the road (stacks with the game's traffic hazard, applies live). Ctrl+PageUp/PageDown to change, Ctrl+Home = stock. See [`source/TrafficDensity/README.md`](source/TrafficDensity/README.md) |
 
 This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins yourself as described below.

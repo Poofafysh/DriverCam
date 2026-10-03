@@ -4,17 +4,28 @@ using UnityEngine.InputSystem;
 
 namespace CurbFeel
 {
-    /// <summary>Drives every feature, draws the status panel, and handles the reload / toggle / panel keys.</summary>
+#if !HOT
+    /// <summary>Plugin build: the injected MonoBehaviour that forwards Unity's Update/OnGUI to CurbFeelCore.
+    /// (The hot-module build has no injected type; the HotReload host calls CurbFeelCore through HotModule.cs.)</summary>
     public class CurbFeelRunner : MonoBehaviour
     {
         public CurbFeelRunner(IntPtr ptr) : base(ptr) { }
 
+        private void Update() => CurbFeelCore.Update();
+
+        private void OnGUI() => CurbFeelCore.OnGUI();
+    }
+#endif
+
+    /// <summary>Drives every feature, draws the status panel, and handles the reload / toggle / panel keys.</summary>
+    internal static class CurbFeelCore
+    {
         private static readonly HullTrimmer Hull = new();
         private static readonly WallShifter Walls = new();
         private static readonly TrafficTuner Traffic = new();
-        private float _nextHull, _nextWalls, _nextTraffic;
+        private static float _nextHull, _nextWalls, _nextTraffic;
 
-        private void Update()
+        public static void Update()
         {
             try
             {
@@ -39,7 +50,7 @@ namespace CurbFeel
             }
         }
 
-        private void OnGUI()
+        public static void OnGUI()
         {
             try
             {
@@ -59,12 +70,21 @@ namespace CurbFeel
             return control != null && control.wasPressedThisFrame;
         }
 
-        private static void RevertAll()
+        /// <summary>Undo every change CurbFeel made in the game (hull, walls, ramps, traffic boxes, near-miss range).</summary>
+        public static void RevertAll()
         {
             Hull.Revert();
             Walls.Revert();
             Traffic.Revert();
             Stats.ResetApplied();
+        }
+
+        /// <summary>Hot-module unload, after RevertAll: drop cached game objects so nothing of this build stays referenced.</summary>
+        public static void ReleaseCaches()
+        {
+            Walls.DestroyDebugMaterial();
+            ScrapePatches.ClearCaches();
+            SidewalkMap.ClearCache();
         }
 
         /// <summary>Undo everything; the next ticks re-apply with the current settings.</summary>
@@ -77,7 +97,7 @@ namespace CurbFeel
         private static void Reload()
         {
             RevertAll();
-            Plugin.Instance.Config.Reload();
+            Plugin.Cfg.Reload();
             Plugin.Log.LogInfo($"[CurbFeel] config reloaded: {StateLine()}");
         }
 

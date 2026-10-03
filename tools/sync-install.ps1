@@ -70,6 +70,16 @@ function Read-Plugin([string]$dir, [string]$rev) {
     $attr = [regex]::Match($text, '\[BepInPlugin\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^\)]+?)\s*\)\]')
     if (-not $attr.Success) { return $null }
     $val = { param($tok) $t = $tok.Trim(); if ($t.StartsWith('"')) { $t.Trim('"') } elseif ($consts.ContainsKey($t)) { $consts[$t] } else { $t } }
+    # developer tools (e.g. source/HotReload) mark their .csproj <DevOnly>true</DevOnly>: never built, installed or required here
+    $projText = ""
+    if ($rev) {
+        $cp = @(GitOut ls-tree --name-only $rev "$dir/") | Where-Object { $_ -like '*.csproj' } | Select-Object -First 1
+        if ($cp) { $projText = @(GitOut show "${rev}:$cp") -join "`n" }
+    } else {
+        $cp = Get-ChildItem $dir -Filter *.csproj -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cp) { $projText = Get-Content $cp.FullName -Raw }
+    }
+    if ($projText -match '<DevOnly>\s*true\s*</DevOnly>') { return $null }
     $csproj = if ($rev) { $null } else { Get-ChildItem $dir -Filter *.csproj -ErrorAction SilentlyContinue | Select-Object -First 1 }
     $asm = if ($csproj) { ([regex]::Match((Get-Content $csproj.FullName -Raw), '<AssemblyName>([^<]+)</AssemblyName>')).Groups[1].Value } else { (Split-Path $dir -Leaf) }
     [pscustomobject]@{ Dir = $dir; Guid = (& $val $attr.Groups[1].Value); Name = (& $val $attr.Groups[2].Value); Version = (& $val $attr.Groups[3].Value); Assembly = $asm }

@@ -49,6 +49,14 @@ namespace CurbFeel
             return false;
         }
 
+        /// <summary>Hot-module unload only: forget cached game objects and cooldowns.</summary>
+        internal static void ClearCaches()
+        {
+            _params = null;
+            LastSoftScrape.Clear();
+            LastSideSwipe.Clear();
+        }
+
         private static bool IsWall(VehicleBaseParameters p, int layer) => p != null && (p.guardrailsLayer.value & (1 << layer)) != 0;
 
         // ---------------------------------------------------------------- per-hit

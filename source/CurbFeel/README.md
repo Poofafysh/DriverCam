@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue** that changes how the car meets road edges and traffic. You can ride up onto the curb and onto the sidewalk instead of bouncing off an invisible wall about a metre before it, and you can lane split. It applies to every car body (and AI racers) on every road tile.
 
-Current version: **0.3.2**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
+Current version: **0.4.0**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
 
 ## What it changes
 
@@ -55,6 +55,18 @@ Needs the .NET SDK (8 is fine) and a game folder where BepInEx has already gener
 ```
 dotnet build -c Release -o bin -p:GameDir="D:\SteamLibrary\steamapps\common\Driving Rogue"
 ```
+
+`-p:SkipDeploy=true` builds without copying anything into the game.
+
+### Hot reload (developers)
+
+The same source also builds as a hot module for the [HotReload](../HotReload/README.md) host, so you can change CurbFeel while the game runs:
+
+```
+dotnet build -c Release -p:Hot=true
+```
+
+This build has no BepInEx plugin class and no injected MonoBehaviour (`HotModule.cs` is its entry point, compiled only with `HOT`). It goes to `BepInEx\hot\CurbFeel.dll` instead of `BepInEx\plugins\`. The host reloads it within a second of the build finishing: the old build's `Unload` reverts every change (hull, walls, ramps, traffic boxes, near-miss range) and removes its Harmony patches, then the new build starts with the same `rogue.curbfeel.cfg`. To switch to hot mode, delete `BepInEx\plugins\CurbFeel.dll` once and restart. If both are installed, the host refuses the hot module and logs why. Players always use the normal build. Its behaviour doesn't change.
 
 ## Notes
 

@@ -427,6 +427,14 @@ namespace CurbFeel
             return m;
         }
 
+        /// <summary>Hot-module unload only (after Revert destroyed the ramps that used it).</summary>
+        public void DestroyDebugMaterial()
+        {
+            if (_debugMat != null) UnityEngine.Object.Destroy(_debugMat);
+            _debugMat = null;
+            _debugMatTried = false;
+        }
+
         private Material DebugMaterial()
         {
             if (_debugMatTried) return _debugMat;

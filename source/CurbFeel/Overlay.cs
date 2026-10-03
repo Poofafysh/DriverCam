@@ -35,7 +35,7 @@ namespace CurbFeel
             Settings.OverlayMode.Value = next.ToString();
         }
 
-        /// <summary>Called from CurbFeelRunner.OnGUI. Returns true if a feature was clicked (caller reapplies).</summary>
+        /// <summary>Called from CurbFeelCore.OnGUI. Returns true if a feature was clicked (caller reapplies).</summary>
         public static bool Draw()
         {
             var mode = Current;

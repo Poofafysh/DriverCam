@@ -7,6 +7,7 @@
 | `DriverCam/Assets/cockpits/cockpit_<Car>.dcm` | cockpits fitted to each player car (car body coordinates) |
 | `DriverCam/Assets/autofit.py` | Blender script that fits a cockpit to a car from the game's dumped prefabs |
 | `DriverCam/SavedSettings/` | example config / part-layout files |
+| `CurbFeel/` | the CurbFeel plugin (curbs, sidewalks, lane splitting): source, `README.md` (features, tuning, build) and `RESEARCH.md` (how the game's walls, curbs and traffic collisions work) |
 
 ## Build
 

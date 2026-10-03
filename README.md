@@ -47,6 +47,16 @@ Each car has its own file in `BepInEx/config/DriverCam_cars/<Car>.cfg` with ever
 - All 10 player cars have a cockpit fitted to their own body (pillars, roof, side mirrors on the real mirror housings). Use Edit mode to fine-tune any car.
 - DriverCam only changes your own camera, cockpit and HUD. Nothing is sent over the network, so it doesn't change the game for other players. Try it in a private session first.
 
+## CurbFeel (curbs, sidewalks, lane splitting)
+
+A second plugin in this repo, `BepInEx/plugins/CurbFeel.dll` (v0.3.1). Full details and tuning are in [`source/CurbFeel/README.md`](source/CurbFeel/README.md).
+
+- The invisible road-edge walls move from ~1 m *before* the curb to up to **3 m past it**, stopping short of buildings, so you can ride up onto the curb and the sidewalk.
+- An invisible bevelled curb lets the wheels physically climb onto the sidewalk.
+- Each car's wall-contact hull is trimmed to its real body width.
+- Shallow (≤ 5°) wall scrapes and traffic side-swipes don't cost health or reset your drift, so you can lane split. Real hits are unchanged.
+- A status panel in the top-right shows what's on. **F8** cycles the panel, **F9** reloads `BepInEx/config/rogue.curbfeel.cfg`, **F10** turns CurbFeel on/off.
+
 ## Uninstall
 
 Delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` and the `BepInEx` and `dotnet` folders from the game folder. Steam's "Verify integrity of game files" won't remove them, because they aren't the game's own files.
@@ -56,6 +66,7 @@ Delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt
 | Path | What |
 |---|---|
 | `BepInEx/plugins/DriverCam.dll` | the mod |
+| `BepInEx/plugins/CurbFeel.dll` | CurbFeel (curbs, sidewalks, lane splitting); source in `source/CurbFeel/` |
 | `BepInEx/plugins/DriverCam/` | cockpit models (`cockpit.dcm` generic, `cockpit_<Car>.dcm` per car) and the interior texture |
 | `BepInEx/core`, `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` | [BepInEx](https://github.com/BepInEx/BepInEx) 6.0.0-be.788 (IL2CPP) loader, LGPL-2.1 |
 | `BepInEx/config/DriverCam_cars/` | per-car settings (seat, view, mirrors, cockpit parts) |

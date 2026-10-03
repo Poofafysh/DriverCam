@@ -17,3 +17,7 @@ dump/
 
 # packaged releases
 release/
+
+# CurbFeel build output
+CurbFeel/bin/
+CurbFeel/obj/

@@ -7,6 +7,7 @@ Source for two BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam):
 | **DriverCam** | 0.9.2 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
 | **CurbFeel** | 0.4.0 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
 | **TrafficDensity** | 0.1.0 | Multiplies the NPC traffic on the road (stacks with the game's traffic hazard, applies live). Ctrl+PageUp/PageDown to change, Ctrl+Home = stock. See [`source/TrafficDensity/README.md`](source/TrafficDensity/README.md) |
+| **HotReload** (dev only) | 0.1.0 | Developer tool: reloads hot-module builds of plugins (CurbFeel so far) while the game runs, no restart. Not installed by `/sync`. See [`source/HotReload/README.md`](source/HotReload/README.md) |
 
 This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins yourself as described below.
 
@@ -38,6 +39,7 @@ This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins 
 | F10 | CurbFeel | CurbFeel on/off |
 | Ctrl+PageUp / Ctrl+PageDown | TrafficDensity | more / less NPC traffic |
 | Ctrl+Home | TrafficDensity | stock traffic |
+| F11 | HotReload (dev only) | reload all hot modules now |
 
 Both plugins only change your own game. Nothing is sent over the network. CurbFeel does change gameplay, so try it solo or in a private lobby first.
 
@@ -78,7 +80,7 @@ In Claude Code, ask for the **repo-sync** agent (`.claude/agents/repo-sync.md`).
   - hotkey clashes, and two plugins patching the same game method
   - binaries, build output, `local.props` or game assets about to be committed
   - merge-conflict markers, and READMEs that state a different version than the code
-- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel), Ctrl+PageUp/PageDown/Home (TrafficDensity).
+- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel), F11 (HotReload, dev only), Ctrl+PageUp/PageDown/Home (TrafficDensity).
 - Bump versions with `tools/bump-version.ps1 -Plugin <Name> -To patch|minor|major` (it counts up from the higher of your version and the pushed one, so we never collide). No bump for docs-only changes.
 
 ### Claude Code slash commands
@@ -100,7 +102,7 @@ Defined in `.claude/commands/`; `CLAUDE.md` has the full workflow and rules.
 | `/research <topic>` | look up game types in RESEARCH.md and the BepInEx interop |
 | `/new-plugin <Name>` | scaffold a new plugin to the repo conventions |
 | `/test-tools` | run the push-check scenario tests |
-| `/hot-reload` | see `source/HotReload/README.md` (coming) |
+| `/hot-reload` | build a plugin as a hot module (`-p:Hot=true`) into `BepInEx\hot\` and confirm HotReload picked it up, no game restart (see `source/HotReload/README.md`) |
 
 ## Uninstall
 

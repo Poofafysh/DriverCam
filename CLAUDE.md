@@ -69,7 +69,7 @@ Mandatory rules even without the commands: run the **code-auditor** agent after 
 | `/research <topic>` | look up game types: RESEARCH.md, then the real interop assemblies |
 | `/new-plugin <Name>` | scaffold `source/<Name>/` to repo conventions, then push-check |
 | `/test-tools [words]` | run `tools/push-check.tests.ps1` (32 scenarios) |
-| `/hot-reload` | see `source/HotReload/README.md` (coming) |
+| `/hot-reload` | build a plugin as a hot module (`-p:Hot=true`) into `BepInEx\hot\` and confirm HotReload picked it up, no game restart (see `source/HotReload/README.md`) |
 
 Scripts (run from the repo root with `powershell -NoProfile -ExecutionPolicy Bypass -File <script>`):
 `tools/push-check.ps1 [-NoFetch] [-NoGitHub] [-AllowIdentityChange]`,
@@ -84,8 +84,9 @@ Scripts (run from the repo root with `powershell -NoProfile -ExecutionPolicy Byp
 | DriverCam | `drivingrogue.drivercam` | `DriverCam.dll` (+ `plugins/DriverCam/`) | `drivingrogue.drivercam.cfg`, `plugins/DriverCam/cars/*.cfg` | F6 driver view, F7 Edit mode (also C/Y cycle, View button, L3+R3) | button on the left |
 | CurbFeel | `rogue.curbfeel` | `CurbFeel.dll` | `rogue.curbfeel.cfg` | F8 panel, F9 reload config, F10 on/off | panel top-right |
 | TrafficDensity | `rogue.trafficdensity` | `TrafficDensity.dll` | `rogue.trafficdensity.cfg` | Ctrl+PageUp/PageDown step, Ctrl+Home stock | toast top-centre |
+| HotReload (dev only) | `rogue.hotreload` | `HotReload.dll` (+ modules in `BepInEx\hot\`) | `rogue.hotreload.cfg` | F11 reload hot modules | toast top-centre, below TrafficDensity's |
 
-Not used by our plugins: F1-F5, F11 (check the game doesn't bind it; avoid F12, Steam screenshot). New plugins: GUID `rogue.<name>`, read keys through the Input
+Not used by our plugins: F1-F5 (avoid F12, Steam screenshot). New plugins: GUID `rogue.<name>`, read keys through the Input
 System (`Keyboard.current.f11Key` / `Key.F11`) so push-check can see clashes, and add a row here.
 
 ## Layout
@@ -97,6 +98,7 @@ source/README.md               DriverCam architecture + build notes
 source/DriverCam/              *.cs, DriverCam.csproj, Assets/ (cockpits .dcm, autofit.py), SavedSettings/ (shared car setups)
 source/CurbFeel/               *.cs, CurbFeel.csproj, README.md (features, tuning table), RESEARCH.md (walls, curbs, damage)
 source/TrafficDensity/         Plugin.cs (spawner patch + hotkeys), README.md (how the game sizes traffic)
+source/HotReload/              dev-only host: loads BepInEx\hot\*.dll from bytes, Unload/Load on change or F11 (DevOnly: /sync skips it)
 tools/                         push-check, push-check.tests, bump-version, sync-install (PowerShell 5.1)
 .claude/agents/ .claude/commands/
 backup/                        sync-install backups (git-ignored, last 10 kept)

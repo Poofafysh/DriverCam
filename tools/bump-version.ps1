@@ -15,6 +15,9 @@ $root = (git rev-parse --show-toplevel 2>$null)
 if (-not $root) { Write-Host "Not inside a git repo." -ForegroundColor Red; exit 1 }
 Set-Location $root
 function GitOut { $out = & git.exe @args 2>$null; if ($LASTEXITCODE -ne 0) { return }; $out }
+# UTF-8 in, UTF-8 out, keeping each file's BOM (PowerShell 5.1's Get-Content reads BOM-less UTF-8 as ANSI and garbles non-ASCII)
+function Read-Utf8([string]$path) { return [IO.File]::ReadAllText((Resolve-Path $path), [Text.Encoding]::UTF8) }
+function Has-Bom([string]$path) { $b = [IO.File]::ReadAllBytes((Resolve-Path $path)); return $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF }
 function Die($m) { Write-Host "bump-version: $m" -ForegroundColor Red; exit 1 }
 
 function Parse-SemVer([string]$v) {
@@ -41,7 +44,7 @@ $dir = $null; $cur = $null; $name = $null
 foreach ($d in (Get-ChildItem source -Directory -ErrorAction SilentlyContinue)) {
     $pc = Join-Path $d.FullName "Plugin.cs"
     if (-not (Test-Path $pc)) { continue }
-    $text = Get-Content $pc -Raw
+    $text = Read-Utf8 $pc
     $attr = [regex]::Match($text, '\[BepInPlugin\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^\)]+?)\s*\)\]')
     if (-not $attr.Success) { continue }
     $consts = @{}; foreach ($m in [regex]::Matches($text, 'const\s+string\s+(\w+)\s*=\s*"([^"]*)"')) { $consts[$m.Groups[1].Value] = $m.Groups[2].Value }
@@ -80,16 +83,16 @@ if ($clash) { Die "tag(s) already exist for $name $new`: $($clash -join ', ')" }
 
 # ---- write it everywhere
 $changed = @()
-function Set-File([string]$path, [string]$text) { [IO.File]::WriteAllText((Join-Path $root $path), $text); $script:changed += $path }
+function Set-File([string]$path, [string]$text) { $full = Join-Path $root $path; [IO.File]::WriteAllText($full, $text, (New-Object Text.UTF8Encoding (Has-Bom $full))); $script:changed += $path }
 
-$pcPath = "$dir/Plugin.cs"; $pc = Get-Content $pcPath -Raw; $orig = $pc
+$pcPath = "$dir/Plugin.cs"; $pc = Read-Utf8 $pcPath; $orig = $pc
 $pc = [regex]::Replace($pc, '(const\s+string\s+Version\s*=\s*")[^"]*(")', "`${1}$new`${2}")
 if ($verTok.StartsWith('"')) { $pc = [regex]::Replace($pc, '(\[BepInPlugin\(\s*[^,]+?\s*,\s*[^,]+?\s*,\s*")[^"]*("\s*\)\])', "`${1}$new`${2}") }
 if ($pc -ne $orig) { Set-File $pcPath $pc }
 
 $cp = Get-ChildItem $dir -Filter *.csproj | Select-Object -First 1
 if ($cp) {
-    $rel = "$dir/$($cp.Name)"; $t = Get-Content $cp.FullName -Raw; $o = $t
+    $rel = "$dir/$($cp.Name)"; $t = Read-Utf8 $cp.FullName; $o = $t
     foreach ($tag in 'Version', 'AssemblyVersion', 'FileVersion', 'InformationalVersion') {
         $plain = ($new -split '-')[0]
         $value = if ($tag -in 'AssemblyVersion', 'FileVersion') { $plain } else { $new }
@@ -100,12 +103,12 @@ if ($cp) {
 
 $rd = "$dir/README.md"
 if (Test-Path $rd) {
-    $t = Get-Content $rd -Raw; $o = $t
+    $t = Read-Utf8 $rd; $o = $t
     $t = [regex]::Replace($t, '(?i)(current version:\s*\**\s*)v?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z.]+)?', "`${1}$new")
     if ($t -ne $o) { Set-File $rd $t }
 }
 if (Test-Path "README.md") {
-    $t = Get-Content "README.md" -Raw; $o = $t
+    $t = Read-Utf8 "README.md"; $o = $t
     $t = [regex]::Replace($t, '(?m)(^\|\s*\**' + [regex]::Escape($name) + '\**\s*\|\s*)v?[0-9][0-9A-Za-z.+-]*(\s*\|)', "`${1}$new`${2}")
     if ($t -ne $o) { Set-File "README.md" $t }
 }

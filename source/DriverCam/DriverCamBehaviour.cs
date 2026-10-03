@@ -452,7 +452,8 @@ public class DriverCamBehaviour : MonoBehaviour
         cy += rowH + gap;
 
         if (GUI.Button(new Rect(x + gap, cy, half, rowH), "Reset seat")) ResetSeat();
-        if (GUI.Button(new Rect(x + gap * 2 + half, cy, half, rowH), "Close")) ClosePanel();
+        if (GUI.Button(new Rect(x + gap * 2 + half, cy, half, rowH), CarPresets.HasShared ? "Use shared setup" : "No shared setup") && CarPresets.HasShared)
+            CarPresets.UseShared();
         cy += rowH + gap;
 
         GUI.Label(new Rect(x + gap, cy, inner, rowH), "C / Y (game camera button) or F6 for driver view");

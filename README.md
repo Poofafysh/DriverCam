@@ -4,7 +4,7 @@ Source for two BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam):
 
 | Plugin | Version | What it does |
 |---|---|---|
-| **DriverCam** | 0.9.1 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
+| **DriverCam** | 0.9.2 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
 | **CurbFeel** | 0.3.2 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
 
 This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins yourself as described below.
@@ -22,7 +22,7 @@ This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins 
    dotnet build -c Release
    ```
    Each build copies its DLL (and DriverCam's cockpit files) straight into the game's `BepInEx/plugins`.
-5. **Optional: tuned DriverCam settings.** Copy `source/DriverCam/SavedSettings/DriverCam_cars/` to `BepInEx/config/DriverCam_cars/` (back up your own first).
+5. **Tuned DriverCam settings** come with the build: it installs `source/DriverCam/SavedSettings/DriverCam_cars/` as the shared setups in `BepInEx/plugins/DriverCam/cars/`. On the next start, every car you haven't tuned yourself (no settings file, or only the untouched defaults) uses them. Cars you have tuned are left alone; **Use shared setup** on the DriverCam panel's Seat & view tab switches the current car to the shared one.
 
 ## Controls
 

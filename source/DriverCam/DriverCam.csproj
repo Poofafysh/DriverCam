@@ -36,6 +36,8 @@
     <Copy SourceFiles="Assets\cockpit.dcm" DestinationFolder="$(BepInExDir)\plugins\DriverCam" ContinueOnError="true" />
     <ItemGroup><FittedCockpits Include="Assets\cockpits\*.*" /></ItemGroup>
     <Copy SourceFiles="@(FittedCockpits)" DestinationFolder="$(BepInExDir)\plugins\DriverCam" ContinueOnError="true" />
+    <ItemGroup><SharedCarSetups Include="SavedSettings\DriverCam_cars\*.cfg" /></ItemGroup>
+    <Copy SourceFiles="@(SharedCarSetups)" DestinationFolder="$(BepInExDir)\plugins\DriverCam\cars" ContinueOnError="true" />
   </Target>
 
 </Project>

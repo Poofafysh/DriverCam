@@ -22,6 +22,8 @@ internal static class CarPresets
 
     static string Folder => Path.Combine(Paths.ConfigPath, "DriverCam_cars");
     static string FileFor(string car) => Path.Combine(Folder, car + ".cfg");
+    /// <summary>Tuned setups that ship with the mod (plugins/DriverCam/cars), used for cars that haven't been set up yet.</summary>
+    static string SharedFor(string car) => Path.Combine(Paths.PluginPath, "DriverCam", "cars", car + ".cfg");
     static string Key(ConfigEntryBase e) => e.Definition.Section + "." + e.Definition.Key;
 
     static readonly HashSet<ConfigFile> _watched = new();
@@ -41,19 +43,30 @@ internal static class CarPresets
         if (!_loading && !Suspended && _entries.Contains(args.ChangedSetting)) Save();
     }
 
-    /// <summary>Writes a default settings file for every car that has a fitted cockpit and no file yet.</summary>
+    /// <summary>
+    /// Gives every car a settings file: the shared tuned setup that ships with the mod if there is one (also
+    /// replacing a file that still only has the untouched defaults), otherwise the default settings.
+    /// </summary>
     public static void CreateMissing(IEnumerable<string> cars)
     {
         var created = new List<string>();
+        var shared = new List<string>();
         foreach (var car in cars)
         {
-            if (File.Exists(FileFor(car))) continue;
+            bool exists = File.Exists(FileFor(car));
+            if (File.Exists(SharedFor(car)) && (!exists || IsUntouched(Read(FileFor(car)))))
+            {
+                if (CopyShared(car)) shared.Add(car);
+                continue;
+            }
+            if (exists) continue;
             var lines = Header(car);
             foreach (var e in _entries) lines.Add($"{Key(e)} = {TomlTypeConverter.ConvertToString(e.DefaultValue, e.SettingType)}");
             lines.AddRange(PartLayout.LinesFor(car));
             if (Write(car, lines)) created.Add(car);
         }
-        if (created.Count > 0) Plugin.Logger.LogInfo($"Created DriverCam settings files for: {string.Join(", ", created)}.");
+        if (shared.Count > 0) Plugin.Logger.LogInfo($"Using the shared tuned setup for: {string.Join(", ", shared)}.");
+        if (created.Count > 0) Plugin.Logger.LogInfo($"Created default DriverCam settings files for: {string.Join(", ", created)}.");
     }
 
     /// <summary>Switches to a car's settings when the driven car changes.</summary>
@@ -69,13 +82,7 @@ internal static class CarPresets
             return;
         }
 
-        var values = new Dictionary<string, string>();
-        foreach (var line in File.ReadAllLines(path))
-        {
-            int eq = line.IndexOf('=');
-            if (line.StartsWith("#") || eq <= 0) continue;
-            values[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
-        }
+        var values = Read(path);
         _loading = true;
         try
         {
@@ -95,6 +102,55 @@ internal static class CarPresets
         Plugin.SettingsVersion++;
         DriverMode.Apply();
         Plugin.Logger.LogInfo($"Loaded DriverCam settings for {car}.");
+    }
+
+    public static bool HasShared => _car != null && File.Exists(SharedFor(_car));
+
+    /// <summary>Replaces the current car's settings with the shared tuned setup and loads it.</summary>
+    public static void UseShared()
+    {
+        var car = _car;
+        if (car == null || !CopyShared(car)) return;
+        _car = null;
+        SelectCar(car);
+        Plugin.Logger.LogInfo($"{car}: switched to the shared tuned setup.");
+    }
+
+    static bool CopyShared(string car)
+    {
+        try
+        {
+            Directory.CreateDirectory(Folder);
+            File.Copy(SharedFor(car), FileFor(car), true);
+            return true;
+        }
+        catch (IOException ex)
+        {
+            Plugin.Logger.LogError($"Couldn't copy the shared setup for {car}: {ex.Message}");
+            return false;
+        }
+    }
+
+    static Dictionary<string, string> Read(string path)
+    {
+        var values = new Dictionary<string, string>();
+        foreach (var line in File.ReadAllLines(path))
+        {
+            int eq = line.IndexOf('=');
+            if (line.StartsWith("#") || eq <= 0) continue;
+            values[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+        }
+        return values;
+    }
+
+    /// <summary>True for a file nobody has tuned yet: no part positions and every setting at its default.</summary>
+    static bool IsUntouched(Dictionary<string, string> values)
+    {
+        foreach (var key in values.Keys)
+            if (key.StartsWith("Part.", StringComparison.Ordinal)) return false;
+        foreach (var e in _entries)
+            if (values.TryGetValue(Key(e), out var v) && v != TomlTypeConverter.ConvertToString(e.DefaultValue, e.SettingType)) return false;
+        return true;
     }
 
     /// <summary>Writes the current car's file.</summary>

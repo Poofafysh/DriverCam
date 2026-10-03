@@ -76,6 +76,28 @@ In Claude Code, ask for the **repo-sync** agent (`.claude/agents/repo-sync.md`).
   - binaries, build output, `local.props` or game assets about to be committed
   - merge-conflict markers, and READMEs that state a different version than the code
 - Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel).
+- Bump versions with `tools/bump-version.ps1 -Plugin <Name> -To patch|minor|major` (it counts up from the higher of your version and the pushed one, so we never collide). No bump for docs-only changes.
+
+### Claude Code slash commands
+
+Defined in `.claude/commands/`; `CLAUDE.md` has the full workflow and rules.
+
+| Command | Does |
+|---|---|
+| `/whats-new` | what the other person pushed since your last sync (read-only) |
+| `/sync` | update your game from the repo via repo-sync (dry run first, asks before closing the game) |
+| `/status` | repo vs origin, plugin versions local / pushed / installed |
+| `/build [Plugin]` | build one or all plugins (deploys into the game) |
+| `/game-log [text]` | summarize `BepInEx/LogOutput.log`: loaded versions, errors, plugin diagnostics |
+| `/audit` | code-auditor review of your diff |
+| `/bump <Plugin> [patch\|minor\|major\|x.y.z]` | bump a version everywhere and show the diff |
+| `/check` | run the push check and explain every FAIL/WARN |
+| `/ship [message]` | pull --rebase, audit, bump, commit, push-check, push (never forced) |
+| `/rollback [latest\|name]` | restore a game backup |
+| `/research <topic>` | look up game types in RESEARCH.md and the BepInEx interop |
+| `/new-plugin <Name>` | scaffold a new plugin to the repo conventions |
+| `/test-tools` | run the push-check scenario tests |
+| `/hot-reload` | see `source/HotReload/README.md` (coming) |
 
 ## Uninstall
 

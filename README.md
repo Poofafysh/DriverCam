@@ -38,6 +38,24 @@ This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins 
 
 Both plugins only change your own game. Nothing is sent over the network. CurbFeel does change gameplay, so try it solo or in a private lobby first.
 
+## Updating your game from the repo
+
+After the other person pushes, or any time you want the latest:
+
+```
+powershell -ExecutionPolicy Bypass -File tools/sync-install.ps1 -DryRun            # see what would change
+powershell -ExecutionPolicy Bypass -File tools/sync-install.ps1 -CloseGame -Launch  # do it, then check it loads
+powershell -ExecutionPolicy Bypass -File tools/sync-install.ps1 -Rollback latest    # undo the last update
+```
+
+In Claude Code, ask for the **repo-sync** agent (`.claude/agents/repo-sync.md`). It runs these steps, explains what changed, and asks before closing your game or touching your settings. Each update:
+- backs up your installed plugins and configs (including `DriverCam_cars`) to `backup/<time>/`, keeping the last 10
+- pulls only if it's a clean fast-forward (it never merges or rewrites), then builds and installs every plugin
+- checks the installed DLLs and every shipped file (read from each project's deploy step) against the build
+- flags leftover files and duplicate plugin DLLs that could load twice
+- reports config changes: new settings, settings that were removed or renamed (your saved value is ignored), defaults that changed while you still have the old one saved, and tuned per-car settings that differ from yours (never copied without asking)
+- with `-Launch`, confirms BepInEx loaded each plugin at the new version with no plugin errors
+
 ## Working on this repo (both of us)
 
 - `git pull --rebase` before you start and before you push.

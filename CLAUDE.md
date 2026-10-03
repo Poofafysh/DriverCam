@@ -12,6 +12,9 @@ Two developers push to this repo: **Poofafysh** and **Aste-risks**. It is **sour
   read-only PASS/FAIL review of the diff. Fix what it lists, then re-run it until PASS.
 - **Before any `git push`, run the `push-check` subagent** (`.claude/agents/push-check.md`) and only push if it reports
   OK or the person accepts the warnings. Never force-push.
+- **To update a local game install from the repo, use the `repo-sync` subagent** (`.claude/agents/repo-sync.md`,
+  backed by `tools/sync-install.ps1`). It backs up, fast-forward pulls, builds and installs, then verifies DLLs,
+  shipped assets, stale or duplicate plugins and config changes, with rollback (`-Rollback latest`). Don't hand-copy DLLs.
 - Pull with `git pull --rebase` before starting work and before pushing.
 - When a plugin's code changes, bump its version in `source/<Plugin>/Plugin.cs` and in its `README.md`
   ("Current version"). Never reuse a version number the other developer already pushed.

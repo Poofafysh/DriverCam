@@ -35,7 +35,7 @@ $infos = New-Object System.Collections.Generic.List[string]
 function Fail($m) { $fails.Add($m) }
 function Warn($m) { $warns.Add($m) }
 function Info($m) { $infos.Add($m) }
-function GitOut { $out = & git.exe @args 2>$null; if ($LASTEXITCODE -ne 0) { return ,@() }; return ,@($out) }
+function GitOut { $out = & git.exe @args 2>$null; if ($LASTEXITCODE -ne 0) { return }; $out }
 function Short($list, [int]$n = 8) { $a = @($list); if ($a.Count -le $n) { return ($a -join ", ") }; return (($a[0..($n - 1)] -join ", ") + " ... (+" + ($a.Count - $n) + " more)") }
 
 function Report([string]$title) {
@@ -63,7 +63,7 @@ $backupRoot = Join-Path $root "backup"
 # ---------------------------------------------------------------- plugin discovery
 function Read-Plugin([string]$dir, [string]$rev) {
     $p = "$dir/Plugin.cs"
-    $text = if ($rev) { (GitOut show "${rev}:$p") -join "`n" } elseif (Test-Path $p) { Get-Content $p -Raw } else { "" }
+    $text = if ($rev) { @(GitOut show "${rev}:$p") -join "`n" } elseif (Test-Path $p) { Get-Content $p -Raw } else { "" }
     if (-not $text) { return $null }
     $consts = @{}
     foreach ($m in [regex]::Matches($text, 'const\s+string\s+(\w+)\s*=\s*"([^"]*)"')) { $consts[$m.Groups[1].Value] = $m.Groups[2].Value }
@@ -89,7 +89,7 @@ function Get-Binds([string]$dir, [string]$rev) {
     $binds = @{}
     $files = if ($rev) { GitOut ls-tree -r --name-only $rev "$dir/" | Where-Object { $_ -like '*.cs' } } else { Get-ChildItem $dir -Filter *.cs -Recurse | ForEach-Object { $_.FullName } }
     foreach ($f in $files) {
-        $text = if ($rev) { (GitOut show "${rev}:$f") -join "`n" } else { Get-Content $f -Raw }
+        $text = if ($rev) { @(GitOut show "${rev}:$f") -join "`n" } else { Get-Content $f -Raw }
         # section may be a literal ("View") or a variable (DriverCam binds MirrorLeft/MirrorRight through `section`):
         # a variable section is stored as "*" and matches any section with that key
         foreach ($m in [regex]::Matches($text, '\.Bind\(\s*(?<s>"[^"]+"|[A-Za-z_]\w*)\s*,\s*"(?<k>[^"]+)"\s*,\s*(?<d>"[^"]*"|[^,\)]+)')) {
@@ -175,11 +175,11 @@ if ($dirtyTracked -and -not $Force) { Fail "uncommitted changes in the repo: $(S
 
 & git.exe fetch $Remote --quiet 2>$null
 $up = "$Remote/$Branch"
-$preRev = (GitOut rev-parse HEAD)[0]
-$behind = [int](GitOut rev-list --count "HEAD..$up")[0]
-$ahead = [int](GitOut rev-list --count "$up..HEAD")[0]
+$preRev = @(GitOut rev-parse HEAD)[0]
+$behind = [int]@(GitOut rev-list --count "HEAD..$up")[0]
+$ahead = [int]@(GitOut rev-list --count "$up..HEAD")[0]
 if ($behind -gt 0) {
-    Info "incoming ($behind): " + ((GitOut log --format="%h %an: %s" "HEAD..$up") -join " | ")
+    Info ("incoming ($behind): " + (@(GitOut log --format="%h %an: %s" "HEAD..$up") -join " | "))
     if ($ahead -gt 0) { Fail "your branch and $up have diverged ($ahead local / $behind remote commits) - run git pull --rebase yourself, resolve, then re-run" }
 } else { Info "repo already at $up ($($preRev.Substring(0,7)))" }
 
@@ -201,14 +201,14 @@ if (-not $DryRun) {
     if ($behind -gt 0) {
         & git.exe pull --ff-only $Remote $Branch --quiet 2>$null
         if ($LASTEXITCODE -ne 0) { Fail "git pull --ff-only failed"; Report "update" }
-        Info "pulled to $((GitOut rev-parse --short HEAD)[0])"
+        Info "pulled to $(@(GitOut rev-parse --short HEAD)[0])"
     }
 }
 
 $plugins = Get-Plugins
 if ($DryRun -and $behind -gt 0) {
     # describe the incoming versions without touching the working tree
-    $plugins = @(); foreach ($d in (GitOut ls-tree -d --name-only "$up" "source/")) { $p = Read-Plugin $d $up; if ($p) { $plugins += $p } }
+    $plugins = @(); foreach ($d in @(GitOut ls-tree -d --name-only "$up" "source/")) { $p = Read-Plugin $d $up; if ($p) { $plugins += $p } }
 }
 
 foreach ($p in $plugins) {
@@ -316,13 +316,14 @@ foreach ($p in $plugins) {
     }
 }
 
-# DriverCam-style per-car settings shipped in the repo vs installed
+# DriverCam-style per-car settings: since 0.9.2 the tuned setups ship to plugins/<Assembly>/cars and the plugin uses
+# them for every car you haven't tuned yourself; your own files in config/<Assembly>_cars are never overwritten.
 foreach ($p in $plugins) {
     $repoCars = Join-Path $root "$($p.Dir)/SavedSettings/$($p.Assembly)_cars"
     $gameCars = Join-Path $configDir "$($p.Assembly)_cars"
     if (-not (Test-Path $repoCars)) { continue }
-    $diff = Get-ChildItem $repoCars -File | Where-Object { (Hash $_.FullName) -ne (Hash (Join-Path $gameCars $_.Name)) } | ForEach-Object BaseName
-    if ($diff) { Info "$($p.Name): tuned per-car settings in the repo differ from yours for: $(Short $diff) (not copied - copy $($p.Dir)/SavedSettings/$($p.Assembly)_cars to BepInEx/config/ if you want them)" }
+    $own = Get-ChildItem $repoCars -File | Where-Object { (Test-Path (Join-Path $gameCars $_.Name)) -and (Hash $_.FullName) -ne (Hash (Join-Path $gameCars $_.Name)) } | ForEach-Object BaseName
+    if ($own) { Info "$($p.Name): you have your own settings for $(Short $own); they are kept. Cars without your own tuning use the shared setup that ships with the mod. In game, 'Use shared setup' on the Seat & view tab switches a car to it." }
 }
 
 if ($DryRun) { Report "dry run (nothing changed)" }

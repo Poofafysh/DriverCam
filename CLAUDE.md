@@ -5,7 +5,7 @@ developers who both push to `main` of `github.com/Poofafysh/DriverCam`:
 
 | Developer | Owns | Git author |
 |---|---|---|
-| **Poofafysh** | `source/CurbFeel/` (curbs, sidewalks, lane splitting) | Poofafysh |
+| **Poofafysh** | `source/CurbFeel/` (curbs, sidewalks, lane splitting), `source/TrafficDensity/` (NPC traffic multiplier) | Poofafysh |
 | **Aste-risks** | `source/DriverCam/` (first-person camera, cockpits, mirrors, shared car setups) | Alec DeMilt |
 
 Repo tooling (`tools/`, `.claude/`, docs) is shared. Don't edit the other developer's plugin without the person asking.
@@ -83,6 +83,7 @@ Scripts (run from the repo root with `powershell -NoProfile -ExecutionPolicy Byp
 |---|---|---|---|---|---|
 | DriverCam | `drivingrogue.drivercam` | `DriverCam.dll` (+ `plugins/DriverCam/`) | `drivingrogue.drivercam.cfg`, `plugins/DriverCam/cars/*.cfg` | F6 driver view, F7 Edit mode (also C/Y cycle, View button, L3+R3) | button on the left |
 | CurbFeel | `rogue.curbfeel` | `CurbFeel.dll` | `rogue.curbfeel.cfg` | F8 panel, F9 reload config, F10 on/off | panel top-right |
+| TrafficDensity | `rogue.trafficdensity` | `TrafficDensity.dll` | `rogue.trafficdensity.cfg` | Ctrl+PageUp/PageDown step, Ctrl+Home stock | toast top-centre |
 
 Not used by our plugins: F1-F5, F11 (check the game doesn't bind it; avoid F12, Steam screenshot). New plugins: GUID `rogue.<name>`, read keys through the Input
 System (`Keyboard.current.f11Key` / `Key.F11`) so push-check can see clashes, and add a row here.
@@ -95,6 +96,7 @@ source/local.props.example     template for your GameDir
 source/README.md               DriverCam architecture + build notes
 source/DriverCam/              *.cs, DriverCam.csproj, Assets/ (cockpits .dcm, autofit.py), SavedSettings/ (shared car setups)
 source/CurbFeel/               *.cs, CurbFeel.csproj, README.md (features, tuning table), RESEARCH.md (walls, curbs, damage)
+source/TrafficDensity/         Plugin.cs (spawner patch + hotkeys), README.md (how the game sizes traffic)
 tools/                         push-check, push-check.tests, bump-version, sync-install (PowerShell 5.1)
 .claude/agents/ .claude/commands/
 backup/                        sync-install backups (git-ignored, last 10 kept)

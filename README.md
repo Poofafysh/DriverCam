@@ -6,6 +6,7 @@ Source for two BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam):
 |---|---|---|
 | **DriverCam** | 0.9.2 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
 | **CurbFeel** | 0.3.2 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
+| **TrafficDensity** | 0.1.0 | Multiplies the NPC traffic on the road (stacks with the game's traffic hazard, applies live). Ctrl+PageUp/PageDown to change, Ctrl+Home = stock. See [`source/TrafficDensity/README.md`](source/TrafficDensity/README.md) |
 
 This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins yourself as described below.
 
@@ -35,6 +36,8 @@ This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins 
 | F8 | CurbFeel | status panel: full / compact / hidden |
 | F9 | CurbFeel | reload `BepInEx/config/rogue.curbfeel.cfg` |
 | F10 | CurbFeel | CurbFeel on/off |
+| Ctrl+PageUp / Ctrl+PageDown | TrafficDensity | more / less NPC traffic |
+| Ctrl+Home | TrafficDensity | stock traffic |
 
 Both plugins only change your own game. Nothing is sent over the network. CurbFeel does change gameplay, so try it solo or in a private lobby first.
 
@@ -75,7 +78,7 @@ In Claude Code, ask for the **repo-sync** agent (`.claude/agents/repo-sync.md`).
   - hotkey clashes, and two plugins patching the same game method
   - binaries, build output, `local.props` or game assets about to be committed
   - merge-conflict markers, and READMEs that state a different version than the code
-- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel).
+- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel), Ctrl+PageUp/PageDown/Home (TrafficDensity).
 - Bump versions with `tools/bump-version.ps1 -Plugin <Name> -To patch|minor|major` (it counts up from the higher of your version and the pushed one, so we never collide). No bump for docs-only changes.
 
 ### Claude Code slash commands

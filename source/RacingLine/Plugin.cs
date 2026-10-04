@@ -19,7 +19,7 @@ namespace RacingLine
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.racingline";
-        public const string Version = "0.1.1";
+        public const string Version = "0.2.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;
@@ -37,6 +37,8 @@ namespace RacingLine
         internal static ConfigEntry<bool> LogCorners;
         internal static ConfigEntry<string> HudIconFile, StatIconFile;
         internal static ConfigEntry<double> BestRunTotal;
+        internal static ConfigEntry<bool> TrafficEnabled;
+        internal static ConfigEntry<float> TrafficMargin, TrafficPlayerHalfWidth, TrafficLookAhead, TrafficMinLeadIn, TrafficMaxLeadIn, TrafficLeadInSeconds, TrafficLeadOut;
 
         public override void Load()
         {
@@ -86,13 +88,22 @@ namespace RacingLine
             HudIconFile = Config.Bind("Icons", "HudIcon", "racingline_hud.png", "PNG in plugins/RacingLine/ for HUD popups (~56x44 plus glow). Missing = built-in placeholder.");
             StatIconFile = Config.Bind("Icons", "StatIcon", "racingline_stat.png", "PNG in plugins/RacingLine/ for the results row (~44x32). Missing = built-in placeholder.");
             BestRunTotal = Config.Bind("Records", "BestRunTotal", 0.0, "Best Racing Line run total so far (the Victory screen shows NEW RECORD when a run beats it). Written by the plugin.");
+            TrafficEnabled = Config.Bind("Traffic", "Enabled", true,
+                "Traffic-aware line: where an NPC car sits on the racing line, the line you're scored against goes around it (and where traffic leaves no way past, position counts as perfect). Off = the plain line everywhere.");
+            TrafficMargin = Config.Bind("Traffic", "Margin", 0.5f, "Gap kept between your car and a traffic car when the line goes around it, metres.");
+            TrafficPlayerHalfWidth = Config.Bind("Traffic", "PlayerHalfWidth", 1f, "Half your car's width, metres (for the gap above).");
+            TrafficLookAhead = Config.Bind("Traffic", "LookAhead", 150f, "Traffic cars up to this far ahead are considered, metres (30-400; 15 m behind is always included).");
+            TrafficMinLeadIn = Config.Bind("Traffic", "MinLeadIn", 15f, "The line starts moving over at least this far before a car, metres.");
+            TrafficMaxLeadIn = Config.Bind("Traffic", "MaxLeadIn", 60f, "The line starts moving over at most this far before a car, metres.");
+            TrafficLeadInSeconds = Config.Bind("Traffic", "LeadInSeconds", 1.2f, "Lead-in = this many seconds at your closing speed (between MinLeadIn and MaxLeadIn).");
+            TrafficLeadOut = Config.Bind("Traffic", "LeadOut", 15f, "The line returns to the racing line over this distance after a car, metres.");
 
             try { GameApi.Check(); }
             catch (Exception e) { Log.LogError($"[RacingLine] game check crashed, plugin stays idle: {e}"); return; }
 
             ClassInjector.RegisterTypeInIl2Cpp<Runner>();
             AddComponent<Runner>();
-            Log.LogInfo($"RacingLine {Version} loaded (v2 scoring: quality per metre, combo ticks, coins). F5 shows or hides the line.");
+            Log.LogInfo($"RacingLine {Version} loaded (v2 scoring: quality per metre, combo ticks, coins; traffic-aware line {(TrafficEnabled.Value ? "on" : "off")}). F5 shows or hides the line.");
         }
     }
 }

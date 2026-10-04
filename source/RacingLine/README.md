@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a new score category, **Racing Line**, that rewards driving corners well on grip: the right line, good speed, braking straight, lifting in and powering out.
 
-Current version: **0.1.1** (v2 scoring; placeholder icons)
+Current version: **0.2.0** (v2 scoring, traffic-aware line; placeholder icons)
 
 Design docs (claude.ai artifacts):
 - "Racing Line Mechanic - Design & Build Plan" (`799a19cf-48f1-4019-9d37-925b9838d47f`): the category itself and the Safety rules that apply to every change here.
@@ -32,7 +32,7 @@ Design docs (claude.ai artifacts):
    - **Grade by mean q:** GOLD ≥ 0.8, SILVER ≥ 0.6, BRONZE ≥ 0.4.
    - **Streak:** +0.15× per corner with q ≥ 0.45, up to ×2. A collision drops it two steps, and a corner under 0.3 resets it.
    - **Pace:** every payout × (0.8 + 0.4 × your average speed ÷ reference).
-   - **Traffic grace:** for 1.5 s after a near miss, the position term holds, so dodging isn't punished.
+   - **Traffic:** "the line" is the traffic-aware line (see below), so a car sitting on the racing line moves the line around it. As a fallback, for 1.5 s after a near miss the position term holds, so dodging isn't punished.
 6. **Coins.** Corner grades add units (GOLD 1, SILVER 0.6, BRONZE 0.3, ×1.5 Grip line) toward a target of `CoinTargetPerCorner` × the race's corners. A steady SILVER run earns the full `CoinReward` (130), like maxing any other category.
 
 A simulated 3 km test road with 8 long corners gave these totals:
@@ -43,6 +43,34 @@ A simulated 3 km test road with 8 long corners gave these totals:
 | Coasting out of every apex | 1,521 |
 | Drifting every corner (drift points come separately) | 796 |
 | Wide and slow | 531 |
+
+## Traffic-aware line
+
+If an NPC car is sitting where the racing line goes, that can't be the perfect line. Every 0.1 s the plugin reads the traffic cars from 15 m behind you to `LookAhead` (150 m) ahead: where each one is along the road, which lane it's in, its size and its speed. Oncoming cars (reverse-traffic runs) are included, and they close at your speed plus theirs. Cars that have crashed are skipped, because physics now moves them and their road position is no longer known.
+
+- **In the way:** a car is in the way when the line passes closer than its half-width + `PlayerHalfWidth` + `Margin` (1 + 1 + 0.5 = 2.5 m for a normal car), and only while you're catching it.
+- **Passing side:** the line passes the car on whichever side is closer to the racing line. That side has to be inside the line's edge limit and not taken by another car alongside. Cars alongside each other share one way round.
+- **Shape:** the line moves over on a smooth ramp. It starts `LeadInSeconds` × closing speed before the car (between `MinLeadIn` 15 m and `MaxLeadIn` 60 m), holds beside the car, and comes back over `LeadOut` (15 m). Detours one after another blend smoothly; the line never jumps sides.
+- **No way past** (for example both lanes of a narrow road taken side by side): that stretch counts as perfect position wherever you drive, so you're never punished for a line that can't be driven.
+- **Scoring:** position is measured from this line, not from the plain one. Inside a detour, the space the car takes up never counts as "on the line". Driving the plain line straight through a car scores like being far off it, and the "path as straight as the line" credit doesn't apply there either.
+- **Cost:** at most 48 cars at 10 Hz, with no per-frame work beyond the scoring itself.
+- **Multiplayer clients** use the plain line. The host drives the traffic, and the clients' copies of the cars haven't been checked; multiplayer is display mode anyway.
+- **Turning it off:** `Enabled` = false goes back to the plain line everywhere. Missing game members switch only this feature off; the startup check names them.
+
+With F5 the preview draws this line. Orange dots mark where it goes around a car, dim red dots mark no way past, and a readout line shows `traffic: line shifted around N cars · corners shifted K · clean passes P`.
+
+Simulated on the same 3 km test road with a car parked on the line's apex in every corner:
+
+| Driving | Points |
+|---|---|
+| No traffic, plain line | 2,266 |
+| Traffic, follows the traffic-aware line | 2,229 (the 1.6% is the grip term reacting to the swerve; the position terms are identical) |
+| Traffic, drives the plain line straight through the cars | 2,073 (no collision simulated; in the game the crash also costs Clean and the streak) |
+| Two-lane road, both lanes blocked side by side, plain line | the same as no traffic (no way past: counts as perfect position) |
+
+**Known limits:**
+- The line passes each car or group on one side. Passing a car cleanly on the other, farther side still counts as off the line there.
+- A car that isn't in the way of the plain line isn't checked against a detour's ramp near it.
 
 ## Native category
 
@@ -63,7 +91,7 @@ Accepted side effects:
 
 - **No Harmony patches.** Every game member is checked by name at startup (`GameApi.Check`), and each feature switches off alone if one is missing.
 - **Engine calls.** All of them were checked against the Il2Cpp dump, because some Unity methods are stripped in this build (for example `GUI.DrawTexture`).
-- **Failure switches.** Scoring, the native category and the results row each switch themselves off after an error. 5 errors in 10 s switches the whole plugin off; the game keeps running.
+- **Failure switches.** Scoring, the traffic-aware line, the native category and the results row each switch themselves off after an error. 5 errors in 10 s switches the whole plugin off; the game keeps running.
 - **Results row.** It's only removed once the results screen has closed, so the screen's animation always finishes.
 - **Respawns and jumps.** A jump in distance along the road (back more than 5 m or forward more than 50 m in one frame) drops the corner in progress. Distance is tracked while airborne or not in control too, so a long jump isn't mistaken for a teleport; only frames on the ground and in control score.
 - **Old copies are never destroyed.** Game card effects can keep references to score categories for a whole run, so a destroyed copy would break the game's own code. If the score manager is rebuilt each level, that leaves one tiny unused object per level, which is harmless.
@@ -76,7 +104,10 @@ Accepted side effects:
 | `game check OK` | nothing the plugin reads is missing |
 | `line built: ...; N corners (a onto straights, c linked)` | line, corners and types for this race |
 | `Racing Line added as a score category (... Top Speed template ...)` | native mode is on |
-| `corner 12A: SILVER grip q 0.68 exit 0.74 full-throttle 0.9 s coast 0.0 s -> 214 pts ...` | per corner, with `LogCorners` on (off by default) |
+| `corner 12A: SILVER grip q 0.68 exit 0.74 full-throttle 0.9 s coast 0.0 s -> 214 pts ...` | per corner, with `LogCorners` on (off by default); `traffic` after the grip/hit flags = traffic moved or blocked the line in that corner |
+| `traffic: 9 cars near the player; nearest +42 m along the road, lane -1.7 m (player lane 1.6 m, + = right), 2.1 x 4.6 m, 18 m/s; ...` | once per race, the first traffic snapshot. Check it against what you see: a car ahead in the lane to your left should show a positive distance and a lane below yours |
+| `traffic: line shifted in 3 of 14 corners, 5 clean passes` | per race, when its results screen opens (traffic-aware line on) |
+| `traffic line switched off for this session after an error: ...` | the traffic-aware line hit an error; scoring carries on with the plain line |
 | `results row added: 01:12, 2310 pts, 130 coins` | the results screen got its row |
 | `victory row added: 12,345 (new record)` | the end-of-run Victory screen got its row |
 
@@ -84,7 +115,7 @@ Accepted side effects:
 
 | Key | Does |
 |---|---|
-| F5 | show / hide the line preview and the live readout (q, position, speed, pedals, streak, pace) |
+| F5 | show / hide the line preview (the traffic-aware line: orange around a car, dim red where there's no way past) and the live readout (q, position, speed, pedals, streak, pace, traffic) |
 
 ## Settings (`rogue.racingline.cfg`)
 
@@ -99,6 +130,7 @@ Accepted side effects:
 | Car | `GripStart` (9 m/s²), `BrakeDecel` (10), `AccelRate` (5) |
 | Icons | `HudIcon` / `StatIcon` (PNG names in `plugins/RacingLine/`; missing = built-in placeholder) |
 | Records | `BestRunTotal` (0; written by the plugin: the best Racing Line run total, for the Victory screen's NEW RECORD) |
+| Traffic | `Enabled` (true), `Margin` (0.5), `PlayerHalfWidth` (1.0), `LookAhead` (150), `MinLeadIn` (15), `MaxLeadIn` (60), `LeadInSeconds` (1.2), `LeadOut` (15) |
 
 v1 keys (`Band`, `Core`, `Grace`, ...) are no longer used. They may stay in an old config file harmlessly.
 
@@ -107,7 +139,8 @@ v1 keys (`Band`, `Core`, `Grace`, ...) are no longer used. They may stay in an o
 | File | Job |
 |---|---|
 | `Plugin.cs` | config, startup check, starts the runner |
-| `GameApi.cs` (+ `.Player`, `.Native`, `.Results`, `.Victory`) | the only files that touch game types (`.Victory`: the Victory screen row) |
+| `GameApi.cs` (+ `.Player`, `.Native`, `.Results`, `.Victory`, `.Traffic`) | the only files that touch game types (`.Victory`: the Victory screen row; `.Traffic`: the NPC car snapshot, with the sign/frame evidence) |
+| `TrafficLine.cs` | the traffic-aware line: detours around traffic, blocked stretches, clean passes (plain .NET, tested outside the game) |
 | `Net.cs` | offline / host / client role from Mirror |
 | `LineBuilder.cs` / `LineSolver.cs` | sampling and the two-level line solve |
 | `Corners.cs` / `SpeedProfile.cs` / `LineScorer.cs` | corners and zones, reference speed, the v2 rules (plain .NET, tested outside the game) |

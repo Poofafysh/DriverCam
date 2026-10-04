@@ -4,20 +4,20 @@ BepInEx 6 IL2CPP plugin for **Driving Rogue**: police patrols that react to how 
 or blast past one much faster than it's going, and it chases you. Get away and you've escaped. Get caught and you
 lose a few seconds off the race timer.
 
-Current version: **0.0.1** (preview: "pursuit lite")
+Current version: **0.0.2** (preview: "pursuit lite")
 
 Design doc (claude.ai): "Police Pursuit - v1 Concept" (revised). The police only react to what you do. Nothing
 escalates at random, there are no heat levels, and nothing carries over from one race to the next. 0.0.1 covers the
 doc's phases 1-3 (patrols, noticing, a basic chase). **Single-player only:** in multiplayer, or if the game mode can't
 be read, the plugin does nothing.
 
-## What 0.0.1 does
+## What it does (0.0.2)
 
-1. **Patrols.** About once every `PatrolSpacing` metres you drive (1500 by default), an ordinary traffic car 300-700 m
+1. **Patrols.** About once every `PatrolSpacing` metres you drive (800 by default; the first patrol of each race comes early), an ordinary traffic car 300-700 m
    ahead of you becomes a patrol, up to `MaxPatrols` at a time (2 by default). Cars in your lane within 100 m are never
    picked, and neither are crashed ones. A patrol gets a lightbar on its roof: a red and a blue block plus two lights.
    - The lights are off until it chases you, then they flash red and blue at 2 Hz.
-   - A small marker floats above each patrol: **blue** = idle, **amber** = you're inside its notice zone, **red** =
+   - A marker floats above each patrol, with a **POLICE** tag once you're within about 450 m: **blue** = idle, **amber** = you're inside its notice zone, **red** =
      it's chasing you.
 
    A patrol is let go when it's more than 150 m behind you, when the game despawns or reuses the car, or when the race
@@ -67,7 +67,7 @@ over into the next race, so a penalty can also show up there.
 | `General.Enabled` | true | master switch |
 | `General.Mode` | Normal | `Normal` = patrols notice and chase. `Chill` = patrols, but they never notice you. `Off` = no patrols |
 | `Patrols.MaxPatrols` | 2 | most patrols at once (0-4) |
-| `Patrols.PatrolSpacing` | 1500 | on average one new patrol per this many metres driven (300-10000) |
+| `Patrols.PatrolSpacing` | 800 | on average one new patrol per this many metres driven (300-10000) |
 | `Notice.NoticeRange` | 60 | metres along the road, ahead or behind, in which a patrol can notice you (10-200) |
 | `Notice.OverspeedKmh` | 80 | passing a patrol this much faster than it gets you noticed (10-300) |
 | `Chase.Duration` | 40 | longest chase in seconds; then the bar decides (10-300) |
@@ -94,7 +94,7 @@ manager can change them while you play.
 
 ## What to check in the log (`/game-log Police`)
 
-- `Police 0.0.1 loaded` and `[Police] game check OK: ...`. A `game check: missing ...` line lists what a game update
+- `Police 0.0.2 loaded` (the version you installed) and `[Police] game check OK: ...`. A `game check: missing ...` line lists what a game update
   removed and which features are off.
 - `[Police] lightbar material: shader '...'`, logged once. If the colour says `none`, the blocks keep their default
   colour, but the lights still flash.
@@ -105,6 +105,8 @@ manager can change them while you play.
   - `chase over: ESCAPED / CAUGHT (<why>) after N s, lead N%, -5 s` or `no time penalty (<why>)`
 - `... switched off for this session after an error` means one feature stopped. `switched off for this session after
   repeated errors` means the whole plugin stopped. Either way the cars are restored and Police's own objects removed.
+
+> **Upgrading from 0.0.1:** the default `PatrolSpacing` changed from 1500 to 800, but an existing `rogue.police.cfg` keeps its old value. Set `PatrolSpacing = 800` there yourself.
 
 ## Known limits (0.0.1)
 

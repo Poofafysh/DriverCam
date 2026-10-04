@@ -13,9 +13,11 @@ namespace RacingLine
     /// - Each frame while building: LineBuilder.Step within Line.FrameBudgetMs. When the line is ready: find its corners.
     /// - Each frame with a line: read the player, step the LineScorer; a finished corner pays out through the native
     ///   category (single-player) or is shown as display-only (multiplayer / fallback).
+    /// - Every 0.1 s (game time) with a line: snapshot the NPC traffic near the player and rebuild the traffic-aware line
+    ///   (TrafficLine), which the scorer and the preview use instead of the plain line.
     /// - Each frame: the results screen gets its Racing Line row while it is open.
     /// - OnGUI: the line preview (dots) and a status/readout line.
-    /// - Circuit breakers (Safety rule 6): scoring, the native category and the results row each switch themselves off
+    /// - Circuit breakers (Safety rule 6): scoring, the traffic line, the native category and the results row each switch themselves off
     ///   after an error; 5 errors in 10 s anywhere switches the whole plugin off for the session. The game keeps running.
     /// </summary>
     public class Runner : MonoBehaviour
@@ -43,12 +45,19 @@ namespace RacingLine
         private float _lastResultUntil;
         private float _nextNativeTry;
         private bool _nativeLogged, _iconsLoaded;
-        private bool _scoringOff, _nativeOff, _resultsOff, _victoryOff;   // per-feature breakers
+        private bool _scoringOff, _nativeOff, _resultsOff, _victoryOff, _trafficOff;   // per-feature breakers
         private Func<GameApi.ResultsData> _resultsData;
         private Func<GameApi.VictoryData> _victoryData;
         private Action<string> _log;
         // created once (LoadIcons) so Update/Score don't allocate a delegate or closure every frame
-        private Action _resultsTick, _victoryTick, _score, _ensureNative, _awardTick, _payCorner;
+        private Action _resultsTick, _victoryTick, _score, _ensureNative, _awardTick, _payCorner, _trafficTick;
+        // traffic-aware line: one object for the session (preallocated buffers), re-attached to each new line
+        private readonly TrafficLine _traffic = new TrafficLine();
+        private readonly TrafficSettings _trafficCfg = new TrafficSettings();
+        private float _nextTraffic;
+        private bool _playerValid;            // _player was read this frame
+        private bool _trafficSeenLogged;      // this race's first traffic snapshot was logged
+        private LineScorer _trafficLoggedFor; // the race whose traffic summary was logged
         // run total for the Victory screen: each race's Racing Line score is added once (session only)
         private double _runTotal;
         private LineScorer _countedScorer;
@@ -63,6 +72,8 @@ namespace RacingLine
         private static readonly Color LineNear = new Color(0.25f, 1f, 0.45f, 0.95f);
         private static readonly Color LineEdge = new Color(1f, 0.85f, 0.2f, 0.95f);
         private static readonly Color EdgeDot = new Color(1f, 1f, 1f, 0.35f);
+        private static readonly Color LineDetour = new Color(1f, 0.55f, 0.1f, 0.95f);   // routed around a traffic car
+        private static readonly Color LineBlocked = new Color(1f, 0.2f, 0.2f, 0.4f);    // no way past: counts as perfect position
 
         private void Update()
         {
@@ -85,7 +96,20 @@ namespace RacingLine
                 if (Time.unscaledTime >= _nextWatch) { _nextWatch = Time.unscaledTime + 0.5f; Watch(); }
                 StepBuilder();
 
+                bool traffic = _line != null && GameApi.TrafficOk && Plugin.TrafficEnabled.Value && !_trafficOff;
+                if (traffic) _traffic.SetTime(Time.time);   // detours move on with their cars between snapshots
+                else _traffic.Clear();                       // plain line everywhere
+
+                _playerValid = false;
                 if (_line != null && _scorer != null && GameApi.PlayerOk && !_scoringOff) Guard(ref _scoringOff, "scoring", _score);
+                if (traffic && _playerValid && Time.time >= _nextTraffic)
+                {
+                    _nextTraffic = Time.time + 0.1f;   // game time: no snapshots while paused
+                    // a multiplayer client's traffic copies are driven by the host: their path data is unverified, so the
+                    // plain line (multiplayer is display mode anyway)
+                    if (Net.Role() == NetRole.Client) _traffic.Clear();
+                    else Guard(ref _trafficOff, "traffic line", _trafficTick);
+                }
                 if (_line != null && GameApi.ScoreOk && !_nativeOff && Plugin.NativeScoring.Value && Time.unscaledTime >= _nextNativeTry)
                 {
                     _nextNativeTry = Time.unscaledTime + 2f;
@@ -104,6 +128,7 @@ namespace RacingLine
             _victoryData = VictoryData;
             _victoryTick = () => GameApi.VictoryTick(_victoryData, _log);
             _score = Score;
+            _trafficTick = TrafficTick;
             _ensureNative = EnsureNative;
             _awardTick = () => GameApi.AwardNative(_pendingTick, Plugin.TickPopups.Value);
             _payCorner = () =>
@@ -138,7 +163,12 @@ namespace RacingLine
                 for (int i = 0; i < _line.N; i++) { qx[i] = _line.Px[i] + _line.Nx[i] * _line.E[i]; qz[i] = _line.Pz[i] + _line.Nz[i] * _line.E[i]; }
                 _lineCurvature = Corners.Curvature(qx, qz, _line.N, _line.Step);
                 // same race, longer path: totals carry over; a new race starts from zero
-                _scorer = new LineScorer(_line, _corners, _lineCurvature, Settings(), previous != null && previous.PathPtr == _line.PathPtr ? _scorer : null);
+                bool sameRace = previous != null && previous.PathPtr == _line.PathPtr;
+                _scorer = new LineScorer(_line, _corners, _lineCurvature, Settings(), sameRace ? _scorer : null);
+                if (!sameRace) { _traffic.ResetRace(); _trafficSeenLogged = false; }
+                _traffic.Attach(_line);
+                _scorer.Traffic = _traffic;
+                _nextTraffic = 0f;
                 _profileTop = 0f; _nextProfile = 0f;   // the speed profile is (re)built once the car's top speed is known
                 if (GameApi.NativeActive) GameApi.SetCoinTarget(_corners.Count * Plugin.CoinTargetPerCorner.Value);
                 int a = 0, c = 0; foreach (var k in _corners) { if (k.Type == 'A') a++; else if (k.Type == 'C') c++; }
@@ -170,6 +200,7 @@ namespace RacingLine
         private void Score()
         {
             if (!GameApi.ReadPlayer(ref _player)) { _lastHits = -1; _lastNearMisses = -1; _heading = float.NaN; return; }
+            _playerValid = true;
             float dt = Time.deltaTime;   // game time: 0 while paused, so nothing scores
             if (dt <= 0f) return;
 
@@ -211,6 +242,7 @@ namespace RacingLine
             bool hit = _player.Hits >= 0 && _lastHits >= 0 && _player.Hits > _lastHits;
             bool nearMiss = _player.NearMisses >= 0 && _lastNearMisses >= 0 && _player.NearMisses > _lastNearMisses;
             _lastHits = _player.Hits; _lastNearMisses = _player.NearMisses;
+            if (hit) _traffic.NoteHit();   // a pass in progress isn't clean any more
 
             var r = _scorer.Step(new ScoreInput
             {
@@ -228,9 +260,39 @@ namespace RacingLine
             _lastResult = $"corner {c.Index + 1}{c.Type}: {c.Label} +{c.Total:0}{(native ? "" : " (display only)")}";
             _lastResultUntil = Time.unscaledTime + 4f;
             if (Plugin.LogCorners.Value)
-                Plugin.Log.LogInfo($"[RacingLine] corner {c.Index + 1}{c.Type}: {c.Grade ?? "-"}{(c.Grip ? " grip" : " drifted")}{(c.Clean ? "" : " hit")} q {c.MeanQ:0.00} " +
+                Plugin.Log.LogInfo($"[RacingLine] corner {c.Index + 1}{c.Type}: {c.Grade ?? "-"}{(c.Grip ? " grip" : " drifted")}{(c.Clean ? "" : " hit")}{(c.TrafficShifted ? " traffic" : "")} q {c.MeanQ:0.00} " +
                                    $"exit {c.Exit:0.00} full-throttle {(float.IsNaN(c.SecondsToFullThrottle) ? "never" : c.SecondsToFullThrottle.ToString("0.0") + " s")} " +
                                    $"coast {c.CoastAfterApex:0.0} s -> {c.Total:0} pts (bonus {c.Bonus:0}), units {c.Units:0.0}, streak x{_scorer.StreakMultiplier:0.00}, pace {_scorer.Pace:0.00}");
+        }
+
+        /// <summary>One traffic snapshot (every 0.1 s): the cars near the player, then the traffic-aware line around them.</summary>
+        private void TrafficTick()
+        {
+            using var perf = RogueShared.Perf.Scope("RacingLine.Traffic");
+            if (!_traffic.IsFor(_line)) _traffic.Attach(_line);
+            _trafficCfg.Margin = Mathf.Clamp(Plugin.TrafficMargin.Value, 0f, 5f);
+            _trafficCfg.PlayerHalfWidth = Mathf.Clamp(Plugin.TrafficPlayerHalfWidth.Value, 0.3f, 3f);
+            _trafficCfg.MinLeadIn = Mathf.Clamp(Plugin.TrafficMinLeadIn.Value, 1f, 200f);
+            _trafficCfg.MaxLeadIn = Mathf.Max(_trafficCfg.MinLeadIn, Mathf.Min(200f, Plugin.TrafficMaxLeadIn.Value));
+            _trafficCfg.LeadInSeconds = Mathf.Clamp(Plugin.TrafficLeadInSeconds.Value, 0f, 10f);
+            _trafficCfg.LeadOut = Mathf.Clamp(Plugin.TrafficLeadOut.Value, 1f, 200f);
+            float ahead = Mathf.Clamp(Plugin.TrafficLookAhead.Value, 30f, 400f);
+            _traffic.CarCount = GameApi.ReadTraffic(_player.Distance, 15f, ahead, _traffic.Cars);
+            _traffic.Rebuild(Time.time, _player.Distance, _player.Speed, _trafficCfg);
+            if (!_trafficSeenLogged && _traffic.CarCount > 0) LogFirstTraffic();
+        }
+
+        /// <summary>Once per race: the nearest traffic car next to the player's own numbers, to confirm the frames in the log.</summary>
+        private void LogFirstTraffic()
+        {
+            _trafficSeenLogged = true;
+            int best = 0;
+            for (int i = 1; i < _traffic.CarCount; i++)
+                if (Mathf.Abs(_traffic.Cars[i].Road - _player.Distance) < Mathf.Abs(_traffic.Cars[best].Road - _player.Distance)) best = i;
+            var c = _traffic.Cars[best];
+            Plugin.Log.LogInfo($"[RacingLine] traffic: {_traffic.CarCount} cars near the player; nearest {c.Road - _player.Distance:+0;-0} m along the road, lane {c.Lane:0.0} m " +
+                               $"(player lane {_player.Offset:0.0} m, + = right), {c.HalfWidth * 2f:0.0} x {c.HalfLength * 2f:0.0} m, {c.Speed:0} m/s{(c.Speed < 0f ? " (oncoming)" : "")}; " +
+                               $"line shifted around {_traffic.ShiftedCars}, {_traffic.BlockedCars} with no way past");
         }
 
         private void EnsureNative()
@@ -245,6 +307,11 @@ namespace RacingLine
             float t = _scorer?.TimeOnLine ?? 0f;
             bool counts = GameApi.NativeActive && !_nativeOff;
             CountRace();
+            if (_scorer != null && !ReferenceEquals(_scorer, _trafficLoggedFor) && GameApi.TrafficOk && Plugin.TrafficEnabled.Value)
+            {
+                _trafficLoggedFor = _scorer;
+                Plugin.Log.LogInfo($"[RacingLine] traffic: line shifted in {_scorer.TrafficCorners} of {_scorer.CornersDone} corners, {_traffic.CleanPasses} clean passes{(_trafficOff ? " (traffic line switched off after an error)" : "")}");
+            }
             return new GameApi.ResultsData
             {
                 Amount = $"{(int)(t / 60):00}:{(int)(t % 60):00}",
@@ -349,6 +416,7 @@ namespace RacingLine
                     int ahead = Mathf.CeilToInt(Mathf.Clamp(Plugin.DrawAhead.Value, 20f, 400f) / line.Step);
                     int end = Mathf.Min(line.N, idx + ahead);
                     float pxPerMetre = Screen.height / (2f * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad));
+                    var traffic = _traffic.IsFor(line) ? _traffic : null;   // draws e*, the line the scorer uses
                     var old = GUI.color;
                     for (int i = Mathf.Max(0, idx - 4); i < end; i++)
                     {
@@ -357,8 +425,13 @@ namespace RacingLine
                             Dot(cam, line.Edge(i, -line.HalfWidth, 0.15f), 0.25f, pxPerMetre, EdgeDot);
                             Dot(cam, line.Edge(i, line.HalfWidth, 0.15f), 0.25f, pxPerMetre, EdgeDot);
                         }
-                        float t = line.Limit > 0f ? Mathf.Abs(line.E[i]) / line.Limit : 0f;
-                        Dot(cam, line.Point(i, 0.15f), 0.45f, pxPerMetre, Color.Lerp(LineNear, LineEdge, t));
+                        float along = i * line.Step;
+                        float dev = traffic != null ? traffic.Deviation(along) : 0f;
+                        Color c;
+                        if (traffic != null && traffic.IsBlocked(along)) c = LineBlocked;
+                        else if (Mathf.Abs(dev) > 0.05f) c = LineDetour;
+                        else c = Color.Lerp(LineNear, LineEdge, line.Limit > 0f ? Mathf.Abs(line.E[i]) / line.Limit : 0f);
+                        Dot(cam, line.Edge(i, line.E[i] + dev, 0.15f), 0.45f, pxPerMetre, c);
                     }
                     GUI.color = old;
                 }
@@ -377,6 +450,13 @@ namespace RacingLine
                 GUI.Label(new Rect(12 * s, Screen.height - 48 * s, 900 * s, 24 * s),
                           $"{sc.State} · off line {sc.LastError:0.0} m · corners {sc.CornersDone}/{sc.CornerCount} (gold {sc.Gold} silver {sc.Silver} bronze {sc.Bronze}, grip {sc.GripCorners}) · " +
                           $"streak x{sc.StreakMultiplier:0.00} pace {sc.Pace:0.00}{(sc.HasReference ? "" : " (no speed ref yet)")} · {sc.TotalPoints:0} pts{last}");
+                if (GameApi.TrafficOk && Plugin.TrafficEnabled.Value)
+                {
+                    string traffic = _trafficOff ? "traffic: line switched off after an error (plain line)"
+                        : $"traffic: line shifted around {_traffic.ShiftedCars} cars{(_traffic.BlockedCars > 0 ? $", {_traffic.BlockedCars} with no way past" : "")} · " +
+                          $"corners shifted {sc.TrafficCorners} · clean passes {_traffic.CleanPasses}";
+                    GUI.Label(new Rect(12 * s, Screen.height - 68 * s, 900 * s, 24 * s), traffic);
+                }
             }
             GUI.skin.label.fontSize = oldSize;
         }

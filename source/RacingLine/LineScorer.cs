@@ -43,6 +43,7 @@ namespace RacingLine
         public double Total;        // everything this corner earned, ticks included
         public float MeanQ, Exit, SecondsToFullThrottle, CoastAfterApex;
         public bool Clean, Grip;
+        public bool TrafficShifted; // traffic moved (or blocked) the line somewhere in this corner
         public string Grade;        // GOLD / SILVER / BRONZE / null
         public float Units;         // coin action units
         public string Label => $"{(Grade ?? "corner")}{(Grip ? " GRIP LINE" : "")} q {MeanQ:0.00}";
@@ -59,9 +60,14 @@ namespace RacingLine
     /// Running points (Base x q per metre, halved while drifting) are paid as combo ticks every 0.5 s; at the zone exit a
     /// bonus pays the rest: x(1 + 0.5 x exit) x coasting x clean x grip line. A streak and the run's pace scale everything.
     /// Nothing is pass/fail.
+    /// With a TrafficLine attached, "the line" is the traffic-aware line e* (routed around NPC cars), and position counts as
+    /// perfect where traffic leaves no free side; without one (or before its first snapshot) it is the global line E.
+    /// Inside a detour the full-credit band doesn't reach towards the car: the space it occupies scores like being far off.
     /// </summary>
     internal sealed class LineScorer
     {
+        private const float TrafficShiftCounts = 0.5f;   // metres e* must differ from E for a corner to count as traffic-shifted
+
         private readonly ScoreSettings _cfg;
         private readonly Line _line;
         private readonly List<Corner> _corners;
@@ -74,9 +80,14 @@ namespace RacingLine
         // corner state
         private double _running, _paid, _tickPending;
         private float _qDist, _dist, _tickQ, _tickT, _coast, _apexTime, _tFull, _lastSpeed, _graceUntil, _posHeld;
-        private bool _apexSeen, _drifted, _hit;
+        private bool _apexSeen, _drifted, _hit, _trafficShifted;
+
+        /// <summary>The traffic-aware line (set by the Runner); null = score against the global line only.</summary>
+        public TrafficLine Traffic;
 
         public double TotalPoints { get; private set; }
+        /// <summary>Corners in which traffic shifted (or blocked) the line under the player.</summary>
+        public int TrafficCorners { get; private set; }
         public float TimeOnLine { get; private set; }
         public float Units { get; private set; }
         public int CornersDone { get; private set; }
@@ -108,7 +119,7 @@ namespace RacingLine
             if (carry != null)
             {
                 TotalPoints = carry.TotalPoints; TimeOnLine = carry.TimeOnLine; Units = carry.Units; CornersDone = carry.CornersDone;
-                Gold = carry.Gold; Silver = carry.Silver; Bronze = carry.Bronze; GripCorners = carry.GripCorners;
+                Gold = carry.Gold; Silver = carry.Silver; Bronze = carry.Bronze; GripCorners = carry.GripCorners; TrafficCorners = carry.TrafficCorners;
                 _streak = carry._streak; _paceSum = carry._paceSum; _paceDist = carry._paceDist; _time = carry._time;
                 _lastDistance = carry._lastDistance; _doneUpTo = carry._doneUpTo; _nextCorner = carry._nextCorner;
             }
@@ -155,14 +166,34 @@ namespace RacingLine
             var c = _corners[_cur];
             if (sample > c.ZoneEnd) { result.Corner = Finish(c); return result; }
 
-            // ---- quality this frame
-            float d = Math.Abs(f.Offset - LineOffsetAt(f.Distance));
+            // ---- quality this frame: distance from the traffic-aware line e* (E where no traffic is in the way)
+            float target = LineOffsetAt(f.Distance);
+            bool blocked = false;
+            float carSide = 0f, clearance = 0f;
+            var traffic = Traffic;
+            if (traffic != null && traffic.IsFor(_line))
+            {
+                float dev = traffic.Deviation(f.Distance, out carSide, out clearance);
+                target += dev;
+                blocked = traffic.IsBlocked(f.Distance);   // no free side past the traffic: no line is possible here
+                if (blocked || Math.Abs(dev) > TrafficShiftCounts) _trafficShifted = true;
+            }
+            float err = f.Offset - target;
+            float d = Math.Abs(err);
+            // towards the car from e*, the error climbs from LineFull (just clear) to LineZero (the car's centre line),
+            // faded in with the detour: the space the car occupies is never "on the line", whatever LineFull is
+            if (carSide != 0f && clearance > 0f && err * carSide > 0f)
+            {
+                float steep = _cfg.LineFull + d * (_cfg.LineZero - _cfg.LineFull) / clearance;
+                if (steep > d) d += Math.Abs(carSide) * (steep - d);
+            }
             LastError = d;
-            float L = d <= _cfg.LineFull ? 1f
+            float L = blocked || d <= _cfg.LineFull ? 1f
                     : d >= _cfg.LineZero ? _cfg.LineFloor
                     : _cfg.LineFloor + (1f - _cfg.LineFloor) * 0.5f * (1f + (float)Math.Cos(Math.PI * (d - _cfg.LineFull) / (_cfg.LineZero - _cfg.LineFull)));
             float kLine = Math.Abs(_lineCurvature[sample]);
             float St = Clamp01(_cfg.StraightnessGain * kLine / Math.Max(f.CarCurvature, 1e-4f));
+            St *= 1f - Math.Abs(carSide);   // around traffic, a path as straight as E goes through the car: no credit for it
             float pos = Math.Max(L, St);
             if (f.NearMiss) { _graceUntil = _time + _cfg.TrafficGrace; }
             if (_time < _graceUntil) pos = Math.Max(pos, _posHeld); else _posHeld = pos;   // dodging traffic isn't punished
@@ -212,7 +243,7 @@ namespace RacingLine
             _cur = index;
             _running = 0; _paid = 0; _tickPending = 0;
             _qDist = 0; _dist = 0; _tickQ = 0; _tickT = 0; _coast = 0; _apexTime = 0; _tFull = float.NaN; _lastSpeed = 0;
-            _apexSeen = false; _drifted = false; _hit = false;
+            _apexSeen = false; _drifted = false; _hit = false; _trafficShifted = false;
         }
 
         private CornerResult Finish(Corner c)
@@ -226,6 +257,8 @@ namespace RacingLine
             r.CoastAfterApex = _coast;
             r.Clean = !_hit;
             r.Grip = !_drifted;
+            r.TrafficShifted = _trafficShifted;
+            if (_trafficShifted) TrafficCorners++;
             float coast = Math.Max(_cfg.CoastFloor, 1f - _cfg.CoastPerSecond * _coast);
             double total = _running * (1f + _cfg.ExitWeight * r.Exit) * coast * (r.Clean ? _cfg.CleanBonus : 1f) * (r.Grip ? _cfg.GripBonus : 1f);
             double mult = StreakMultiplier * PaceMultiplier;

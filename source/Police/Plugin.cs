@@ -19,7 +19,7 @@ namespace Police
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.police";
-        public const string Version = "0.0.1";
+        public const string Version = "0.0.2";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, LogEvents;
@@ -36,7 +36,7 @@ namespace Police
                 new ConfigDescription("Normal = patrols notice you and chase. Chill = patrols drive around with their lightbars but never notice you. Off = no patrols.",
                                       new AcceptableValueList<string>("Normal", "Chill", "Off")));
             MaxPatrols = Config.Bind("Patrols", "MaxPatrols", 2, "Most patrol cars on the road at once (0-4). Patrols are ordinary traffic cars given a lightbar.");
-            PatrolSpacing = Config.Bind("Patrols", "PatrolSpacing", 1500f, "On average one new patrol per this many metres driven (300-10000).");
+            PatrolSpacing = Config.Bind("Patrols", "PatrolSpacing", 800f, "On average one new patrol per this many metres driven (300-10000).");
             NoticeRange = Config.Bind("Notice", "NoticeRange", 60f, "A patrol only notices you within this many metres along the road, ahead or behind (10-200).");
             OverspeedKmh = Config.Bind("Notice", "OverspeedKmh", 80f, "Passing a patrol this many km/h faster than it is going gets you noticed (10-300).");
             Duration = Config.Bind("Chase", "Duration", 40f, "Seconds a chase lasts at most; then the lead bar decides (above 50% = escaped) (10-300).");

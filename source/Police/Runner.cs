@@ -298,7 +298,8 @@ namespace Police
         {
             int max = Mathf.Clamp(Plugin.MaxPatrols.Value, 0, 4);
             float spacing = Mathf.Clamp(Plugin.PatrolSpacing.Value, 300f, 10000f);
-            if (float.IsNaN(_nextPatrolAt)) _nextPatrolAt = _player.Distance + spacing * (0.2f + 0.6f * (float)_rng.NextDouble());
+            // the first patrol of a race comes early (5-30% of the spacing), so every race has police to meet
+            if (float.IsNaN(_nextPatrolAt)) _nextPatrolAt = _player.Distance + spacing * (0.05f + 0.25f * (float)_rng.NextDouble());
             if (_patrols.Count >= max || _player.Distance < _nextPatrolAt || Time.unscaledTime < _nextPickTry) return;
             _nextPickTry = Time.unscaledTime + 1f;   // no candidate: look again in a second, never every tick
 
@@ -524,6 +525,8 @@ namespace Police
             finally { GUI.color = old; }
         }
 
+        private GUIContent _policeTag;
+
         private void DrawMarkers(float s)
         {
             float now = Time.unscaledTime;
@@ -535,12 +538,23 @@ namespace Police
                 if (!p.HasRoof) continue;
                 Vector3 sp = _cam.WorldToScreenPoint(new Vector3(p.Roof.x, p.Roof.y + 1.1f, p.Roof.z));
                 if (sp.z < 1f || sp.z > 900f) continue;
-                float px = Mathf.Clamp(700f / sp.z, 7f, 20f) * s;
+                float px = Mathf.Clamp(1400f / sp.z, 12f, 30f) * s;   // big enough to spot at speed from ~400 m
                 float x = sp.x - px * 0.5f, y = Screen.height - sp.y - px;
                 GUI.color = Shade;
                 GUI.Box(new Rect(x - 2f * s, y - 2f * s, px + 4f * s, px + 4f * s), _none, _white);
-                GUI.color = p.Chasing ? MarkerChase : p.InZone ? MarkerZone : MarkerIdle;
+                var c = p.Chasing ? MarkerChase : p.InZone ? MarkerZone : MarkerIdle;
+                GUI.color = c;
                 GUI.Box(new Rect(x, y, px, px), _none, _white);
+                if (sp.z < 450f)
+                {   // "POLICE" tag above the marker
+                    if (_policeTag == null) _policeTag = new GUIContent("POLICE");
+                    SetFont(Mathf.RoundToInt(13f * s));
+                    float w = 70f * s, h = 18f * s;
+                    GUI.color = Shade;
+                    GUI.Box(new Rect(sp.x - w * 0.5f, y - h - 3f * s, w, h), _none, _white);
+                    GUI.color = c;
+                    GUI.Label(new Rect(sp.x - w * 0.5f, y - h - 3f * s, w, h), _policeTag, _label);
+                }
             }
         }
 

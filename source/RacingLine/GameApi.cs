@@ -24,6 +24,7 @@ namespace RacingLine
         internal static bool ScoreOk { get; private set; }     // GameApi.Native.cs: drift flag, hit count, native provider
         internal static bool ResultsOk { get; private set; }   // GameApi.Results.cs
         internal static bool ModeOk { get; private set; }      // GameState.IsMultiplayerMode
+        // TrafficOk: GameApi.Traffic.cs (spawner, traffic cars)
 
         // typed as MonoBehaviour, not RunWorldManager: a field of a game type would stop this class loading at all if
         // a game update removed that type, and then Check() couldn't even report it
@@ -55,10 +56,12 @@ namespace RacingLine
             ResultsOk = Has(asm, "Game.Runtime.UI.RankingStatsController", missing, "rankingStatList")
                      && Has(asm, "Game.Runtime.UI.RankingStatItem", missing, "Setup");
             ModeOk = Has(asm, "Game.Runtime.GameState", missing, "IsMultiplayerMode");
+            CheckTraffic(asm, missing);
 
-            if (missing.Count == 0) Plugin.Log.LogInfo("[RacingLine] game check OK: path, road width, player, scoring, results screen, game mode");
+            if (missing.Count == 0) Plugin.Log.LogInfo("[RacingLine] game check OK: path, road width, player, scoring, results screen, game mode, traffic");
             else Plugin.Log.LogWarning($"[RacingLine] game check: missing {string.Join(", ", missing)}. Line {On(PathOk)}, road width {On(WidthOk)}, " +
-                                       $"player {On(PlayerOk)}, scoring {On(ScoreOk)}, results row {On(ResultsOk)}, game mode {On(ModeOk)}. Re-check the contract table after a game update.");
+                                       $"player {On(PlayerOk)}, scoring {On(ScoreOk)}, results row {On(ResultsOk)}, game mode {On(ModeOk)}, " +
+                                       $"traffic-aware line {On(TrafficOk)}. Re-check the contract table after a game update.");
         }
 
         private static string On(bool ok) => ok ? "on" : "OFF";

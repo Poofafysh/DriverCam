@@ -66,10 +66,15 @@ namespace Police
             {
                 r.shadowCastingMode = ShadowCastingMode.Off;
                 r.receiveShadows = false;
+                // CreatePrimitive's default material uses a built-in shader this URP build doesn't ship (it renders as
+                // Hidden/InternalErrorShader), so build our own from a URP shader the game itself uses
+                var shader = PickShader();
                 var src = r.sharedMaterial;
-                if (src != null)
+                if (shader != null) mat = new Material(shader);
+                else if (src != null) mat = new Material(src);
+                if (mat != null)
                 {
-                    mat = new Material(src);
+                    if (s_emissionKeyword) mat.EnableKeyword("_EMISSION");
                     r.sharedMaterial = mat;
                     CheckShader(mat);
                 }
@@ -87,7 +92,26 @@ namespace Police
             else { _blueT = t; _blueMat = mat; _blueLight = light; }
         }
 
-        /// <summary>Once: which colour property the primitive's shader has. Logged, so a pink / uncoloured cube can be explained.</summary>
+        private static Shader s_shader;
+        private static bool s_shaderSearched, s_emissionKeyword;
+
+        /// <summary>
+        /// Once: an unlit URP shader if the build has one (always bright, ignores scene lighting), else URP Lit (used by
+        /// hundreds of the game's own materials) with emission on. Null = keep the primitive's material.
+        /// </summary>
+        private static Shader PickShader()
+        {
+            if (s_shaderSearched) return s_shader;
+            s_shaderSearched = true;
+            foreach (var name in new[] { "Universal Render Pipeline/Unlit", "Universal Render Pipeline/Particles/Unlit", "Universal Render Pipeline/Lit" })
+            {
+                var sh = Shader.Find(name);
+                if (sh != null) { s_shader = sh; s_emissionKeyword = name.EndsWith("/Lit"); break; }
+            }
+            return s_shader;
+        }
+
+        /// <summary>Once: which colour property the shader has. Logged, so a pink / uncoloured cube can be explained.</summary>
         private static void CheckShader(Material mat)
         {
             if (s_checked) return;

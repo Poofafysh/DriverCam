@@ -8,7 +8,7 @@ using Il2CppInterop.Runtime.Injection;
 
 namespace DriverCam;
 
-[BepInPlugin(Guid, "DriverCam", "0.9.2")]
+[BepInPlugin(Guid, "DriverCam", "0.11.0")]
 public class Plugin : BasePlugin
 {
     public const string Guid = "drivingrogue.drivercam";
@@ -18,8 +18,9 @@ public class Plugin : BasePlugin
     // Head placement: HeadHeight/HeadForward are fractions of the car body, Offset* are extra meters on top
     internal static ConfigEntry<float> HeadHeight, HeadForward, OffsetX, OffsetY, OffsetZ, Pitch, LookIntoTurn;
     internal static ConfigEntry<float> Fov, FovSpeedBoost, NearClip, SteerAngle, CockpitScale, InteriorBrightness, OutlineThickness;
-    internal static ConfigEntry<bool> ShowCockpit, HideCarBody, CockpitOutline, MirrorEnabled;
-    internal static ConfigEntry<int> MirrorResolution;
+    internal static ConfigEntry<bool> ShowCockpit, HideCarBody, CockpitOutline, MirrorEnabled, WorkingGauges, MirrorShadows;
+    internal static ConfigEntry<int> MirrorResolution, SideMirrorRate;
+    internal static ConfigEntry<float> MirrorDrawDistance;
     internal static ConfigEntry<float> MirrorFov, MirrorPitch, MirrorYaw, MirrorOffsetX, MirrorOffsetY, MirrorOffsetZ, HeadFollowsShake;
     internal static MirrorSettings RearMirror, LeftMirror, RightMirror;
     internal static ConfigEntry<bool> HudEnabled, HudOnlyInDriverView;
@@ -78,6 +79,10 @@ public class Plugin : BasePlugin
         InteriorBrightness = Config.Bind("View", "InteriorBrightness", 0.35f, "How much the cockpit lights itself up, so it stays visible on dark tracks (0 = only scene lighting).");
         MirrorEnabled = Config.Bind("View", "MirrorEnabled", true, "Working rear-view mirror (renders a small extra camera).");
         MirrorResolution = Config.Bind("View", "MirrorResolution", 512, "Rear-view mirror image width in pixels (height is a quarter of it).");
+        // mirror cost (not saved per car): each mirror is an extra camera that repeats culling, shadows and draw calls
+        MirrorDrawDistance = Config.Bind("View", "MirrorDrawDistance", 150f, "How far the mirrors draw, in meters (20-1000). Less = cheaper; before 0.11 it was 400.");
+        MirrorShadows = Config.Bind("View", "MirrorShadows", false, "Draw shadows in the mirrors. Costs one extra shadow-map pass per mirror per frame (before 0.11 this was always on).");
+        SideMirrorRate = Config.Bind("View", "SideMirrorRate", 2, "Side mirrors redraw every Nth frame, taking turns (1 = every frame, as before 0.11; 2 = half the cost; up to 4). The rear-view mirror always redraws every frame.");
         MirrorFov = Config.Bind("View", "MirrorFov", 16f, "Rear-view mirror vertical field of view.");
         MirrorPitch = Config.Bind("View", "MirrorPitch", 2f, "Rear-view mirror tilt in degrees (positive looks down).");
         MirrorYaw = Config.Bind("View", "MirrorYaw", 0f, "Rear-view mirror camera aim left/right in degrees.");
@@ -87,6 +92,8 @@ public class Plugin : BasePlugin
         HeadFollowsShake = Config.Bind("Driver", "HeadFollowsShake", 1f, "How much the driver's head moves with the car body shake (0 = steady view, 1 = locked to the car).");
         CockpitOutline = Config.Bind("View", "CockpitOutline", true, "Draw the game's black cartoon outline around cockpit parts.");
         OutlineThickness = Config.Bind("View", "OutlineThickness", 1f, "Cockpit outline thickness relative to the car's own outline.");
+        // not saved per car (not in CarPresets.Track), so switching it never rebuilds the cockpit
+        WorkingGauges = Config.Bind("View", "WorkingGauges", true, "Speedometer and tachometer needles (and the W8's digital panel) follow the car's speed, in the game HUD's unit, and EngineAudio's RPM (a built-in engine model without it). Off = the dials rest at zero.");
 
         ShowButton = Config.Bind("UI", "ShowButton", true, "Show the on-screen DriverCam button.");
         ButtonX = Config.Bind("UI", "ButtonX", 20f, "Button position from the left edge, in pixels.");
@@ -142,7 +149,7 @@ public class Plugin : BasePlugin
         AddComponent<DriverCamBehaviour>();
 
         new Harmony(Guid).PatchAll(typeof(Patches));
-        Log.LogInfo("DriverCam 0.9.2 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
+        Log.LogInfo("DriverCam 0.11.0 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
     }
 }
 

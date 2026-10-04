@@ -20,20 +20,25 @@ namespace Police
     /// - a per-rival two-pass speed profile of the line from those, read 0.6 s ahead (the game smooth-damps towards it).
     /// Racecraft: slipstream (lined up within 1.5 m, within 30 m behind a car: +6% top speed); passes in the run-up to a
     /// corner take its inside; defending (you 25-60 m behind and closing, a corner within 150 m: one move to cover the
-    /// inside, held through the corner); push / conserve (more than 120 m behind you: +3%; more than 250 m ahead: -2%).
+    /// inside, held through the corner); pacing (DaredevilPacing: ahead of you it is capped by your real road speed so you
+    /// catch it up (more than 250 m ahead at most 0.85 and 90% of your speed, 100-250 m at most 0.98 and 95%), 120-150 m
+    /// behind it pushes 3%, 150-300 m behind from 3% up to 10%; from 120 m behind to 100 m ahead its honest pace).
+    /// 0.7.0: picked up more than 300 m ahead only while no rival is near you and fewer than 2 race; a car taken over
+    /// starts from the speed it really drives (no jump when Steer holds the game's slow-down factors at 1).
     /// Precision by skill: weaker rivals wander off the line (a slow drift of up to 0.9 m at skill 0.90; none from 1.05).
     ///
     /// Driving (LateUpdate, written for the next physics steps; GameApi.Steer):
-    /// - lateral: the line's offset E(s) at the car's road distance, with detours round traffic and the player: a car
-    ///   ahead that sits on the line within its width + ours + a margin is passed on the inside of the coming corner (or
-    ///   the side nearer to us on a straight), blended in with a cosine ramp over a lead-in that grows with the closing
-    ///   speed; with neither side free the braking envelope queues it. The offset moves at most 4.5 m/s sideways (5.5
-    ///   for drift cars, 1.6x when evading).
+    /// - lateral (DaredevilPlanner): the gap planner picks the offset across the road with the most free speed (then the
+    ///   one nearer the racing line, then the smallest move), never inside the band of a car alongside, never cutting across
+    ///   a car within its safe gap; boxed in, the braking envelope queues it. The offset moves at most 4.5 m/s sideways
+    ///   (5.5 for drift cars, 1.6x when evading).
     /// - never into you: while you are alongside or close, the side of you it is on is a hard limit (your lane now and
     ///   where you're heading in 0.6 s, plus both widths + 1.6 m); it only swings back in front of you once it is
     ///   12 m + 1.5 s x your extra speed ahead; anything in line ahead caps its speed by a braking envelope (it can always
     ///   slow to that car's real road speed before a safe gap: 8 m + 0.35 s behind you, 5 m + 0.2 s behind traffic,
-    ///   allowing for the game's speed smoothing on the closing speed) and inside that gap its running speed is cut at once.
+    ///   allowing for the game's speed smoothing on the closing speed). You always keep the full envelope; a traffic car
+    ///   it will swerve clear of before reaching that car's safe gap doesn't brake it. Inside a safe gap and closing, its
+    ///   running speed is cut at once.
     /// - style: grip cars point where they go (yaw = their sideways motion); drift cars slide: the look is turned into
     ///   the corner by up to MaxSlipAngle as the cornering load rises. Front wheels steer with the corner (line curvature
     ///   over the wheelbase); drift cars counter-steer. The physics car itself is never turned.
@@ -53,17 +58,18 @@ namespace Police
         private const float FindBehind = 160f, FindAhead = 850f, ReleaseBehind = 340f;
         private const float RaceBehindDespawn = 350f, RaceAheadDespawn = 1400f;          // while it is a rival (the game's: logged once)
         private const float SteerAhead = 1000f, SteerAheadOff = 1050f;                    // further ahead: the game drives it (hysteresis)
-        private const float SnapBehind = 220f, SnapAhead = 420f, SnapMargin = 140f;
+        private const float SnapBehind = 220f, SnapAhead = 420f, SnapMargin = 260f;   // >= the planner's look-ahead at top speed
         private const int MaxRivals = 6;
         private const float LeadSeconds = 0.6f, Smoothness = 0.5f, ProfileTop = 120f;
         private const float BaseBraking = 10f, BaseAccel = 5f;                              // x skill
         private const float GripStart = 16f, GripMin = 8f, GripMax = 45f, GripRate = 3f;    // your cornering estimate (m/s^2)
         private const float TowGap = 30f, TowLane = 1.5f, TowBoost = 1.06f;
-        private const float PushBehind = 120f, PushFactor = 1.03f, EaseAhead = 250f, EaseFactor = 0.98f;
         private const float GapMargin = 0.9f, SafeGap = 5f, SafeTime = 0.2f;                                                     // traffic
         private const float YouMargin = 1.6f, YouSafeGap = 8f, YouSafeTime = 0.35f, YouClearAhead = 12f, YouClearSeconds = 1.5f, YouPredict = 0.6f;   // you
         private const float YouHalfWidth = 1.0f, YouHalfLength = 2.4f;
         private const float Wheelbase = 2.7f;
+        private const float NearAdopt = 300f;   // 0.7.0: further ahead, a daredevil is only picked up while no rival is near you and fewer than 2 race
+        private const float ContactGap = 1.0f;  // a collision of yours while a rival was this close (box gap, m) counts as a contact with it
 
         private sealed class Rival
         {
@@ -80,7 +86,7 @@ namespace Police
             public float SavedMax = float.NaN, SavedSmooth = float.NaN, SavedBehind = float.NaN, SavedAhead = float.NaN;
             public int HomeLane;
             public float Offset, Slip, Yaw, Steer;
-            public bool Steering, Saved, SavedRubber, HitLogged, Far;
+            public bool Steering, Saved, SavedRubber, Far;
             // pace
             public float Skill = 1f, Top, Corner;
             public float[] Profile;
@@ -89,9 +95,24 @@ namespace Police
             public float Push = 1f;
             // precision and racecraft
             public float Wander, WanderTarget, NextWander, DefendCorner = float.NaN, DefendSide;
+            public float PlanTarget = float.NaN;   // the gap planner's last pick (hysteresis)
             // race report
             public float NearTime, SpeedSum, YouSum, SpeedTime, Closest = float.PositiveInfinity;
             public int Passes, Passed, RelSign;
+            // crash diagnostics
+            public bool Crashed;                   // seen with WasHit (kept: the pool clears WasHit when it reuses the car)
+            public float SnapRel = float.NaN, SnapSpeed, SnapLane;                 // at the last traffic snapshot
+            public float NearGap = float.NaN, NearLane, NearSpeed;                 // the nearest car ahead near its path then
+            public bool NearWreck;                                                 // ... and whether it was a wreck
+            // 0.7.0 crash forensics: the nearest car on ANY side at the last snapshot (behind and alongside included)
+            public float AnyD = float.NaN, AnyRel, AnyLat, AnyClosing;             // box distance, its place (+ = ahead), side clearance, closing speed
+            public bool AnyWreck, AnyOncoming;
+            public float AdoptedAt, SteerSince = float.NaN;                        // game time picked up / steering (re)started
+            public float LastInstantAt = float.NaN, LastInstantCut;                // the last instant speed cut and its size (m/s)
+            public bool LastEvading, LastCapped;                                   // last frame: evading you / speed capped by a car
+            // contacts with you (the never-hit rule made visible)
+            public float TickMinGap = float.PositiveInfinity;
+            public int Contacts;
         }
 
         private readonly List<Rival> _rivals = new List<Rival>();
@@ -106,6 +127,7 @@ namespace Police
         private float _youTop = float.NaN, _youGrip = GripStart;
         private IntPtr _raceCar;
         private bool _raceReported, _despawnLogged;
+        private int _lastHits = -1;   // your collision count at the last tick (contacts with rivals)
 
         // the racing line (RacingLine's LineShare)
         private object[] _lineData;
@@ -181,7 +203,7 @@ namespace Police
         {
             string off = WhyOff();
             if (off != null) { if (_rivals.Count > 0) ReleaseAll(off); SetState("idle: " + off); return; }
-            if (!GameApi.ReadPlayer(ref _player) || GameApi.Spawner() == IntPtr.Zero)
+            if (!GameApi.ReadPlayer(ref _player) || GameApi.Spawner() == IntPtr.Zero)   // with the collision count (contacts), 4x a second
             {
                 if (_rivals.Count > 0) ReleaseAll("no race");
                 _raceCar = IntPtr.Zero;
@@ -194,11 +216,15 @@ namespace Police
                 _raceCar = _player.Car;
                 _lastPlayerLane = float.NaN; _playerLaneVel = 0f; _lastPlayerDist = float.NaN; _playerRoadVel = float.NaN;
                 _youTop = float.NaN; _raceReported = false;   // your cornering estimate carries over: usually the same car
+                _lastHits = -1;
             }
             NotePlayer(Time.time);
+            NoteContacts();
             if (_player.LevelEnded)
             {
                 if (_rivals.Count > 0) ReleaseAll("race over");
+                var summary = DaredevilTally.TakeSummary(_raceCar);   // every race with a rival, also when none is left driving (once: the tally starts over)
+                if (summary != null) Plugin.Log.LogInfo(summary);
                 if (!_raceReported && _e != null) { _raceReported = true; Plugin.Log.LogInfo($"[Police] daredevils: race over, your cornering {_youGrip:0} m/s^2, your top speed {_youTop * 3.6f:0} km/h"); }
                 SetState("race over");
                 return;
@@ -210,17 +236,22 @@ namespace Police
             for (int i = _rivals.Count - 1; i >= 0; i--)
             {
                 var r = _rivals[i];
-                if (!GameApi.ReadCar(r.Car, r.Pf, ref r.S) || !r.S.Active) { Release(r, "gone (despawned)"); continue; }
-                if (!float.IsNaN(r.LastTravelled) && (r.S.Travelled - r.LastTravelled < -5f || r.S.Travelled - r.LastTravelled > 80f))
-                { Release(r, "reused by the pool", true); continue; }
-                r.LastTravelled = r.S.Travelled;
-                if (_player.Distance - r.S.Road > ReleaseBehind) { Release(r, "left behind"); continue; }
-                if (r.S.WasHit && r.Steering)
+                if (!GameApi.ReadCar(r.Car, r.Pf, ref r.S) || !r.S.Active)
                 {
-                    StopSteering(r, false);   // physics has it now; the look stays on it
-                    if (!r.HitLogged && Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] daredevil {r.Name} crashed");
-                    r.HitLogged = true;
+                    // a wreck the game cleared (TrafficDensity's collision despawn) still reads WasHit until the pool reuses it
+                    if (r.S.WasHit && !r.Crashed) NoteCrash(r);
+                    Release(r, r.Crashed ? "crashed, wreck cleared" : "gone (despawned)");
+                    continue;
                 }
+                if (!float.IsNaN(r.LastTravelled) && (r.S.Travelled - r.LastTravelled < -5f || r.S.Travelled - r.LastTravelled > 80f))
+                { Release(r, r.Crashed ? "crashed, wreck cleared (reused by the pool)" : "reused by the pool", true); continue; }
+                r.LastTravelled = r.S.Travelled;
+                if (r.S.WasHit)
+                {
+                    if (!r.Crashed) NoteCrash(r);              // before StopSteering: the log says whether we were steering
+                    if (r.Steering) StopSteering(r, false);   // physics has it now; the look stays on it
+                }
+                if (_player.Distance - r.S.Road > ReleaseBehind) { Release(r, r.Crashed ? "crashed, left behind" : "left behind"); continue; }
                 if (r.Look != null && r.Skin != null) r.Look.HideTraffic(r.Skin);
             }
 
@@ -228,14 +259,20 @@ namespace Police
             if (_rivals.Count < MaxRivals)
             {
                 GameApi.FindDaredevils(_player.Distance, FindBehind, FindAhead, _ptrs, _found);
-                for (int i = 0; i < _found.Count && _rivals.Count < MaxRivals; i++) Adopt(_found[i]);
+                // 0.7.0 (review: 44 of 52 rivals were picked up 160-760 m ahead and never raced you): one further ahead
+                // than NearAdopt only while no rival is near you and fewer than 2 race
+                bool nearOne = false;
+                foreach (var r in _rivals) if (!r.Crashed && Mathf.Abs(r.S.Road - _player.Distance) <= NearAdopt) { nearOne = true; break; }
+                for (int i = 0; i < _found.Count && _rivals.Count < MaxRivals; i++) Adopt(_found[i], !nearOne && _rivals.Count < 2);
             }
         }
 
-        private void Adopt(MonoBehaviour car)
+        private void Adopt(MonoBehaviour car, bool allowFar)
         {
             var r = new Rival { Car = car, Ptr = car.Pointer, Pf = GameApi.PathFollowerOf(car), Lane = GameApi.LaneHandlerOf(car) };
             if (r.Pf == null || r.Lane == null || !GameApi.ReadCar(r.Car, r.Pf, ref r.S)) return;
+            if (!allowFar && r.S.Road - _player.Distance > NearAdopt) return;   // left to the game for now: looked at again next tick
+            r.AdoptedAt = Time.time;
             r.T = car.transform;
             GameApi.BoxOf(car, out r.BoxC, out r.BoxS);
             r.LastTravelled = r.S.Travelled;
@@ -462,7 +499,7 @@ namespace Police
             if (line && !paused)
             {
                 // you, every frame (passing you is what they do most); traffic every 0.1 s, covering every rival
-                if (GameApi.ReadPlayer(ref _player)) NotePlayer(now);
+                if (GameApi.ReadPlayer(ref _player, false)) NotePlayer(now);   // no score counts: never used here
                 LearnGrip(dt);
                 if (now >= _nextSnap)
                 {
@@ -470,11 +507,11 @@ namespace Police
                     float lo = -SnapBehind, hi = SnapAhead;
                     foreach (var r in _rivals)
                     {
-                        if (r.Far || r.S.WasHit) continue;
+                        if (r.Far || r.S.WasHit || r.Crashed) continue;
                         float rel = r.S.Road - _player.Distance;
                         lo = Mathf.Min(lo, rel - SnapMargin); hi = Mathf.Max(hi, rel + SnapMargin);
                     }
-                    _roadN = GameApi.ReadRoad(_player.Distance, -lo, hi, _road);
+                    _roadN = GameApi.ReadRoad(_player.Distance, -lo, hi, _road); TrafficTracker.Update(_road, _roadN, now); NoteSnapshot();   // lane bands, crash context
                     _snapTime = now;
                 }
             }
@@ -487,12 +524,13 @@ namespace Police
                 if (moved < -5f || moved > 80f) continue;                                // reused by the pool: the tick lets it go
                 float ahead = r.S.Road - _player.Distance;
                 r.Far = r.Far ? ahead > SteerAhead : ahead > SteerAheadOff;
-                bool steer = line && !r.S.WasHit && !r.Far && r.S.Road >= 0f && r.S.Road < (_n - 2) * _step;
+                bool steer = line && !r.S.WasHit && !r.Crashed && !r.Far && r.S.Road >= 0f && r.S.Road < (_n - 2) * _step;
                 if (paused) { if (r.Look != null) r.Look.Place(r.T, r.BoxC, r.BoxS, 0f, 0f, r.Yaw, r.Steer); continue; }
                 if (steer) { UpdatePace(r); Steer(r, now, dt); Report(r, dt); }
                 else
                 {
-                    if (r.Steering) StopSteering(r, true);
+                    if (r.S.WasHit && !r.Crashed) NoteCrash(r);   // before StopSteering clears r.Steering (the tick's check came too late)
+                    if (r.Steering) StopSteering(r, !r.S.WasHit && !r.Crashed);   // a wreck gets no lane change
                     r.Slip = 0f;
                     r.Yaw *= Mathf.Exp(-dt * 4f);   // a slide eases out, it doesn't snap
                     r.Steer *= Mathf.Exp(-dt * 6f);
@@ -506,7 +544,14 @@ namespace Police
             if (!r.Steering)
             {
                 r.Steering = true;
+                r.SteerSince = now;
                 r.Offset = r.S.Lane;
+                r.PlanTarget = float.NaN;
+                // 0.7.0 (review: 15 of 42 crashes right where the rival was picked up): Steer holds pedalFactor and
+                // curvatureFactor at 1, so a car the game had slowed (behind traffic, in a curve) would jump to its raw
+                // Speed in the next physics step. Its running speed starts from what it really drives (S.Speed =
+                // Speed x pedal x curvature); the planner speeds it up from there.
+                GameApi.ClampSpeed(r.Pf, Mathf.Max(0f, r.S.Speed));
                 GameApi.WriteChaseExtras(r.Pf, Mathf.Min(Smoothness, r.SavedSmooth), float.NaN);
             }
             float s = r.S.Road, v = Mathf.Max(0f, r.S.Speed);
@@ -540,87 +585,26 @@ namespace Police
                 if (!float.IsNaN(r.DefendCorner)) target = r.DefendSide * Mathf.Max(Mathf.Abs(target), 0.6f * _limit);
             }
 
-            // Skilled drivers who don't want damage. For every car ahead (traffic and you):
-            // - braking envelope: a car in line with us (any part of where it is, or for you where you're heading in the
-            //   next 0.6 s, within both widths + margin) caps our speed so we can always slow to its speed before a safe gap
-            //   (a distance + a time gap), allowing for the game reaching a new speed about Smoothness s late on the closing
-            //   speed; inside that gap our running speed is cut at once;
-            // - detour: a car on the line (or on us) is passed on the inside of the coming corner, or on a straight the side
-            //   nearer to us, blended in over a lead-in that grows with the closing speed; with no way past, the envelope
-            //   queues us. You get a wider berth, and a pass of you only swings back once we're well clear ahead of you;
-            // - slipstream: lined up close behind a car, a little more top speed.
+            // traffic and you: the gap planner (DaredevilPlanner) picks the offset with the most free speed, brakes only for
+            // cars it won't be clear of in time, and keeps every never-hit rule (your band, the swing-back, the instant cut)
             float myHalfW = Mathf.Clamp(r.BoxS.x * 0.5f, 0.8f, 1.3f), myHalfL = Mathf.Clamp(r.BoxS.z * 0.5f, 1.8f, 3.2f);
-            float bestW = 0f, bestPass = target, instant = float.PositiveInfinity;
-            float sinceSnap = now - _snapTime;
-            bool tow = false;
-            bool youGuard = false; float youLo = 0f, youHi = 0f;   // the band beside you we must not enter (while alongside / close)
-            for (int j = -1; j < _roadN; j++)                      // you first: on a tie your detour wins
+            float paceTop = r.Top * r.Push * (Plugin.DareSlipstream.Value ? TowBoost : 1f);
+            float pace = r.Profile != null ? Mathf.Min(paceTop, Sample(r.Profile, s + v * LeadSeconds, _step, _n) * r.Push) : paceTop;
+            float soon = _player.Lane + Mathf.Clamp(_playerLaneVel, -8f, 8f) * YouPredict;   // where you're heading
+            var plan = DaredevilPlanner.Plan(new PlanInput
             {
-                RoadCar o;
-                bool you = j < 0;
-                float laneLo, laneHi;
-                if (!you)
-                {
-                    o = _road[j];
-                    if (o.Ptr == r.Ptr) continue;
-                    o.Road += o.Speed * sinceSnap;
-                    laneLo = laneHi = o.Lane;
-                }
-                else
-                {
-                    o = new RoadCar { Road = _player.Distance + youV * (now - _playerTime), Lane = _player.Lane, HalfWidth = YouHalfWidth, HalfLength = YouHalfLength, Speed = youV };
-                    float soon = o.Lane + Mathf.Clamp(_playerLaneVel, -8f, 8f) * YouPredict;   // where you're heading
-                    laneLo = Mathf.Min(o.Lane, soon); laneHi = Mathf.Max(o.Lane, soon);
-                }
-                float gap = (o.Road - o.HalfLength) - (s + myHalfL);
-                float past = 2f * o.HalfLength + 2f * myHalfL + (you ? YouClearAhead + YouClearSeconds * Mathf.Max(0f, o.Speed - v) : 0f);
-                if (gap < -past) continue;                                            // behind us (well clear, for you)
-                float clear = o.HalfWidth + myHalfW + (you ? YouMargin : GapMargin);
-                float closing = v - o.Speed;
-                bool inLine = Dist(r.Offset, laneLo, laneHi) < clear;
-                if (you && gap < 6f) { youGuard = true; youLo = laneLo - clear; youHi = laneHi + clear; }   // alongside or about to be
-                if (inLine && gap > -(o.HalfLength + myHalfL))
-                {
-                    float slowTo = Mathf.Max(0f, o.Speed);
-                    float safe = you ? YouSafeGap + YouSafeTime * v : SafeGap + SafeTime * v;
-                    float room = gap - safe - Mathf.Max(0f, closing) * Smoothness;
-                    cap = Mathf.Min(cap, room > 0f ? Mathf.Sqrt(slowTo * slowTo + 2f * BaseBraking * room) : Mathf.Max(0f, slowTo - 1f));
-                    if (gap < safe && closing > 0f) instant = Mathf.Min(instant, Mathf.Max(0f, slowTo - (gap < safe * 0.5f ? 2f : 0.5f)));
-                }
-                if (gap > 0f && gap < TowGap && o.Speed > 15f && Dist(r.Offset, laneLo, laneHi) < TowLane) tow = true;
-                float lead = Mathf.Clamp(closing * 2.5f, you ? 25f : 15f, 120f);
-                if (gap > lead) continue;                                             // too far ahead to plan round yet
-                if (gap > 0f && closing < 0.5f) continue;                             // not catching it
-                if (Dist(Sample(_e, o.Road, _step, _n), laneLo, laneHi) >= clear && !inLine) continue;   // the line (and we) go by it
-                float left = laneLo - clear, right = laneHi + clear;
-                bool okL = left >= -_limit, okR = right <= _limit;
-                float pass;
-                if (okL && okR)
-                {
-                    float kc = Sample(_k, o.Road + 25f, _step, _n);   // a corner coming up: take its inside (+ curvature = right turn)
-                    if (Mathf.Abs(kc) > 1f / 250f) pass = kc > 0f ? right : left;
-                    else pass = Mathf.Abs(left - r.Offset) <= Mathf.Abs(right - r.Offset) ? left : right;
-                }
-                else if (okL) pass = left;
-                else if (okR) pass = right;
-                else continue;                                                        // no way past: the envelope queues us
-                float w = gap <= 4f ? 1f : 0.5f * (1f + Mathf.Cos(Mathf.PI * Mathf.Clamp01((gap - 4f) / Mathf.Max(1f, lead - 4f))));
-                if (w > bestW) { bestW = w; bestPass = pass; }
-            }
-            if (bestW > 0f) target = Mathf.Lerp(target, bestPass, bestW);
-            target = Mathf.Clamp(target, -_limit, _limit);
-            // hard rule: never across you. Whatever the line, a defence or a traffic detour wants, it stays on its side of
-            // you; if it is in your band already (you moved over), it gets out on its side, faster. Traffic it then can't
-            // pass, it queues behind (braking envelope above).
-            bool evading = false;
-            if (youGuard)
-            {
-                float mid = (youLo + youHi) * 0.5f;
-                if (r.Offset <= mid) { if (target > youLo) target = youLo; evading = r.Offset > youLo; }
-                else { if (target < youHi) target = youHi; evading = r.Offset < youHi; }
-                target = Mathf.Clamp(target, -_limit - 0.5f, _limit + 0.5f);   // an escape may use the road's last half metre
-            }
-
+                Self = r.Ptr, S = s, V = v, Offset = r.Offset, HalfW = myHalfW, HalfL = myHalfL,
+                LineTarget = Mathf.Clamp(target, -_limit, _limit), PrevTarget = r.PlanTarget,
+                Limit = _limit, Rate = r.Drift ? 5.5f : 4.5f, Vmax = pace, SinceSnap = now - _snapTime,
+                YouValid = true, YouRoad = _player.Distance + youV * (now - _playerTime), YouLane = _player.Lane,
+                YouLo = Mathf.Min(_player.Lane, soon), YouHi = Mathf.Max(_player.Lane, soon), YouSpeed = youV,
+            }, _road, _roadN);
+            target = plan.Target;
+            r.PlanTarget = plan.Target;
+            cap = plan.Cap;
+            float instant = plan.Instant;
+            bool tow = plan.Tow;
+            bool evading = plan.Evading;
             float rate = (r.Drift ? 5.5f : 4.5f) * (evading ? 1.6f : 1f);
             float before = r.Offset;
             r.Offset = Mathf.MoveTowards(r.Offset, target, rate * dt);
@@ -638,12 +622,12 @@ namespace Police
             r.Steer += (Mathf.Clamp(steerWant, -32f, 32f) - r.Steer) * (1f - Mathf.Exp(-dt * 8f));
 
             // speed: the rival's own profile (its skill on your car's numbers), push / conserve, slipstream
-            float pushWant = rel < -PushBehind ? PushFactor : rel > EaseAhead ? EaseFactor : 1f;
-            r.Push += (pushWant - r.Push) * (1f - Mathf.Exp(-dt * 0.5f));
+            r.Push = DaredevilPacing.Factor(rel, dt, r.Push, youV / Mathf.Max(1f, r.Top));   // out of sight: ease ahead / push behind; in sight: honest
             float top = r.Top * r.Push * (tow && Plugin.DareSlipstream.Value ? TowBoost : 1f);
-            float vt = r.Profile != null ? Mathf.Min(top, Sample(r.Profile, s + v * LeadSeconds, _step, _n) * r.Push) : top;
+            float vt = r.Profile != null ? Mathf.Min(top, Sample(r.Profile, s + v * LeadSeconds, _step, _n) * r.Push) : top;   // cap: the planner's
             GameApi.Steer(r.Pf, r.Lane, r.Offset, Mathf.Min(vt, cap), _roadN < _road.Length);   // a full snapshot: keep the game's braking too
-            if (instant < v) GameApi.ClampSpeed(r.Pf, instant);   // too close: slow now, not after the game's smoothing
+            if (instant < v) { GameApi.ClampSpeed(r.Pf, instant); r.LastInstantAt = now; r.LastInstantCut = v - instant; }   // too close: slow now, not after the game's smoothing
+            r.LastEvading = evading; r.LastCapped = cap < vt - 0.5f;
         }
 
         /// <summary>The race report: time near you, overtakes both ways, closest gap, average speeds (logged when let go).</summary>
@@ -651,6 +635,7 @@ namespace Police
         {
             float rel = r.S.Road - _player.Distance;
             float myHalfL = Mathf.Clamp(r.BoxS.z * 0.5f, 1.8f, 3.2f), myHalfW = Mathf.Clamp(r.BoxS.x * 0.5f, 0.8f, 1.3f);
+            if (r.S.Speed < 1f && YouRoadSpeed < 1f) return;   // the start countdown: both standing, not racing
             if (Mathf.Abs(rel) < 100f) r.NearTime += dt;
             if (Mathf.Abs(rel) < 200f) { r.SpeedSum += Mathf.Max(0f, r.S.Speed) * dt; r.YouSum += YouRoadSpeed * dt; r.SpeedTime += dt; }
             int sign = rel > 3f ? 1 : rel < -3f ? -1 : r.RelSign;
@@ -659,6 +644,95 @@ namespace Police
             r.RelSign = sign;
             float gap = Mathf.Max(Mathf.Abs(rel) - (myHalfL + YouHalfLength), Mathf.Abs(r.Offset - _player.Lane) - (myHalfW + YouHalfWidth));
             if (gap < r.Closest) r.Closest = gap;
+            if (gap < r.TickMinGap) r.TickMinGap = gap;
+        }
+
+        /// <summary>
+        /// Each tick: if your collision count went up, every rival that came within ContactGap of you since the last
+        /// tick counts a contact (the log shows whether the never-hit rule held). Then the per-tick closest gaps start over.
+        /// </summary>
+        private void NoteContacts()
+        {
+            int hits = _player.Hits;
+            bool hit = hits >= 0 && _lastHits >= 0 && hits > _lastHits;
+            _lastHits = hits;
+            foreach (var r in _rivals)
+            {
+                if (hit && r.TickMinGap < ContactGap)
+                {
+                    r.Contacts++;
+                    if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] daredevil {r.Name}: contact with you? (you collided while it was {Mathf.Max(0f, r.TickMinGap):0.0} m away)");
+                }
+                r.TickMinGap = float.PositiveInfinity;
+            }
+        }
+
+        /// <summary>
+        /// Crash context, at each traffic snapshot: every undamaged rival's place against you, speed and lane offset, and
+        /// the nearest traffic car ahead near its path (alongside counts: gap &lt; 0; within 2.5 m sideways of touching).
+        /// Kept until the next snapshot, so a crash is logged with what it saw just before (the wreck it hit is no longer
+        /// in a snapshot taken after the crash).
+        /// </summary>
+        private void NoteSnapshot()
+        {
+            for (int i = 0; i < _rivals.Count; i++)
+            {
+                var r = _rivals[i];
+                if (r.Crashed || r.S.WasHit || GameApi.WasHitNow(r.Pf)) continue;   // hit since its last read: keep the pre-crash context
+                float s = r.S.Road;
+                float myHalfL = Mathf.Clamp(r.BoxS.z * 0.5f, 1.8f, 3.2f), myHalfW = Mathf.Clamp(r.BoxS.x * 0.5f, 0.8f, 1.3f);
+                r.SnapRel = s - _player.Distance; r.SnapSpeed = r.S.Speed; r.SnapLane = r.S.Lane;
+                r.NearGap = float.NaN;
+                r.AnyD = float.NaN;
+                for (int j = 0; j < _roadN; j++)
+                {
+                    var o = _road[j];
+                    if (o.Ptr == r.Ptr) continue;
+                    // nearest on any side (box distance: the larger of the gap along the road and the side clearance)
+                    float along = Mathf.Abs(o.Road - s) - (o.HalfLength + myHalfL);
+                    float side = Dist(r.S.Lane, o.LaneLo, o.LaneHi) - o.HalfWidth - myHalfW;
+                    float d = Mathf.Max(along, side);
+                    if (float.IsNaN(r.AnyD) || d < r.AnyD)
+                    {
+                        r.AnyD = d; r.AnyRel = o.Road - s; r.AnyLat = side;
+                        r.AnyClosing = o.Road >= s ? r.S.Speed - o.Speed : o.Speed - r.S.Speed;
+                        r.AnyWreck = o.Wreck; r.AnyOncoming = o.Speed < 0f;
+                    }
+                    float gap = (o.Road - o.HalfLength) - (s + myHalfL);
+                    if (gap < -2f * (o.HalfLength + myHalfL)) continue;                                    // behind it
+                    if (Dist(r.S.Lane, o.LaneLo, o.LaneHi) - o.HalfWidth - myHalfW > 2.5f) continue;      // well off its path
+                    if (float.IsNaN(r.NearGap) || gap < r.NearGap) { r.NearGap = gap; r.NearLane = o.Lane; r.NearSpeed = o.Speed; r.NearWreck = o.Wreck; }
+                }
+            }
+        }
+
+        /// <summary>Logs a rival's crash once, with the last snapshot's context (call before StopSteering).</summary>
+        private void NoteCrash(Rival r)
+        {
+            r.Crashed = true;
+            if (!Plugin.LogEvents.Value) return;
+            bool snap = !float.IsNaN(r.SnapRel);
+            float rel = snap ? r.SnapRel : r.S.Road - _player.Distance, speed = snap ? r.SnapSpeed : r.S.Speed, lane = snap ? r.SnapLane : r.S.Lane;
+            string near = float.IsNaN(r.NearGap)
+                ? (snap ? "no car ahead near its path" : "no traffic snapshot")
+                : $"nearest car {r.NearGap:0.0} m ahead lane {r.NearLane:0.0} {(r.NearWreck ? "a wreck" : $"{Mathf.Abs(r.NearSpeed) * 3.6f:0} km/h {(r.NearSpeed < 0f ? "oncoming" : "same way")}")}";
+            Plugin.Log.LogInfo($"[Police] daredevil {r.Name} crashed: {rel:+0;-0} m from you, {speed * 3.6f:0} km/h, offset {lane:0.0} m, " +
+                               $"steering {(r.Steering ? "yes" : "no")}, {near}; {Forensics(r, lane)}");
+        }
+
+        /// <summary>0.7.0 crash forensics: nearest car on any side, timing, planner state, road edge, corner.</summary>
+        private string Forensics(Rival r, float lane)
+        {
+            float now = Time.time;
+            string any = float.IsNaN(r.AnyD) ? "no car on any side"
+                : $"closest car any side {Mathf.Max(0f, r.AnyD):0.0} m ({(r.AnyRel >= 0f ? "ahead" : "behind")} {Mathf.Abs(r.AnyRel):0} m, side clearance {r.AnyLat:0.0} m, " +
+                  $"{(r.AnyWreck ? "a wreck" : r.AnyOncoming ? "oncoming" : $"closing {r.AnyClosing * 3.6f:0} km/h")})";
+            string steer = !r.Steering || float.IsNaN(r.SteerSince) ? "not steering" : $"steering {now - r.SteerSince:0.0} s";
+            string cut = !float.IsNaN(r.LastInstantAt) && now - r.LastInstantAt < 2f ? $", instant cut {r.LastInstantCut * 3.6f:0} km/h {now - r.LastInstantAt:0.0} s before" : "";
+            float halfW = Mathf.Clamp(r.BoxS.x * 0.5f, 0.8f, 1.3f);
+            float k = _e != null && r.S.Road >= 0f ? Mathf.Abs(Sample(_k, r.S.Road, _step, _n)) : 0f;
+            return $"{any}; picked up {now - r.AdoptedAt:0.0} s ago, {steer}{cut}{(r.LastEvading ? ", evading you" : "")}{(r.LastCapped ? ", capped by a car" : "")}; " +
+                   $"edge {Mathf.Abs(lane) + halfW:0.0} m (line ±{_limit:0.0}), {(k > 1f / 2000f ? $"corner radius {1f / k:0} m" : "straight")}";
         }
 
         /// <summary>
@@ -682,8 +756,10 @@ namespace Police
         {
             // a pooled car keeps its serialized fields (speedSmoothness, despawn distances) into its next life: always given
             // back; MaxSpeed and the lane only while it still drives (SetVehicle writes fresh ones when the pool reuses it)
-            if (r.Steering && r.S.Active && !reused) StopSteering(r, !r.S.WasHit);
+            if (r.S.WasHit && !r.Crashed) NoteCrash(r);   // hit in the same frame as a ReleaseAll: still counted and logged once
+            if (r.Steering && r.S.Active && !reused) StopSteering(r, !r.S.WasHit && !r.Crashed);
             r.Steering = false;
+            DaredevilTally.Add(_raceCar, r.Crashed, r.Passes, r.Passed, r.Closest, r.Contacts);
             if (r.Saved)
             {
                 try
@@ -704,10 +780,11 @@ namespace Police
             {
                 string report = r.SpeedTime > 1f
                     ? $"; skill {r.Skill:0.00}, {r.NearTime:0} s within 100 m of you, passed you {r.Passes}x, you passed it {r.Passed}x, " +
-                      $"closest {(float.IsInfinity(r.Closest) ? "-" : r.Closest.ToString("0.0") + " m")}, its average {r.SpeedSum / r.SpeedTime * 3.6f:0} km/h vs your {r.YouSum / r.SpeedTime * 3.6f:0}"
+                      $"closest {(float.IsInfinity(r.Closest) ? "-" : r.Closest.ToString("0.0") + " m")}, contacts {r.Contacts}, its average {r.SpeedSum / r.SpeedTime * 3.6f:0} km/h vs your {r.YouSum / r.SpeedTime * 3.6f:0}"
                     : $"; skill {r.Skill:0.00}";
-                Plugin.Log.LogInfo($"[Police] daredevil {r.Name} let go: {reason} ({_rivals.Count} driving){report}");
+                Plugin.Log.LogInfo($"[Police] daredevil {r.Name} let go: {reason} ({_rivals.Count} driving){report}; crashes this race {DaredevilTally.Crashed}");
             }
+            // (0.7.0: the lane tracks are no longer cleared here: Runner's chase driving shares them; Prune forgets old cars)
         }
 
         private void ReleaseAll(string reason)

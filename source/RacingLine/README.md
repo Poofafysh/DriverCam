@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a new score category, **Racing Line**, that rewards driving corners well on grip: the right line, good speed, braking straight, lifting in and powering out.
 
-Current version: **0.4.0** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
+Current version: **0.5.0** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
 
 Design docs (claude.ai artifacts):
 - "Racing Line Mechanic - Design & Build Plan" (`799a19cf-48f1-4019-9d37-925b9838d47f`): the category itself and the Safety rules that apply to every change here.
@@ -45,6 +45,8 @@ A simulated 3 km test road with 8 long corners gave these totals:
 | Drifting every corner (drift points come separately) | 801 |
 | Wide and slow | 626 |
 
+These are simulated totals before the game's multipliers. In-game totals are much higher (21k-172k in the live log) because the game's card multipliers apply on top.
+
 ## Traffic-aware line
 
 If an NPC car is sitting where the racing line goes, that can't be the perfect line. Every 0.1 s the plugin reads the traffic cars from 15 m behind you to `LookAhead` (150 m) ahead: where each one is along the road, which lane it's in, its size and its speed. Oncoming cars (reverse-traffic runs) are included, and they close at your speed plus theirs. Cars that have crashed are skipped, because physics now moves them and their road position is no longer known.
@@ -80,7 +82,14 @@ Simulated on the same 3 km test road with a car parked on the line's apex in eve
 - it has id `rogue.racingline`, our name and icons, and `contributeToCombo` on
 - it's appended once to the level's score list
 
-Points go through the game's own live-action path, the same one Drift uses: `OnScoreBegin` + `OnScoreActivated` when a corner's points start flowing, `AddToTemporaryScore` every frame (the HUD counts up), `TransferTempToComboScore` + `OnScoreEnd` when the zone ends, `CancelTemporaryScore` on a collision. The game's own `FinishLevel` banks anything still in flight, and a failed combo clears it. The end-of-run **Victory screen** also gets a RACING LINE row (a clone of the Near Miss row, placed right after it) showing the run's Racing Line total. Each race's score is added once when its results screen opens. A run total higher than `Records.BestRunTotal` shows NEW RECORD. The total lives in this game session only: a run continued from a save only counts races played since launch. A RACING LINE row is added to the results screen.
+Points go through the game's own live-action path, the same one Drift uses: `OnScoreBegin` + `OnScoreActivated` when a corner's points start flowing, `AddToTemporaryScore` every frame (the HUD counts up), `TransferTempToComboScore` + `OnScoreEnd` when the zone ends, `CancelTemporaryScore` on a collision. The game's own `FinishLevel` banks anything still in flight, and a failed combo clears it.
+
+### Rows on the score screens
+
+The game's score screens have one fixed row per built-in category, so RacingLine adds its own RACING LINE rows (shared code `../Shared/ScoreRows.cs`, also used by the Police plugin's PURSUIT rows). The rows are display only: the game's TOTAL already includes Racing Line's points.
+- **Results screen** (after each race): a copy of the Top Speed row, after Near Miss, with the time on the line, the race's Racing Line points and coins. It is added to the screen's row list after the game's own rows (and before Police's PURSUIT row, if that was added first), so the screen's own count-up animates it in screen order, and it's only removed once the screen has closed. In display mode it shows the time only.
+- **Victory screen** (end of the run): a copy of the Near Miss row, after Near Miss, with the Racing Line icon and the run's Racing Line total. It appears when the screen's results window opens (after Continue on the popup) and goes when it closes. A run total higher than `Records.BestRunTotal` shows NEW RECORD. Each race's score is added to the run total once, when its results screen (or the Victory screen) opens; the total resets at the first race of a new run (the run position is read again on later frames until a read succeeds for that race, so a missed read can't carry the last run's total into a new one and show a false NEW RECORD). It lives in this game session only: a run continued from a save only counts races played since launch.
+- **Order:** RACING LINE comes right after Near Miss and before Police's PURSUIT row on both screens, whichever plugin adds its row first.
 
 Accepted side effects:
 - **Top Speed cards also affect Racing Line**, because the copy reports type Top Speed.
@@ -104,6 +113,10 @@ The colour is physics, not a guess: from your speed v, the reference speed there
 
 A **HUD card** (bottom-left, shown with the line) gives the live corner points (green, counting up) or the race total, the last corner's grade (GOLD / SILVER / BRONZE pill, GRIP LINE tag), the streak, and a meter of where you are against the line (green band = full credit, dot = you). The old text readout is still there with `DebugText`.
 
+Per frame the ribbon's vertices, colours and UVs are computed with plain C# on struct fields (`Shared/FastMath.cs`):
+Unity's `Mathf`, `Color.Lerp` and even `new Vector3(...)` are slow interop calls in this IL2CPP game, and this ran about
+12 of them per sample. The IMGUI fallback skips Unity's Layout pass (`useGUILayout = false`).
+
 The ribbon is one mesh of ours drawn with the game's own URP Particles/Unlit shader (alpha-blended, vertex-coloured); if that shader isn't loaded, the old dot preview comes back. The card is uGUI with TextMeshPro in the game's HUD font.
 
 ## Sharing the line with other plugins
@@ -120,8 +133,8 @@ players.
 
 - **No Harmony patches.** Every game member is checked by name at startup (`GameApi.Check`), and each feature switches off alone if one is missing.
 - **Engine calls.** All of them were checked against the Il2Cpp dump, because some Unity methods are stripped in this build (for example `GUI.DrawTexture`).
-- **Failure switches.** Scoring, the traffic-aware line, the native category and the results row each switch themselves off after an error. 5 errors in 10 s switches the whole plugin off; the game keeps running.
-- **Results row.** It's only removed once the results screen has closed, so the screen's animation always finishes.
+- **Failure switches.** Scoring, the traffic-aware line, the native category, the results row and the Victory row each switch themselves off after an error. 5 errors in 10 s switches the whole plugin off; the game keeps running.
+- **Rows.** A row is only removed once its screen has closed, so the results screen's animation always finishes (also while the plugin is off or switched off). Unloading the plugin removes both rows at once (accepted: an unload during the results screen's animation can leave it without a Continue button; at game quit that doesn't matter).
 - **Respawns and jumps.** A jump in distance along the road (back more than 5 m or forward more than 50 m in one frame) drops the corner in progress. Distance is tracked while airborne or not in control too, so a long jump isn't mistaken for a teleport; only frames on the ground and in control score.
 - **Old copies are never destroyed.** Game card effects can keep references to score categories for a whole run, so a destroyed copy would break the game's own code. If the score manager is rebuilt each level, that leaves one tiny unused object per level, which is harmless.
 - **Saves stay compatible both ways.** The id is unique, and unknown ids are skipped on load.
@@ -132,14 +145,23 @@ players.
 |---|---|
 | `game check OK` | nothing the plugin reads is missing |
 | `line built: ...; N corners (a onto straights, c linked)` | line, corners and types for this race |
+| `ground line ready (transparent material, shader '...')` | the line drawn on the road is set up (`opaque fallback` if no transparent material could be made) |
 | `Racing Line added as a score category (... Top Speed template ...)` | native mode is on |
 | `corner 12A: SILVER grip q 0.68 exit 0.74 full-throttle 0.9 s coast 0.0 s -> 214 pts ...` | per corner, with `LogCorners` on (off by default); `traffic` after the grip/hit flags = traffic moved or blocked the line in that corner |
+| `road width not known yet, waiting` | the road's width hasn't been read yet, so the line isn't built (logged once) |
+| `path gone (menu or loading): line dropped` | the road path disappeared (back to a menu, or a load), so the line was dropped |
+| `path grew in place: N m -> N m (same object), rebuilding; the current line stays up until then` | the game extended the road path while you drove; the line is rebuilt longer |
 | `traffic: 9 cars near the player; nearest +42 m along the road, lane -1.7 m (player lane 1.6 m, + = right), 2.1 x 4.6 m, 18 m/s; ...` | once per race, the first traffic snapshot. Check it against what you see: a car ahead in the lane to your left should show a positive distance and a lane below yours |
 | `traffic: line shifted in 3 of 14 corners, 5 clean passes` | per race, when its results screen opens (traffic-aware line on) |
 | `traffic line switched off for this session after an error: ...` | the traffic-aware line hit an error; scoring carries on with the plain line |
 | `results row added: 01:12, 2310 pts, 130 coins` | the results screen got its row |
 | `live scoring: 18 live actions, 2140 pts counted live (game total 2310, includes card multipliers); 24 corners: gold 9, ...` | per race: confirms points were counted live through the game's action path |
-| `victory row added: 12,345 (new record)` | the end-of-run Victory screen got its row |
+| `victory screen found: score controller on '.../Victory Screen Panel/[CONTROLLERS]' (active True), results window active False` | once per session: the Victory screen was found (where its score controller sits) |
+| `victory row added: 12,345 (new record)` | the end-of-run Victory screen got its row (`victory row refreshed: ...` if it was still there) |
+| `victory row skipped: <why>` | once per Victory screen with no row: display mode, run total 0, or the Near Miss row couldn't be copied |
+| `victory screen already open when first watched: no row this time` | the Victory screen was already up when the plugin found it (or started ticking again): no row and nothing counted, so a stale screen never counts the current race |
+| `new run: run total reset (previous run 12345)` | the first race of a new run: the Victory screen's run total starts again from 0 |
+| `run position never read for the last race: run total kept` | the run position couldn't be read for a whole race, so the run total was carried over instead of reset |
 
 ## Controls
 
@@ -169,7 +191,8 @@ v1 keys (`Band`, `Core`, `Grace`, ...) and 0.2 keys (`TickPopups`, `TickInterval
 | File | Job |
 |---|---|
 | `Plugin.cs` | config, startup check, starts the runner |
-| `GameApi.cs` (+ `.Player`, `.Native`, `.Results`, `.Victory`, `.Traffic`) | the only files that touch game types (`.Victory`: the Victory screen row; `.Traffic`: the NPC car snapshot, with the sign/frame evidence) |
+| `GameApi.cs` (+ `.Player`, `.Native`, `.Traffic`) | the only plugin files that touch game types (`.Traffic`: the NPC car snapshot, with the sign/frame evidence) |
+| `../Shared/ScoreRows.cs` | shared with Police: the rows on the results and Victory screens (RACING LINE rank 1, PURSUIT rank 2) |
 | `TrafficLine.cs` | the traffic-aware line: detours around traffic, blocked stretches, clean passes (plain .NET, tested outside the game) |
 | `Net.cs` | offline / host / client role from Mirror |
 | `LineBuilder.cs` / `LineSolver.cs` | sampling and the two-level line solve |
@@ -179,4 +202,4 @@ v1 keys (`Band`, `Core`, `Grace`, ...) and 0.2 keys (`TickPopups`, `TickInterval
 | `LineHud.cs` | the HUD card (uGUI) |
 | `../Shared/Fx.cs`, `../Shared/UiKit.cs` | shared with Police: the transparent material and procedural textures; the uGUI toolkit (panels, shadows, game font) |
 | `LineShare.cs` | publishes the finished line as AppDomain data `rogue.racingline` (the Police plugin's daredevils race it) |
-| `Runner.cs` | path watch, build steps, input smoothing, scoring, the live action, results row, line and card, failure switches |
+| `Runner.cs` | path watch, build steps, input smoothing, scoring, the live action, run total and row data, line and card, failure switches |

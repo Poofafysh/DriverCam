@@ -25,6 +25,7 @@ namespace CurbFeel
             Log = base.Log;
             Cfg = Config;
             Settings.Bind(Config);
+            CurbFeelCore.HookConfig(Config);
 
             ClassInjector.RegisterTypeInIl2Cpp<CurbFeelRunner>();
             AddComponent<CurbFeelRunner>();
@@ -35,7 +36,7 @@ namespace CurbFeel
         }
 #endif
         public const string Guid = "rogue.curbfeel";
-        public const string Version = "0.4.1";
+        public const string Version = "0.7.0";
 
         /// <summary>BepInEx/config/rogue.curbfeel.cfg (the plugin's Config, or the one the HotReload host passes in).</summary>
         internal static ConfigFile Cfg;

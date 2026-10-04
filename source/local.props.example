@@ -2,5 +2,8 @@
   <!-- Copy this file to local.props (same folder) and set your own Driving Rogue folder. local.props is git-ignored. -->
   <PropertyGroup>
     <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Driving Rogue</GameDir>
+    <!-- Optional: more copies of the game to keep in sync (semicolon-separated). Builds still use GameDir;
+         /sync and the repo-sync agent install into each of these too, and log-reader reads their logs. -->
+    <ExtraGameDirs></ExtraGameDirs>
   </PropertyGroup>
 </Project>

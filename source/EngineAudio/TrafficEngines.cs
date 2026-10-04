@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
+using FM = RogueShared.FastMath;
 
 namespace EngineAudio
 {
@@ -64,10 +65,10 @@ namespace EngineAudio
                 int gear = 0;
                 for (int i = ShiftAt.Length - 2; i >= 0; i--) if (speed >= ShiftAt[i]) { gear = i; break; }
                 float lo = ShiftAt[gear], hi = ShiftAt[gear + 1];
-                float p = Mathf.Clamp01((speed - lo) / Mathf.Max(1f, hi - lo));
+                float p = FM.Clamp01((speed - lo) / FM.Max(1f, hi - lo));
                 float pitch = speed < 0.5f ? 0.7f : 0.75f + 0.5f * p + 0.04f * gear;
-                src.pitch = Mathf.Clamp(pitch + e.Offset, 0.6f, 1.45f);
-                src.volume = e.Volume * (0.85f + 0.3f * Mathf.Clamp01(speed / 35f));
+                src.pitch = FM.Clamp(pitch + e.Offset, 0.6f, 1.45f);
+                src.volume = e.Volume * (0.85f + 0.3f * FM.Clamp01(speed / 35f));
             }
             catch { /* never break the game's own sound update */ }
         }

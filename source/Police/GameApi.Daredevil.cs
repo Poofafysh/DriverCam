@@ -14,6 +14,13 @@ namespace Police
         public float Lane;         // metres from the centre line, + = right (AvoidanceLaneOffset)
         public float HalfWidth, HalfLength;
         public float Speed;        // m/s in the player's direction (- = oncoming)
+        /// <summary>
+        /// The sideways band the car may occupy soon (metres, + = right): its lane now and where it is heading (a lane
+        /// change). ReadRoad sets both to Lane; a tracker may widen them from the car's sideways speed. The driving code
+        /// keeps clear of the whole band.
+        /// </summary>
+        public float LaneLo, LaneHi;
+        public bool Wreck;         // crashed (AIPathFollower.WasHit): a stopped obstacle with a widened box (see ReadRoad)
     }
 
     /// <summary>
@@ -41,6 +48,10 @@ namespace Police
     ///   game's braking on as a backup when their traffic snapshot was full.
     /// - Despawn: HandleDistanceFromPlayer releases a car behindDistanceDespawn behind / aheadDistanceDespawn ahead of the
     ///   player; raised while a daredevil is a rival (WriteDespawn), the captured values given back when it is let go.
+    /// - Crashes: the collision handler (0x1807C5D30) calls AIPathFollower.SetWasHit(true) (its only caller);
+    ///   SetVehicle (pool reuse, 0x18068A630) clears WasHit (field +0xB8). So a wreck the game returns to the pool should
+    ///   still read WasHit = true until the pool hands it out again (2026-10-04; other direct writers of +0xB8 not
+    ///   searched). Daredevils also keep their own crashed flag, so a release never depends on it.
     /// The serialized fields we change (MaxSpeed, which SetVehicle rewrites on reuse anyway; speedSmoothness;
     /// rubberBandingEnabled is only written back) are captured first and given back when we let the car go. A rival's top
     /// speed comes from originalMaxSpeed (SetVehicle's value, untouched by the player's slow motion).
@@ -70,6 +81,13 @@ namespace Police
             return sel != null && (int)sel.CarBehaviorType == DaredevilType;
         }
 
+        /// <summary>IsDaredevil through the per-car cache (the type itself is read every time).</summary>
+        private static bool IsDaredevil(AIVehicleController car, CarParts info)
+        {
+            var sel = Selector(car, info);
+            return sel != null && (int)sel.CarBehaviorType == DaredevilType;
+        }
+
         /// <summary>
         /// Adds forward-path daredevils within [-behind, +ahead] m of the player that aren't in <paramref name="known"/>
         /// and haven't crashed. Only call when DaredevilOk, after Spawner().
@@ -86,14 +104,28 @@ namespace Police
             {
                 var car = cars[i];
                 if (car == null || known.Contains(car.Pointer) || !car.IsActive || car.IsReversePath) continue;
-                var sel = car.SkinSelector;
-                if (sel == null || (int)sel.CarBehaviorType != DaredevilType) continue;
-                var pf = car.PathFollower;
-                if (pf == null || pf.WasHit) continue;
+                // distance first (0.6.0 perf: it drops most cars before any part is fetched), then the cached parts;
+                // the same pure reads of one frame as before, so the same cars are found
                 float rel = car.AvoidanceRoadDistance - playerDist;
                 if (!(rel >= -behind && rel <= ahead)) continue;
+                var info = Info(car);
+                if (!IsDaredevil(car, info)) continue;
+                var pf = PathFollower(car, info);
+                if (pf == null || pf.WasHit) continue;
                 found.Add(car);
             }
+        }
+
+        /// <summary>True for a car on the oncoming (reverse) path. Only call when DaredevilOk (IsReversePath is checked there).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static bool IsReversePath(MonoBehaviour carObj) => ((AIVehicleController)carObj).IsReversePath;
+
+        /// <summary>AIPathFollower.WasHit read now (false for a null or destroyed path follower).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static bool WasHitNow(MonoBehaviour pfObj)
+        {
+            try { return pfObj != null && ((AIPathFollower)pfObj).WasHit; }
+            catch { return false; }
         }
 
         /// <summary>The car's lane handler (fetch once and keep it). Null if it has none.</summary>
@@ -172,9 +204,14 @@ namespace Police
         }
 
         /// <summary>
-        /// Copies the active, undamaged traffic cars within [-behind, +ahead] m of <paramref name="around"/> into buf and
-        /// returns how many (the daredevils' avoidance snapshot). Only call when TrafficOk, after Spawner().
+        /// Copies the active traffic cars (wrecks included as stopped obstacles) within [-behind, +ahead] m of <paramref name="around"/> into buf and
+        /// returns how many (the daredevils' avoidance snapshot). LaneLo / LaneHi start at Lane (TrafficTracker.Update
+        /// widens them). A crashed car (AIPathFollower.WasHit) stays in as a stopped obstacle (Speed 0, Wreck): physics has
+        /// it, so its AvoidanceRoadDistance / AvoidanceLaneOffset (path values) may be off its physical place; its band and
+        /// half length are widened by <see cref="WreckMargin"/> m to cover that. Only call when TrafficOk, after Spawner().
         /// </summary>
+        internal const float WreckMargin = 2f;   // m added to a wreck's band (each side) and half length
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static int ReadRoad(float around, float behind, float ahead, RoadCar[] buf)
         {
@@ -189,20 +226,25 @@ namespace Police
                 float road = car.AvoidanceRoadDistance;
                 float rel = road - around;
                 if (!(rel >= -behind && rel <= ahead)) continue;
-                var pf = car.PathFollower;
+                var info = Info(car);                    // cached path follower / box wrappers (values still read now)
+                var pf = PathFollower(car, info);
                 if (pf == null) continue;
+                bool wreck = pf.WasHit;                  // physics moves it: its path values may not be where it is
                 float lane = car.AvoidanceLaneOffset, v = car.AvoidanceForwardVelocity;
-                var box = car.VehicleCollider;
-                if (float.IsNaN(lane) || float.IsNaN(v)) continue;
+                var box = Box(car, info);
+                if (float.IsNaN(lane) || (float.IsNaN(v) && !wreck)) continue;
                 Vector3 size = box != null ? box.size : new Vector3(2f, 1.5f, 4.5f);
                 buf[n++] = new RoadCar
                 {
                     Ptr = car.Pointer,
                     Road = road,
                     Lane = lane,
+                    LaneLo = wreck ? lane - WreckMargin : lane,
+                    LaneHi = wreck ? lane + WreckMargin : lane,
                     HalfWidth = Mathf.Clamp(size.x * 0.5f, 0.5f, 2f),
-                    HalfLength = Mathf.Clamp(size.z * 0.5f, 1.5f, 12.5f),
-                    Speed = pf.WasHit ? 0f : car.IsReversePath ? -v : v,
+                    HalfLength = Mathf.Clamp(size.z * 0.5f, 1.5f, 12.5f) + (wreck ? WreckMargin : 0f),
+                    Speed = wreck ? 0f : car.IsReversePath ? -v : v,
+                    Wreck = wreck,
                 };
             }
             return n;

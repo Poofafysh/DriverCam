@@ -33,3 +33,20 @@ doorstop_config.ini
 
 # packaged releases
 release/
+
+# Python bytecode (Blender runs of the interior scripts)
+__pycache__/
+*.pyc
+
+# local session state (tools/ownership.ps1), never commit
+.claude/ownership.md
+
+# DriverCam interior build intermediates: the layout-1 base cockpits carry the game's own car body (autofit.py copies
+# the prefab body into the Shell / Doors groups). build_interior.py reads them from git into the temp folder; never
+# keep a copy here.
+source/DriverCam/Assets/interiors/base/
+source/DriverCam/Assets/interiors/**/*.dcm
+
+# Sketchfab-sourced car/bike models and textures (CC-BY / unverified licences): kept local, never pushed
+source/CarSkins/Assets/*.csm
+source/CarSkins/Assets/*_basecolor.*

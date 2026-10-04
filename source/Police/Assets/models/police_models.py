@@ -10,8 +10,15 @@ doors, roof), so the plugin can recolour them.
 
 Output: <Name>.pcm, a small text format (Unity axes x right, y up, z forward, metres, origin on the ground at the car's
 centre): `name`, `roof x y z` (where the lightbar goes), `tex <tag> <png>`, `mat <tag> r g b smoothness metallic
-emission`, then parts: `o <part>`, `p x y z` (wheel pivot: spins about its local x), `m <tag>`, `f`/`u` triangles
-(3 x position, normal [, uv]).
+emission`, then parts: `o <part>`, `p x y z` (wheel pivot: spins about its local x), `v x y z nx ny nz [u v]` (the part's
+welded vertices: one per position + normal + uv within a tag), `m <tag>`, `t a b c` (triangles: indices into the part's
+`v` list, already in Unity's winding). The plugin also still reads the older unwelded `f`/`u` triangle lines.
+
+Triangle budget (Police 0.6.0 perf pass): patrols are mostly seen at 20-300 m, so loft stations that add nothing there
+are dropped (decimate(): a station goes only if every point of its section is within LOFT_TOL of the straight line
+between its kept neighbours and no paint / glass / light boundary sits on it, so the silhouette and the livery stay),
+the mirror pods are chamfered instead of rounded, the bumpers and thin bars have fewer segments, and the caps that are
+always hidden (the rim's and hub's inner faces, inside the tyre) are left out.
 """
 import sys, os, math
 import bpy, bmesh
@@ -47,6 +54,37 @@ DESIGNS = {
     "Utility":     dict(L=5.05, W=2.02, belt=1.12, roof=1.84, c=0.24, wb=2.98, R=0.40, hood=1.12, ws=0.70, rg=0.22, trunk=0.18,
                         tumble=0.80, door0=-0.95, nose=0.40, tail=0.26, drop=0.09, sail=0.06, dpillar=True, crown=0.03, roofcrown=0.035),
 }
+
+
+LOFT_TOL = 0.005   # m: the largest deviation a dropped loft station may leave (about 0.25 px at 20 m on a 1080p screen)
+
+
+def decimate(ys, sec, tag, n_seg, keep=()):
+    """The stations to keep from the sorted list ys. Drops a station (the cheapest first) while the section there (sec(y):
+    a list of (x, z)) is within LOFT_TOL of the interpolation between its kept neighbours and every one of the n_seg faces
+    round the section has the same tag (tag(k, mid y)) on both sides of it and across the merged span. Ends and keep stay."""
+    S = {y: sec(y) for y in ys}
+    kept = list(ys)
+    pinned = set(round(k, 3) for k in keep)
+
+    def cost(i):
+        a, y, b = kept[i - 1], kept[i], kept[i + 1]
+        if round(y, 3) in pinned: return None
+        t = (y - a) / (b - a)
+        err = max(math.hypot(px - (ax + (bx - ax) * t), pz - (az + (bz - az) * t))
+                  for (px, pz), (ax, az), (bx, bz) in zip(S[y], S[a], S[b]))
+        if err > LOFT_TOL: return None
+        for k in range(n_seg):
+            if not (tag(k, (a + y) / 2) == tag(k, (y + b) / 2) == tag(k, (a + b) / 2)): return None
+        return err
+
+    while True:
+        best, bi = None, -1
+        for i in range(1, len(kept) - 1):
+            c = cost(i)
+            if c is not None and (best is None or c < best): best, bi = c, i
+        if bi < 0: return kept
+        del kept[bi]
 
 
 def clear():
@@ -90,11 +128,14 @@ def box(M, part, name, c, size, tag, bevel=0.01, rot=None, segs=1):
     M.add(part, obj_from(bm, name, tag, smooth=segs > 1), tag)
 
 
-def cyl(M, part, name, a, b, r, tag, segs=10, pivot=None):
+def cyl(M, part, name, a, b, r, tag, segs=10, pivot=None, drop_cap=None):
     axis = Vector(b) - Vector(a); L = axis.length; axis.normalize()
     bm = bmesh.new(); bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=segs, radius1=r, radius2=r, depth=L)
     q = Vector((0, 0, 1)).rotation_difference(axis); bmesh.ops.rotate(bm, verts=bm.verts, cent=Vector(), matrix=q.to_matrix())
     bmesh.ops.translate(bm, vec=(Vector(a) + Vector(b)) / 2, verts=bm.verts)
+    if drop_cap is not None:   # the cap facing this way is hidden inside another part: left out
+        bm.normal_update()
+        bmesh.ops.delete(bm, geom=[f for f in bm.faces if f.normal.dot(Vector(drop_cap)) > 0.99], context="FACES_ONLY")
     M.add(part, obj_from(bm, name, tag, smooth=True), tag, pivot=pivot)
 
 
@@ -178,21 +219,25 @@ def build(name, P):
 
     # ---- lower body loft, faces tagged by region
     door0, door1 = P.get("door0", yC + 0.15), yA - 0.25         # the doors run from just ahead of the rear glass to just behind the windscreen
-    bm = bmesh.new(); faces = []; rings = []
-    for y in ys:
-        rings.append([bm.verts.new((x, y, z)) for (x, z) in section(y)])
     N = 14
+
+    def lower_tag(k, ym):
+        if k == 13: return "under"
+        if k in (3, 9) and ym > yF - 0.13: return "light_head"
+        if k in (3, 9) and ym < yRr + 0.11: return "light_tail"
+        if k in (1, 2, 3, 4, 8, 9, 10, 11) and door0 < ym < door1: return "paint_b"
+        return "paint_a"
+
+    lys = decimate(ys, section, lower_tag, N, keep=(yA, yC))
+    bm = bmesh.new(); faces = []; rings = []
+    for y in lys:
+        rings.append([bm.verts.new((x, y, z)) for (x, z) in section(y)])
     for i in range(len(rings) - 1):
         A, B = rings[i], rings[i + 1]
-        ym = (ys[i] + ys[i + 1]) / 2
+        ym = (lys[i] + lys[i + 1]) / 2
         for k in range(N):
             f = bm.faces.new((A[k], A[(k + 1) % N], B[(k + 1) % N], B[k]))
-            if k == 13: t = "under"
-            elif k in (3, 9) and ym > yF - 0.13: t = "light_head"
-            elif k in (3, 9) and ym < yRr + 0.11: t = "light_tail"
-            elif k in (1, 2, 3, 4, 8, 9, 10, 11) and door0 < ym < door1: t = "paint_b"
-            else: t = "paint_a"
-            faces.append((f, t))
+            faces.append((f, lower_tag(k, ym)))
     faces.append((bm.faces.new(list(reversed(rings[0]))), "paint_a"))
     faces.append((bm.faces.new(rings[-1]), "paint_a"))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
@@ -213,30 +258,36 @@ def build(name, P):
         yD = (yRg + yB) / 2 - 0.15
         for yy in (yD - 0.045, yD + 0.045): gset.add(round(yy, 3))
     gys = sorted(gset)
-    bm = bmesh.new(); grings = []
-    for y in gys:
+
+    def gsection(y):
         h = hw(y); hb = h * 0.80; z0 = zt(y) - 0.02; z1 = roofz(y)
         rise = max(0.0, z1 - z0)
         ht = h * (tumble + (0.80 - tumble) * (1 - min(1.0, rise / max(0.01, roof - belt))))   # narrower where the glass is tall
         hm = hb + (ht - hb) * 0.45 + 0.015          # side glass bulges out a little
         crown = P.get("roofcrown", 0.04) * min(1.0, rise / max(0.01, roof - belt))
         R_ = [(hb, z0), (hm, z0 + rise * 0.5), (ht, z1 - 0.03 * min(1.0, rise / 0.2)), (ht * 0.86, z1)]
-        pts = R_ + [(0.0, z1 + crown)] + [(-x, z) for (x, z) in reversed(R_)]
-        grings.append([bm.verts.new((x, y, z)) for (x, z) in pts])
+        return R_ + [(0.0, z1 + crown)] + [(-x, z) for (x, z) in reversed(R_)]
+
+    def glass_tag(k, ym):
+        roofzone = yRg <= ym <= yWs
+        if k in (3, 4): return "paint_b" if roofzone else "glass"             # roof / windscreen and rear glass
+        if k in (2, 5): return "paint_b" if roofzone else "paint_a"           # roof edge / A and C pillars
+        # side glass, B (and D) pillars, C-pillar sail
+        if abs(ym - yB) < 0.05 or (yD is not None and abs(ym - yD) < 0.045): return "trim"
+        if ym < yRg + P.get("sail", 0.18) or ym > yWs + 0.02: return "paint_a" if ym < yRg + P.get("sail", 0.18) else "glass"
+        return "glass"
+
+    gys = decimate(gys, gsection, glass_tag, 8, keep=(yA, yC, yWs, yRg))
+    bm = bmesh.new(); grings = []
+    for y in gys:
+        grings.append([bm.verts.new((x, y, z)) for (x, z) in gsection(y)])
     gfaces = []
     for i in range(len(grings) - 1):
         A, B = grings[i], grings[i + 1]
         ym = (gys[i] + gys[i + 1]) / 2
-        roofzone = yRg <= ym <= yWs
         for k in range(8):
             f = bm.faces.new((A[k], A[k + 1], B[k + 1], B[k]))
-            if k in (3, 4): t = "paint_b" if roofzone else "glass"             # roof / windscreen and rear glass
-            elif k in (2, 5): t = "paint_b" if roofzone else "paint_a"         # roof edge / A and C pillars
-            else:                                                               # side glass, B (and D) pillars, C-pillar sail
-                if abs(ym - yB) < 0.05 or (yD is not None and abs(ym - yD) < 0.045): t = "trim"
-                elif ym < yRg + P.get("sail", 0.18) or ym > yWs + 0.02: t = "paint_a" if ym < yRg + P.get("sail", 0.18) else "glass"
-                else: t = "glass"
-            gfaces.append((f, t))
+            gfaces.append((f, glass_tag(k, ym)))
     for f in bm.faces:   # outward: away from the car's centre line, upward on top
         cen = f.calc_center_median()
         if f.normal.dot(Vector((cen.x, 0, cen.z - (belt + roof) / 2))) < 0: f.normal_flip()
@@ -274,8 +325,9 @@ def build(name, P):
             piv = Vector((px, yw, R))
             part = f"Wheel{'F' if yw > 0 else 'R'}{'L' if s < 0 else 'R'}"
             cyl(M, part, part + "_tire", (-0.12, 0, 0), (0.12, 0, 0), R, "tire", segs=16, pivot=piv)
-            cyl(M, part, part + "_rim", (s * 0.105, 0, 0), (s * 0.125, 0, 0), R * 0.64, "rim", segs=16, pivot=piv)
-            cyl(M, part, part + "_hub", (s * 0.12, 0, 0), (s * 0.14, 0, 0), R * 0.18, "chrome", segs=8, pivot=piv)
+            # rim and hub: their inner caps sit inside the tyre / the rim and are never seen
+            cyl(M, part, part + "_rim", (s * 0.105, 0, 0), (s * 0.125, 0, 0), R * 0.64, "rim", segs=16, pivot=piv, drop_cap=(-s, 0, 0))
+            cyl(M, part, part + "_hub", (s * 0.12, 0, 0), (s * 0.14, 0, 0), R * 0.18, "chrome", segs=8, pivot=piv, drop_cap=(-s, 0, 0))
 
     # ---- front: the lights are part of the body surface round the nose corners (loft faces tagged light_head) plus a
     # lens on the nose face in the same band; grille between them
@@ -290,9 +342,9 @@ def build(name, P):
     zf = zb2
     bumper(M, "BumperF", yF + 0.06, c + 0.21, 2 * hw(yF - 0.12) * 0.94, 1)
     for s in (-1, 1):
-        cyl(M, "Body", f"PushV{s}", (s * 0.34, yF + 0.13, c + 0.1), (s * 0.34, yF + 0.13, zf + 0.0), 0.028, "trim", segs=8)
-    cyl(M, "Body", "PushH1", (-0.4, yF + 0.14, c + 0.34), (0.4, yF + 0.14, c + 0.34), 0.024, "trim", segs=8)
-    cyl(M, "Body", "PushH2", (-0.4, yF + 0.14, zf - 0.06), (0.4, yF + 0.14, zf - 0.06), 0.024, "trim", segs=8)
+        cyl(M, "Body", f"PushV{s}", (s * 0.34, yF + 0.13, c + 0.1), (s * 0.34, yF + 0.13, zf + 0.0), 0.028, "trim", segs=6)
+    cyl(M, "Body", "PushH1", (-0.4, yF + 0.14, c + 0.34), (0.4, yF + 0.14, c + 0.34), 0.024, "trim", segs=6)
+    cyl(M, "Body", "PushH2", (-0.4, yF + 0.14, zf - 0.06), (0.4, yF + 0.14, zf - 0.06), 0.024, "trim", segs=6)
 
     # ---- rear: tail lights wrap round the tail corners the same way
     za, zb2 = band(yRr)
@@ -305,9 +357,9 @@ def build(name, P):
     # ---- mirrors (rounded pods on a stalk), spotlight
     for s in (-1, 1):
         mx = s * (side_x(yA - 0.1, belt - 0.05) + 0.1)
-        box(M, "Body", f"Mirror{s}", (mx, yA - 0.14, belt + 0.07), (0.17, 0.08, 0.11), "paint_a", bevel=0.035, segs=2)
+        box(M, "Body", f"Mirror{s}", (mx, yA - 0.14, belt + 0.07), (0.17, 0.08, 0.11), "paint_a", bevel=0.035, segs=1)
         box(M, "Body", f"MirrorStalk{s}", (mx - s * 0.07, yA - 0.12, belt + 0.02), (0.08, 0.04, 0.03), "trim", bevel=0.01)
-    cyl(M, "Body", "Spot", (-(hw(yA) * 0.82), yA - 0.02, belt + 0.1), (-(hw(yA) * 0.82), yA + 0.12, belt + 0.1), 0.05, "chrome", segs=10)
+    cyl(M, "Body", "Spot", (-(hw(yA) * 0.82), yA - 0.02, belt + 0.1), (-(hw(yA) * 0.82), yA + 0.12, belt + 0.1), 0.05, "chrome", segs=8)
 
     # ---- door decals, reading forwards on each side, following the curved door (3 rows)
     dy0 = max(door0 + 0.12, wheels_y[1] + Ra + 0.08); dy1 = min(door1 - 0.1, wheels_y[0] - Ra - 0.08)
@@ -344,10 +396,11 @@ def split_add(M, bm, faces, part):
 
 def bumper(M, name, y, z, width, sgn):
     """A rounded bumper bar: a capsule-section loft across the car that wraps back at the corners."""
-    bm = bmesh.new(); segs = 8; cols = 9; rings = []
+    bm = bmesh.new(); segs = 8; rings = []
     hgt, dep = 0.2, 0.18
-    for i in range(cols + 1):
-        u = -1 + 2 * i / cols
+    us = (-1.0, -0.82, -0.58, -0.25, 0.25, 0.58, 0.82, 1.0)   # dense where the corners sweep back (|u|^3), sparse across the straight middle
+    cols = len(us) - 1
+    for u in us:
         x = u * width / 2
         back = 0.16 * abs(u) ** 3                   # corners sweep back along the sides
         ring = []
@@ -372,27 +425,35 @@ def export(M, roof_c, path):
     for t, c in MATS.items(): lines.append(f"mat {t} " + " ".join(f"{x:.4f}" for x in c))
     parts = {}
     for (part, ob, tag, textured, pivot) in M.objs: parts.setdefault(part, []).append((ob, tag, textured, pivot))
-    ntri = 0
+    ntri = nvert = 0
     for part, items in parts.items():
         lines.append(f"o {part}")
         piv = items[0][3]
         if piv is not None: lines.append(f"p {piv.x:.5f} {piv.z:.5f} {piv.y:.5f}")
+        # welded within each tag: corners with the same position, normal and uv share one vertex (none spans two tags)
+        verts, index, tris = [], {}, {}
         for ob, tag, textured, pivot in items:
             me = ob.data; me.calc_loop_triangles()
             uvl = me.uv_layers.active.data if (textured and me.uv_layers) else None
-            lines.append(f"m {tag}")
             for lt in me.loop_triangles:
-                pts = []
+                tri = []
                 for li in (lt.loops[0], lt.loops[2], lt.loops[1]):
-                    v = me.vertices[me.loops[li].vertex_index].co.copy()
+                    v = me.vertices[me.loops[li].vertex_index].co
                     n = me.corner_normals[li].vector.normalized()
                     s = fmt((v.x, v.z, v.y)) + " " + fmt((n.x, n.z, n.y))
                     if uvl is not None: s += f" {uvl[li].uv.x:.5f} {uvl[li].uv.y:.5f}"
-                    pts.append(s)
-                lines.append(("u " if uvl is not None else "f ") + " ".join(pts))
-                ntri += 1
+                    key = (tag, s)
+                    if key not in index: index[key] = len(verts); verts.append(s)
+                    tri.append(index[key])
+                tris.setdefault(tag, []).append(tri)
+        lines.extend("v " + s for s in verts)
+        for tag, ts in tris.items():
+            lines.append(f"m {tag}")
+            lines.extend(f"t {a} {b} {c}" for a, b, c in ts)
+            ntri += len(ts)
+        nvert += len(verts)
     open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-    return ntri
+    return ntri, nvert
 
 
 def pbr(outdir):
@@ -451,6 +512,6 @@ def preview(M, name, outdir):
 os.makedirs(OUT, exist_ok=True)
 for name, P in DESIGNS.items():
     M, roof_c = build(name, P)
-    n = export(M, roof_c, os.path.join(OUT, f"{name}.pcm"))
-    print(f"[{name}] {n} triangles")
+    n, nv = export(M, roof_c, os.path.join(OUT, f"{name}.pcm"))
+    print(f"[{name}] {n} triangles, {nv} vertices")
     if PREVIEW: preview(M, name, PREVIEW)

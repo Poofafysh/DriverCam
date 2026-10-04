@@ -14,9 +14,13 @@
                          same-version collisions, lower than origin, code changed without a bump, diverged bumps
                          (with a predicted outcome and the next free version), version already tagged or released
                          with different code, malformed versions, and one version everywhere it is written
-                         ([BepInPlugin], Version const, .csproj, plugin README, root README, log strings)
+                         ([BepInPlugin], Version const, .csproj, plugin README, root README, log strings).
+                         A change to a linked shared file (source/Shared/*.cs) counts for every plugin that links it.
     6. Key bindings      the plugins' default hotkeys must not overlap
-    7. Harmony targets   two plugins patching the same game method are flagged
+    7. Harmony targets   two plugins patching the same game method are flagged (attributes, AccessTools.Method(typeof
+                         (T), ...) and '// harmony-target: T.M (cooperates with X)' comments; hand patches without
+                         either are flagged so they get a comment)
+    8. Ownership         a local commit that changes another developer's plugin (CLAUDE.md table) must say it was approved
 #>
 [CmdletBinding()]
 param([string]$Remote = "origin", [string]$Branch = "main", [switch]$NoFetch, [switch]$NoGitHub, [switch]$AllowIdentityChange)
@@ -117,9 +121,21 @@ function Is-CodeChange([string]$path) { return ($path -notmatch '\.md$' -and $pa
 # Code files under $dir that really changed between $fromRev and $toRev ($null = working tree).
 # Edits that only touch version lines (Version const, [BepInPlugin], .csproj version tags) don't count.
 $versionLine = 'const\s+string\s+Version\s*=|\[BepInPlugin\(|<(Assembly|File|Informational)?Version>'
+# Files outside the plugin folder that it compiles in (<Compile Include="..\Shared\Perf.cs" .../>), as repo paths.
+function Linked-Files([string]$dir, [string]$rev) {
+    $csprojPath = (List-Files $dir $rev | Where-Object { $_ -like '*.csproj' } | Select-Object -First 1)
+    if (-not $csprojPath) { return @() }
+    $xml = Read-Text $csprojPath $rev
+    $out = @()
+    foreach ($m in [regex]::Matches($xml, '<Compile\s+Include="\.\.[\\/]([^"]+)"')) { $out += "source/" + $m.Groups[1].Value.Replace('\', '/') }
+    return $out
+}
+
 function Changed-Code([string]$dir, [string]$fromRev, [string]$toRev) {
-    $files = if ($toRev) { @(GitOut diff --name-only $fromRev $toRev -- "$dir/") }
-             else { @(@(GitOut diff --name-only $fromRev -- "$dir/") + @(GitOut ls-files --others --exclude-standard -- "$dir/")) }
+    # a change to a linked shared file (source/Shared/*.cs) is a code change of every plugin that compiles it in
+    $paths = @("$dir/") + @(@(Linked-Files $dir $toRev) + @(Linked-Files $dir $fromRev) | Sort-Object -Unique)
+    $files = if ($toRev) { @(GitOut diff --name-only $fromRev $toRev -- @paths) }
+             else { @(@(GitOut diff --name-only $fromRev -- @paths) + @(GitOut ls-files --others --exclude-standard -- @paths)) }
     $result = @()
     foreach ($f in ($files | Where-Object { $_ } | Sort-Object -Unique)) {
         if (-not (Is-CodeChange $f)) { continue }
@@ -341,17 +357,79 @@ for ($i = 0; $i -lt $names.Count; $i++) { for ($j = $i + 1; $j -lt $names.Count;
 } }
 
 # ================================================================ 7. Harmony targets
+# Three ways a target is found:
+#   [HarmonyPatch(typeof(T), nameof(T.M))] / [HarmonyPatch(typeof(T), "M")]                attribute patches
+#   AccessTools.Method(typeof(T), nameof(T.M)) / AccessTools.Method(typeof(T), "M")          patches installed by hand
+#   // harmony-target: T.M, T.M2 (cooperates with OtherPlugin)                               anything else (a loop over names, ...)
+# A plugin that calls harmony.Patch(...) with none of these can't be compared: WARN until it has a harmony-target comment.
+# "(cooperates with X)" on a harmony-target line records that the overlap with plugin X was checked: info instead of WARN.
+function Last-Seg([string]$s) { return ($s -split '\.')[-1] }
 $targets = @{}
+$acks = @{}
 foreach ($p in $plugins) {
-    $src = (Get-ChildItem $p.Dir -Filter *.cs -Recurse | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
-    $targets[$p.Name] = [regex]::Matches($src, 'HarmonyPatch\(\s*typeof\((\w+)\)\s*,\s*(?:nameof\(\w+\.(\w+)\)|"(\w+)")') |
-        ForEach-Object { "$($_.Groups[1].Value).$($_.Groups[2].Value)$($_.Groups[3].Value)" } | Sort-Object -Unique
+    $src = (Get-ChildItem $p.Dir -Filter *.cs -Recurse | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+    $found = @()
+    foreach ($m in [regex]::Matches($src, 'HarmonyPatch\(\s*typeof\(([\w\.]+)\)\s*,\s*(?:nameof\(([\w\.]+)\)|"(\w+)")')) {
+        $found += "$(Last-Seg $m.Groups[1].Value).$(Last-Seg ($m.Groups[2].Value + $m.Groups[3].Value))"
+    }
+    $manual = @()
+    foreach ($m in [regex]::Matches($src, 'AccessTools\.(?:Method|DeclaredMethod)\(\s*typeof\(([\w\.]+)\)\s*,\s*(?:nameof\(([\w\.]+)\)|"(\w+)")')) {
+        $manual += "$(Last-Seg $m.Groups[1].Value).$(Last-Seg ($m.Groups[2].Value + $m.Groups[3].Value))"
+    }
+    $acks[$p.Name] = @()
+    foreach ($line in [regex]::Matches($src, '(?m)//\s*harmony-target:\s*(.+)$')) {
+        $text = $line.Groups[1].Value
+        $coop = [regex]::Match($text, '\(cooperates with ([^)]+)\)')   # applies to every target on the line
+        $others = if ($coop.Success) { @($coop.Groups[1].Value -split '[,/]| and ' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
+        $list = if ($coop.Success) { $text.Substring(0, $coop.Index) } else { $text }
+        foreach ($m in [regex]::Matches($list, '(\w+)\.(\w+)')) {
+            $t = "$($m.Groups[1].Value).$($m.Groups[2].Value)"
+            $manual += $t
+            foreach ($o in $others) { $acks[$p.Name] += "$t|$o" }
+        }
+    }
+    if ($src -match '\.Patch\(' -and $manual.Count -eq 0) {
+        Warn "$($p.Name) installs Harmony patches by hand (harmony.Patch) in a way this check can't read; add a '// harmony-target: Type.Method' comment next to it so clashes with other plugins are caught."
+    }
+    $targets[$p.Name] = @($found + $manual | Sort-Object -Unique)
+    if ($targets[$p.Name]) { Info "$($p.Name) patches: $(Short $targets[$p.Name] 6)" }
 }
 $names = @($targets.Keys)
 for ($i = 0; $i -lt $names.Count; $i++) { for ($j = $i + 1; $j -lt $names.Count; $j++) {
-    $both = $targets[$names[$i]] | Where-Object { $targets[$names[$j]] -contains $_ }
-    if ($both) { Warn "$($names[$i]) and $($names[$j]) both patch: $($both -join ', ') - make sure the patches cooperate." }
+    $a = $names[$i]; $b = $names[$j]
+    foreach ($t in @($targets[$a] | Where-Object { $targets[$b] -contains $_ })) {
+        if (($acks[$a] -contains "$t|$b") -or ($acks[$b] -contains "$t|$a")) { Info "$a and $b both patch $t (marked as cooperating)" }
+        else { Warn "$a and $b both patch: $t - make sure the patches cooperate, then mark it: // harmony-target: $t (cooperates with $b)" }
+    }
 } }
+
+# ================================================================ 8. ownership
+# CLAUDE.md's developer table ("| **Name** | `source/X/` (...), ... | git author |") says who owns which plugin. A local
+# commit that changes a plugin someone else owns must say in its message that it was approved ("approved by ...").
+$me = @(GitOut config user.name)[0]
+$owners = @{}
+if (Test-Path "CLAUDE.md") {
+    foreach ($row in [regex]::Matches((Get-Content "CLAUDE.md" -Raw), '(?m)^\|\s*\*\*([^*|]+)\*\*\s*\|([^|\r\n]*)\|\s*([^|\r\n]+?)\s*\|\s*$')) {
+        $owner = [pscustomobject]@{ Who = $row.Groups[1].Value.Trim(); Author = $row.Groups[3].Value.Trim() }
+        foreach ($d in [regex]::Matches($row.Groups[2].Value, '`(source/[^/`]+)/?`')) { $owners[$d.Groups[1].Value] = $owner }
+    }
+}
+foreach ($dir in $owners.Keys) {
+    $o = $owners[$dir]
+    if ($me -and $o.Author -ieq $me) { continue }
+    if ($base) {
+        foreach ($c in @(GitOut log --format="%H|%an" "$base..HEAD" -- "$dir/")) {
+            $hash, $author = $c -split '\|', 2
+            if ($author -ieq $o.Author) { continue }   # the owner's own commit
+            $subject = @(GitOut log -1 --format="%h %s" $hash)[0]
+            $msg = @(GitOut log -1 --format=%B $hash) -join "`n"
+            if ($msg -match '(?i)approv') { Info "$dir (owned by $($o.Who)) changed in $subject - approval is in the message" }
+            else { Fail "commit $subject changes $dir, which $($o.Who) owns, and its message doesn't say the change was approved. Add e.g. 'Approved by <name>: <what>' to the message (git commit --amend if it is your last commit) so $($o.Who) sees it when pulling." }
+        }
+    }
+    $uncommitted = @(@(GitOut diff --name-only -- "$dir/") + @(GitOut diff --name-only --cached -- "$dir/") | Where-Object { $_ })
+    if ($uncommitted.Count -gt 0) { Warn "uncommitted changes in $dir, which $($o.Who) owns ($(Short $uncommitted 3)): commit them only with approval, and say so in the commit message ('approved by ...')." }
+}
 
 # ================================================================ report
 Write-Host ""

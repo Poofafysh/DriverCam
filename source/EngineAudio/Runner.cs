@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using FM = RogueShared.FastMath;
 
 namespace EngineAudio
 {
@@ -12,8 +13,9 @@ namespace EngineAudio
     ///   which no game code touches); every source we muted is unmuted when EngineAudio turns off (F1 / config / error),
     ///   when the car changes and when the plugin unloads.
     /// - seven AudioSources of our own on a child object of the car's engine-sound object (destroyed with the car):
-    ///   on-load A/B, off-load A/B, idle A/B (Layer) and one for blow-offs. Same clips, same mixer group (Engine), 2D,
-    ///   like the game's.
+    ///   on-load A/B, off-load A/B, idle A/B (Layer) and one spare one-shot source. Same clips, same mixer group (Engine),
+    ///   2D, like the game's. Exhaust pops (ExhaustPops) add three more sources; the game's own blow-off sources stay
+    ///   muted while EngineAudio is on.
     /// - tyre squeal (TireSqueal): three more sources on the same object, on the game's drift-sound mixer group, driven by
     ///   the slip angle = the angle between where the visible body points and where it is actually going (its position
     ///   change), plus the game's drift state. Layered over the game's own drift hiss, which is left alone.
@@ -31,6 +33,10 @@ namespace EngineAudio
         private Layer _on, _off, _idle;
         private AudioSource _oneShot;
         private TireSqueal _tires;
+        private ExhaustPops _pops;
+        private bool _popsOff;
+        private float _nextPopsTry;
+        private string _engineName = "car";
         private bool _tiresOff, _haveBody, _tiresPending = true;
         private float _nextTiresTry;
         private UnityEngine.Audio.AudioMixerGroup _engineMixer;
@@ -46,6 +52,12 @@ namespace EngineAudio
         private UnityEngine.InputSystem.Controls.KeyControl _key;
         private Key _keyName = Key.None;
         private float _nextKb;
+
+        private void Awake()
+        {
+            useGUILayout = false;   // OnGUI only uses GUI.* (no GUILayout / GUI.Window), so skip Unity's extra Layout pass of OnGUI every frame
+            EngineLink.Install();   // AppDomain "rogue.engineaudio": the simulated RPM for DriverCam's tachometer
+        }
 
         private void Update()
         {
@@ -80,7 +92,9 @@ namespace EngineAudio
         private void OnDestroy()
         {
             Release("plugin unloaded");
+            EngineLink.Uninstall();
             TireSqueal.DestroyClips();
+            ExhaustPops.DestroyClips();
         }
 
         private void Step()
@@ -98,45 +112,52 @@ namespace EngineAudio
 
             // the game stops its own engine sound while paused (timeScale 0), in tutorials and at setup
             // (VehicleSoundManager.StopAllSounds): follow it, and come back when it does
-            if (Time.timeScale <= 0f || !GameEngineRunning()) { SilenceAll(); return; }
+            if (Time.timeScale <= 0f || !GameEngineRunning()) { SilenceAll(); EngineLink.Publish(_engine, _load); return; }   // RPM held, still live
 
             // ---- the simulated engine
             int gear; float progress;
             if (_car.HasGearbox) { gear = _car.Gear; progress = _car.GearProgress; }
             else Helpers.FallbackGear(_car.SpeedFactor, out gear, out progress);
-            _engine.Idle = Mathf.Clamp(Plugin.IdleRpm.Value, 500f, 2000f);
-            _engine.Redline = Mathf.Clamp(Plugin.RedlineRpm.Value, _engine.Idle + 2000f, 12000f);
+            _engine.Idle = FM.Clamp(Plugin.IdleRpm.Value, 500f, 2000f);
+            _engine.Redline = FM.Clamp(Plugin.RedlineRpm.Value, _engine.Idle + 2000f, 12000f);
             _engine.Limiter = Plugin.Limiter.Value;
             float dt = Time.deltaTime;
             // the raw input is 0 or 1 on a keyboard: ease it over ~0.1 s so on-load / off-load really crossfade
             float rawThrottle = _car.LevelEnded ? 0f : _car.Throttle;
-            if (dt > 0f) _load += (rawThrottle - _load) * (1f - Mathf.Exp(-dt / 0.1f));
+            if (dt > 0f) _load += (rawThrottle - _load) * (1f - MathF.Exp(-dt / 0.1f));
             float throttle = _load;
             UpdateSlip(dt);
-            float slipI = Mathf.Clamp01((Mathf.Abs(_slip) - 5f) / 25f);
-            if (_car.Drifting) slipI = Mathf.Max(slipI, 0.4f);
+            float slipI = FM.Clamp01((Math.Abs(_slip) - 5f) / 25f);
+            if (_car.Drifting) slipI = FM.Max(slipI, 0.4f);
             int gears = _car.HasGearbox ? Math.Max(2, _car.Gears) : 5;
-            _engine.TopSpeedShare = Mathf.Clamp(Plugin.TopSpeedRpm.Value, 0.7f, 0.99f);
+            _engine.TopSpeedShare = FM.Clamp(Plugin.TopSpeedRpm.Value, 0.7f, 0.99f);
             _engine.DriftFlare = Plugin.DriftFlare.Value;
             _engine.Step(new EngineInput { Speed = _car.Speed, Gear = gear, GearProgress = progress, Shifting = _car.Shifting, Throttle = throttle,
                                            TopGear = gear >= gears - 1, Slip = _car.Grounded || !GameApi.TiresOk ? slipI : 0f, Dt = dt });
+            EngineLink.Publish(_engine, throttle);
             if (dt <= 0f) return;   // paused: leave the voices as they are
 
             // ---- layers: on-load (rev-up sweep of this gear) / off-load (rev-down sweep) / idle loop
-            float master = Mathf.Max(0f, _car.MaxVolume) * Mathf.Clamp(Plugin.Volume.Value, 0f, 2f);
+            float master = FM.Max(0f, _car.MaxVolume) * FM.Clamp(Plugin.Volume.Value, 0f, 2f);
             float span = _engine.Span;
             float load = Smooth(throttle);
-            float idleW = _car.Speed < 4f ? Mathf.Clamp01(1f - (_engine.Rpm - _engine.Idle) / (_engine.Idle * 0.8f)) : 0f;
-            float onW = Mathf.Sin(load * Mathf.PI * 0.5f) * (1f - idleW);
-            float offW = Mathf.Cos(load * Mathf.PI * 0.5f) * (1f - idleW) * 0.8f;
-            float pitch = Mathf.Clamp(_car.GamePitch, 0.5f, 2f);   // the game's boost pitch (1.2) carries over
+            float idleW = _car.Speed < 4f ? FM.Clamp01(1f - (_engine.Rpm - _engine.Idle) / (_engine.Idle * 0.8f)) : 0f;
+            float onW = MathF.Sin(load * Mathf.PI * 0.5f) * (1f - idleW);
+            float offW = MathF.Cos(load * Mathf.PI * 0.5f) * (1f - idleW) * 0.8f;
+            float pitch = FM.Clamp(_car.GamePitch, 0.5f, 2f);   // the game's boost pitch (1.2) carries over
+            // RPM pitch: where the recording plays only moves the pitch a little (and a steady top-speed grain not at all),
+            // so the pitch itself rises with the RPM, from PitchAtIdle to PitchAtRedline: a held redline screams high
+            float rpmShare = FM.Clamp01((_engine.Rpm - _engine.Idle) / FM.Max(1f, _engine.Redline - _engine.Idle));
+            float pLow = FM.Clamp(Plugin.PitchLow.Value, 0.5f, 1.5f), pHigh = FM.Clamp(Plugin.PitchHigh.Value, 0.8f, 2f);
+            float rpmPitch = pLow + (pHigh - pLow) * rpmShare;
+            float layerPitch = FM.Min(pitch * rpmPitch, 2f);   // ceiling: boost x redline never turns shrill
 
             var onClip = Helpers.Pick(_accel, Math.Min(_engine.Gear, 3));
-            var offClip = Helpers.Pick(_decel, Mathf.Clamp(_engine.Gear, 1, 3));
+            var offClip = Helpers.Pick(_decel, FM.Clamp(_engine.Gear, 1, 3));
             var idleClip = Helpers.Pick(_decel, 0);
-            _on.Update(onClip, onClip == null ? 0f : onClip.length * (0.04f + 0.9f * span), onW * master, pitch, false, dt);
-            _off.Update(offClip, offClip == null ? 0f : offClip.length * (0.04f + 0.9f * (1f - span)), offW * master, pitch, false, dt);
-            float idlePitch = Mathf.Clamp(_engine.Rpm / _engine.Idle, 0.85f, 1.6f) * pitch;
+            _on.Update(onClip, onClip == null ? 0f : onClip.length * (0.04f + 0.9f * span), onW * master, layerPitch, false, dt);
+            _off.Update(offClip, offClip == null ? 0f : offClip.length * (0.04f + 0.9f * (1f - span)), offW * master, layerPitch, false, dt);
+            float idlePitch = FM.Clamp(_engine.Rpm / _engine.Idle, 0.85f, 1.6f) * pitch;
             _idle.Update(idleClip, 0f, idleW * master, idlePitch, true, dt);
 
             // ---- tyre squeal (Tires.Enabled is read live; the clips may still be in the making at the first car)
@@ -144,18 +165,20 @@ namespace EngineAudio
             else
             {
                 if (_tires == null && _tiresPending && Time.unscaledTime >= _nextTiresTry) { _nextTiresTry = Time.unscaledTime + 0.5f; BuildTires(_engineMixer); }
-                if (_tires != null) _tires.Update(_slip, _car.Speed, _car.Drifting, _car.Grounded, dt, Mathf.Clamp(Plugin.TiresVolume.Value, 0f, 2f));
+                if (_tires != null) _tires.Update(_slip, _car.Speed, _car.Drifting, _car.Grounded, dt, FM.Clamp(Plugin.TiresVolume.Value, 0f, 2f),
+                                               FM.Clamp(Plugin.TiresPitch.Value, 0.5f, 1.5f));
             }
 
-            // ---- blow-off on a high-load upshift (cars that have them: the RX7)
-            if (_engine.Upshifted && throttle > 0.6f && _oneShot != null)
+            // ---- exhaust pops (synthesized, ExhaustPops): a lift-off at high RPM starts a timed sequence of pops and crackles
+            if (!Plugin.Pops.Value) _pops?.Silence();
+            else
             {
-                var blow = Helpers.Pick(_blow, Math.Max(0, Math.Min(_engine.Gear - 1, 3)));
-                if (blow != null) _oneShot.PlayOneShot(blow, 0.9f * master);
+                if (_pops == null && !_popsOff && Time.unscaledTime >= _nextPopsTry) { _nextPopsTry = Time.unscaledTime + 0.5f; BuildPops(_engineMixer); }
+                if (_pops != null) _pops.Update(rawThrottle, rpmShare, _car.Speed, FM.Clamp(Plugin.PopMinRpm.Value, 0.3f, 0.95f), dt, master, _engineName);
             }
         }
 
-        private static float Smooth(float x) { x = Mathf.Clamp01(x); return x * x * (3f - 2f * x); }
+        private static float Smooth(float x) { x = FM.Clamp01(x); return x * x * (3f - 2f * x); }
 
         /// <summary>
         /// Slip angle from the visible body: its heading vs its horizontal movement since the last frame (atan2 of the
@@ -171,10 +194,10 @@ namespace EngineAudio
                 float v2 = vx * vx + vz * vz;
                 if (v2 > 9f && v2 < 150f * 150f && fx * fx + fz * fz > 0.01f)
                 {
-                    float ang = Mathf.Atan2(fz * vx - fx * vz, fx * vx + fz * vz) * Mathf.Rad2Deg;
-                    _slip += (ang - _slip) * (1f - Mathf.Exp(-dt * 15f));
+                    float ang = MathF.Atan2(fz * vx - fx * vz, fx * vx + fz * vz) * Mathf.Rad2Deg;
+                    _slip += (ang - _slip) * (1f - MathF.Exp(-dt * 15f));
                 }
-                else _slip *= Mathf.Exp(-dt * 8f);
+                else _slip *= MathF.Exp(-dt * 8f);
             }
             _lastBodyPos = _car.BodyPos;
             _haveBody = true;
@@ -203,6 +226,8 @@ namespace EngineAudio
             _engineMixer = mixer;
             _tiresPending = true;
             string tires = BuildTires(mixer);
+            _engineName = _accel.Length > 0 && _accel[0] != null ? _accel[0].name.Replace(" accel gear 01", "") : "car";
+            _pops = null; _nextPopsTry = 0f;
             Plugin.Log.LogInfo($"[EngineAudio] engine voices ready: rev-up {Helpers.Names(_accel)}; rev-down {Helpers.Names(_decel)}; blow-offs {_blow.Length}; " +
                                $"{(_car.HasGearbox ? "the game's gearbox" : "simulated gears")}, mixer group '{(mixer != null ? mixer.name : "none")}', " +
                                $"clip load type {(_accel.Length > 0 && _accel[0] != null ? _accel[0].loadType.ToString() : "?")}; {tires}");
@@ -240,6 +265,24 @@ namespace EngineAudio
             }
         }
 
+        /// <summary>The exhaust pops on the voices object; pending while the worker makes the clips; an error switches only them off.</summary>
+        private void BuildPops(UnityEngine.Audio.AudioMixerGroup mixer)
+        {
+            if (_voices == null) return;
+            try
+            {
+                var state = ExhaustPops.EnsureClips();
+                if (state == TireSqueal.State.Pending) return;
+                if (state == TireSqueal.State.Failed) { _popsOff = true; return; }
+                _pops = new ExhaustPops(_voices, mixer);
+            }
+            catch (Exception e)
+            {
+                _popsOff = true; _pops = null;
+                Plugin.Log.LogWarning($"[EngineAudio] exhaust pops switched off for this session: {e.Message}");
+            }
+        }
+
         private bool _tiresLogged;
 
         private void BuildVoices(GameObject host, UnityEngine.Audio.AudioMixerGroup mixer)
@@ -266,19 +309,20 @@ namespace EngineAudio
 
         private void SilenceAll()
         {
-            _on?.Silence(); _off?.Silence(); _idle?.Silence(); _tires?.Silence();
+            _on?.Silence(); _off?.Silence(); _idle?.Silence(); _tires?.Silence(); _pops?.Silence();
             if (_oneShot != null) _oneShot.Stop();   // one-shots don't show in isPlaying
         }
 
         /// <summary>Hands the engine sound back to the game: unmute its sources, remove ours. Never throws.</summary>
         private void Release(string why, bool forget = true)
         {
+            EngineLink.Off();   // readers (DriverCam's tachometer) fall back to their own model
             if (!_active && _voices == null && _muted.Count == 0) return;
             foreach (var s in _muted) { try { if (s != null) s.mute = false; } catch { /* gone with the car */ } }
             _muted.Clear();
-            try { _on?.Silence(); _off?.Silence(); _idle?.Silence(); _tires?.Silence(); } catch { /* gone */ }
+            try { _on?.Silence(); _off?.Silence(); _idle?.Silence(); _tires?.Silence(); _pops?.Silence(); } catch { /* gone */ }
             try { if (_voices != null) UnityEngine.Object.Destroy(_voices); } catch { /* gone */ }
-            _voices = null; _on = _off = _idle = null; _oneShot = null; _tires = null; _haveBody = false;
+            _voices = null; _on = _off = _idle = null; _oneShot = null; _tires = null; _pops = null; _haveBody = false;
             _builtFor = IntPtr.Zero;
             if (_active) Plugin.Log.LogInfo($"[EngineAudio] engine sound handed back to the game ({why})");
             _active = false;
@@ -371,7 +415,7 @@ namespace EngineAudio
             gear = 0;
             for (int i = FallbackRatios.Length - 1; i >= 0; i--) if (speedFactor >= FallbackRatios[i]) { gear = i; break; }
             float lo = FallbackRatios[gear], hi = gear + 1 < FallbackRatios.Length ? FallbackRatios[gear + 1] : 1f;
-            progress = Mathf.Clamp01((speedFactor - lo) / Mathf.Max(0.01f, hi - lo));
+            progress = FM.Clamp01((speedFactor - lo) / FM.Max(0.01f, hi - lo));
         }
 
         internal static AudioClip[] Clips(AudioSource[] s)

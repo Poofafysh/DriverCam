@@ -35,5 +35,12 @@ Rules: never close, kill or restart the game. Never delete or overwrite anything
    - Nothing within 20 s: the log may just be buffered. Suggest looking for the green message at the top of the
      screen, pressing F11 in game (reload all), or setting `InstantFlushing = true` in `BepInEx/config/BepInEx.cfg`
      (takes effect after a restart).
-4. **Report** in a few lines: build result, the HotReload log line(s) found (quoted), the load number, any errors or
-   warnings, and what the person should see in game (a green "<Plugin> reloaded #N" message at the top centre).
+4. **Report** in exactly this shape:
+   ```
+   HOT <Plugin>: build OK | FAILED (<first error>)
+   HotReload: <quoted Reloaded/Loaded line, load #N> | <quoted error line + top frames> | nothing within 20 s (log buffered?) | game not running (loads at next start)
+   In game: a green "<Plugin> reloaded #N" message at the top centre
+   RESULT: OK | WARN | FAIL
+   ```
+   `OK` = a `Reloaded`/`Loaded` line whose `built` time matches the build; `WARN` = nothing within 20 s or game not
+   running; `FAIL` = build failed, a preflight stop, or a HotReload error line.

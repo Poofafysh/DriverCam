@@ -28,10 +28,18 @@
     <Reference Include="$(BepInExDir)\interop\UnityEngine.ImageConversionModule.dll" Private="false" />
     <Reference Include="$(BepInExDir)\interop\UnityEngine.UIModule.dll" Private="false" />
     <Reference Include="$(BepInExDir)\interop\Assembly-CSharp.dll" Private="false" />
+    <!-- URP per-camera data: the mirror cameras switch off their shadow pass, depth/colour copies and volume updates -->
+    <Reference Include="$(BepInExDir)\interop\Unity.RenderPipelines.Universal.Runtime.dll" Private="false" />
+    <Reference Include="$(BepInExDir)\interop\Unity.RenderPipelines.Core.Runtime.dll" Private="false" />
   </ItemGroup>
 
-  <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -->
-  <Target Name="DeployToGame" AfterTargets="Build">
+  <ItemGroup>
+    <!-- plain C# math for per-frame code (Unity's math helpers are slow interop calls) -->
+    <Compile Include="..\Shared\FastMath.cs" Link="FastMath.cs" />
+  </ItemGroup>
+
+  <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -p:SkipDeploy=true skips it. -->
+  <Target Name="DeployToGame" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true'">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExDir)\plugins" ContinueOnError="true" />
     <Copy SourceFiles="Assets\cockpit.dcm" DestinationFolder="$(BepInExDir)\plugins\DriverCam" ContinueOnError="true" />
     <ItemGroup><FittedCockpits Include="Assets\cockpits\*.*" /></ItemGroup>

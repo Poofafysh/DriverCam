@@ -1,4 +1,5 @@
 using System;
+using BepInEx.Configuration;
 using RogueShared;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -18,6 +19,13 @@ namespace CurbFeel
         private void Update() => CurbFeelCore.Update();
 
         private void OnGUI() => CurbFeelCore.OnGUI();
+
+        // plugin unload (game quit): the ramps, wall views, their meshes and the cached materials go now, not with the process
+        private void OnDestroy()
+        {
+            try { CurbFeelCore.RevertAll(); } catch { /* shutting down */ }
+            try { CurbFeelCore.ReleaseCaches(); } catch { /* shutting down */ }
+        }
     }
 #endif
 
@@ -51,12 +59,19 @@ namespace CurbFeel
                 }
 
                 ScrapePatches.EnsureContinuousPatch();
+                if (_changedAt > 0f && Time.unscaledTime - _changedAt >= ChangeSettle)
+                {
+                    _changedAt = 0f;
+                    Reapply("settings changed");
+                }
 
                 if (!Settings.Enabled.Value) return;
                 float now = Time.unscaledTime;
                 if (Due(ref _nextWalls, WallsPeriod, WallsPhase, now)) using (Perf.Scope("CurbFeel.Walls")) Walls.Tick();
                 if (Due(ref _nextHull, HullPeriod, HullPhase, now)) using (Perf.Scope("CurbFeel.Hull")) Hull.Tick();
                 if (Due(ref _nextTraffic, TrafficPeriod, TrafficPhase, now)) using (Perf.Scope("CurbFeel.Traffic")) Traffic.Tick();
+                // a newly loaded tile's sidewalk map, read a little every frame (only while one is being built)
+                if (SidewalkMap.Building) using (Perf.Scope("CurbFeel.Map")) SidewalkMap.Pump(Settings.MapBudgetMs.Value);
             }
             catch (Exception e)
             {
@@ -84,6 +99,7 @@ namespace CurbFeel
         {
             try
             {
+                if (HubLink.HubOpen) return;   // Rogue Hub on screen: no panel over it (and no clicks through it)
                 bool clicked;
                 using (Perf.Scope("CurbFeel.Overlay")) clicked = Overlay.Draw();
                 if (clicked) Reapply("panel click");
@@ -116,6 +132,61 @@ namespace CurbFeel
             }
         }
 
+        // ------------------------------------------------------------------ settings edited live (Rogue Hub, panel)
+        // A setting that shapes walls / hull / ramps / traffic boxes only takes effect when they are fitted again, so a
+        // change marks them; ChangeSettle seconds after the last change (a slider held down sends many) everything is
+        // reverted and the next ticks re-fit with the new values. Panel / log / key settings need nothing.
+        private const float ChangeSettle = 0.5f;
+        private static float _changedAt;
+        private static ConfigFile _hooked;
+        private static EventHandler<SettingChangedEventArgs> _onChanged;
+
+        internal static void HookConfig(ConfigFile cfg)
+        {
+            UnhookConfig();
+            _hooked = cfg;
+            _onChanged = OnSettingChanged;
+            cfg.SettingChanged += _onChanged;
+            HubLink.Status(Plugin.Guid, HubStatus);
+            HubLink.Action(Plugin.Guid, "refit", "Re-fit walls now", "Puts every wall, ramp and hit box back to stock and fits them again with the current settings.", HubRefit);
+        }
+
+        internal static void UnhookConfig()
+        {
+            if (_hooked != null && _onChanged != null) _hooked.SettingChanged -= _onChanged;
+            _hooked = null;
+            _onChanged = null;
+            _changedAt = 0f;
+        }
+
+        private static void OnSettingChanged(object sender, SettingChangedEventArgs e)
+        {
+            try
+            {
+                string key = e?.ChangedSetting?.Definition?.Key ?? "";
+                string section = e?.ChangedSetting?.Definition?.Section ?? "";
+                if (section == "General" && key != "Enabled") return;   // panel, log, keys: nothing to re-fit
+                _changedAt = Time.unscaledTime;
+            }
+            catch { /* never break a settings write */ }
+        }
+
+        /// <summary>Rogue Hub: the live line on CurbFeel's card.</summary>
+        private static string HubStatus()
+        {
+            if (!Settings.Enabled.Value) return "off: stock walls, hull, damage and traffic";
+            return Stats.WallPairs > 0
+                ? $"walls moved on {Stats.WallPairs} road edges, {Stats.Ramps} curb ramps"
+                : "waiting for road tiles";
+        }
+
+        /// <summary>Rogue Hub button.</summary>
+        private static string HubRefit()
+        {
+            Reapply("re-fit from Rogue Hub");
+            return "CurbFeel: walls re-fitted with the current settings";
+        }
+
         /// <summary>Undo every change CurbFeel made in the game (hull, walls, ramps, traffic boxes, near-miss range).</summary>
         public static void RevertAll()
         {
@@ -137,6 +208,7 @@ namespace CurbFeel
         private static void Reapply(string why)
         {
             RevertAll();
+            _changedAt = 0f;   // this re-fit covers the change that triggered it: no second one half a second later
             Plugin.Log.LogInfo($"[CurbFeel] {why}: {StateLine()}");
         }
 
@@ -144,6 +216,7 @@ namespace CurbFeel
         {
             RevertAll();
             Plugin.Cfg.Reload();
+            _changedAt = 0f;   // Reload raised SettingChanged for every changed value; the revert above already covers them
             Plugin.Log.LogInfo($"[CurbFeel] config reloaded: {StateLine()}");
         }
 

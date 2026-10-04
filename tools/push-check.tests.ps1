@@ -11,6 +11,8 @@
 param([string[]]$Only, [switch]$KeepTemp)
 
 $ErrorActionPreference = "Continue"
+# -File passes "a,b" as one string: split it
+if ($Only) { $Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 $check = Join-Path $PSScriptRoot "push-check.ps1"
 $work = Join-Path ([IO.Path]::GetTempPath()) ("push-check-tests-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -69,6 +71,25 @@ function Bump([string]$dir, [string]$to) { Push-Location $dir; & powershell -NoP
 function Change-Code([string]$dir, [string]$tag = "") { Add-Content "$dir/source/Foo/Code.cs" "// change $tag $([guid]::NewGuid())" }
 function Commit([string]$dir, [string]$msg = "work") { G $dir add -A; G $dir commit -q -m $msg }
 function Push([string]$dir) { G $dir push -q origin HEAD:main }
+# Foo compiles in source/Shared/Perf.cs (pushed by A, pulled by B)
+function Link-Shared($e) {
+    W "$($e.A)/source/Shared/Perf.cs" "static class Perf { }"
+    W "$($e.A)/source/Foo/Foo.csproj" "<Project Sdk=`"Microsoft.NET.Sdk`"><PropertyGroup><AssemblyName>Foo</AssemblyName></PropertyGroup><ItemGroup><Compile Include=`"..\Shared\Perf.cs`" Link=`"Perf.cs`" /></ItemGroup></Project>"
+    Commit $e.A "shared perf"; Push $e.A; G $e.B pull -q --rebase
+}
+# a second plugin Bar (pushed by A, pulled by B) with extra source
+function Add-Bar($e, [string]$code) {
+    W "$($e.A)/source/Bar/Plugin.cs" (Plugin-Cs "1.0.0" "x.bar" "Bar")
+    W "$($e.A)/source/Bar/Bar.csproj" (Csproj "Bar")
+    W "$($e.A)/source/Bar/Patches.cs" $code
+    Commit $e.A "bar"; Push $e.A; G $e.B pull -q --rebase
+}
+# CLAUDE.md developer table: Foo is owned by the developer whose git author is $author (pushed by A, pulled by B)
+function Set-Owner($e, [string]$author) {
+    $who = if ($author -eq "You") { "Me" } else { "Other" }
+    W "$($e.A)/CLAUDE.md" "| Developer | Owns | Git author |`n|---|---|---|`n| **$who** | ``source/Foo/`` (the foo plugin) | $author |`n"
+    Commit $e.A "owners"; Push $e.A; G $e.B pull -q --rebase
+}
 function Run-Check([string]$dir, [string[]]$extra = @()) {
     Push-Location $dir
     $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$dir/tools/push-check.ps1" -NoGitHub @extra 2>&1 | Out-String
@@ -158,6 +179,29 @@ $scenarios = @(
        Setup = { param($e) Change-Code $e.A "a"; Set-Version $e.A "1.1.0"; Commit $e.A; Push $e.A
                  W "$($e.B)/source/Foo/Other.cs" "class Other { }"; Commit $e.B; G $e.B pull -q --rebase
                  Bump $e.B "minor"; Commit $e.B } },
+    # --- shared source linked into a plugin (source/Shared/*.cs) ---
+    @{ Name = "shared: changing a linked shared file needs a bump"; Expect = 1; Must = @('Foo: code changed .*source/Shared/Perf\.cs.*Set it to 1\.0\.1');
+       Setup = { param($e) Link-Shared $e; Add-Content "$($e.B)/source/Shared/Perf.cs" "// faster"; Commit $e.B "perf" } },
+    @{ Name = "shared: linked shared file change with bump"; Expect = 0; Must = @('1\.0\.0 -> 1\.0\.1');
+       Setup = { param($e) Link-Shared $e; Add-Content "$($e.B)/source/Shared/Perf.cs" "// faster"; Set-Version $e.B "1.0.1"; Commit $e.B "perf" } },
+    @{ Name = "shared: a shared file nobody links needs no bump"; Expect = 0; MustNot = @('FAIL');
+       Setup = { param($e) Link-Shared $e; W "$($e.B)/source/Shared/Other.cs" "class Other { }"; Commit $e.B "other" } },
+    # --- Harmony targets ---
+    @{ Name = "harmony: hand patch without a target comment is flagged"; Expect = 0; Must = @('Foo installs Harmony patches by hand');
+       Setup = { param($e) W "$($e.B)/source/Foo/Hooks.cs" "class Hooks { void I(Harmony h) { foreach (var n in new[] { `"Update`" }) h.Patch(AccessTools.Method(t, n)); } }"; Commit $e.B; Set-Version $e.B "1.0.1"; Commit $e.B } },
+    @{ Name = "harmony: AccessTools hand patch clashes with another plugin's attribute"; Expect = 0; Must = @('Bar and Foo both patch: Cam\.Update|Foo and Bar both patch: Cam\.Update'); MustNot = @('installs Harmony patches by hand');
+       Setup = { param($e) Add-Bar $e "[HarmonyPatch(typeof(Cam), nameof(Cam.Update))] class P { }"
+                 W "$($e.B)/source/Foo/Hooks.cs" "class Hooks { void I(Harmony h) { h.Patch(AccessTools.Method(typeof(Game.Cam), `"Update`")); } }"; Set-Version $e.B "1.0.1"; Commit $e.B } },
+    @{ Name = "harmony: target comment marked as cooperating is info only"; Expect = 0; Must = @('both patch Cam\.Update \(marked as cooperating\)'); MustNot = @('WARN .*both patch');
+       Setup = { param($e) Add-Bar $e "[HarmonyPatch(typeof(Cam), `"Update`")] class P { }"
+                 W "$($e.B)/source/Foo/Hooks.cs" "class Hooks { // harmony-target: Cam.Update, Cam.LateUpdate (cooperates with Bar)`n void I(Harmony h) { h.Patch(m); } }"; Set-Version $e.B "1.0.1"; Commit $e.B } },
+    # --- ownership (CLAUDE.md developer table) ---
+    @{ Name = "ownership: commit to someone else's plugin without approval"; Expect = 1; Must = @("changes source/Foo, which Other owns, and its message doesn't say");
+       Setup = { param($e) Set-Owner $e "Other Dev"; Change-Code $e.B; Set-Version $e.B "1.0.1"; Commit $e.B "tweak Foo" } },
+    @{ Name = "ownership: approval in the commit message"; Expect = 0; Must = @('owned by Other\) changed in .* approval is in the message');
+       Setup = { param($e) Set-Owner $e "Other Dev"; Change-Code $e.B; Set-Version $e.B "1.0.1"; Commit $e.B "Foo 1.0.1: hook (approved by Other in chat)" } },
+    @{ Name = "ownership: your own plugin needs no approval"; Expect = 0; MustNot = @('owns');
+       Setup = { param($e) Set-Owner $e "You"; Change-Code $e.B; Set-Version $e.B "1.0.1"; Commit $e.B "tweak Foo" } },
     # Non-ASCII built from char codes: PS 5.1 may parse this script as ANSI, so literal arrows here would be garbled.
     @{ Name = "bump script: keeps non-ASCII text, BOM and line endings byte for byte"; Expect = 0; Must = @('1\.0\.0 -> 1\.1\.0'); MustNot = @('written differently');
        Setup = { param($e) $to = [string][char]0x2192; $both = [string][char]0x2194; $deg = [string][char]0xB0

@@ -32,6 +32,7 @@ namespace Police
         private Renderer _redR, _blueR, _redHaloR, _blueHaloR;
         private Light _redLight, _blueLight;
         private Look _look = (Look)(-1);
+        private bool _lightOn;
 
         internal static Lightbar Create()
         {
@@ -49,7 +50,7 @@ namespace Police
                 }
                 bar._redLight = MakeLight(bar._redGo, Red);
                 bar._blueLight = MakeLight(bar._blueGo, Blue);
-                bar.Show(Look.Idle);
+                bar.Show(Look.Idle, false);
                 return bar;
             }
             catch
@@ -133,7 +134,8 @@ namespace Police
             s_made = false;
         }
 
-        /// <summary>Onto the roof: base centred, lenses offset sideways by +-0.25 m; halos face the camera.</summary>
+            /// <summary>Onto the roof: base centred, lenses offset sideways by +-0.25 m; a halo that is on faces the camera
+        /// (a hidden halo isn't moved: it is placed again the frame it comes on, before it is drawn).</summary>
         internal void Place(Vector3 roof, Quaternion rotation, Vector3 right, Vector3 up, Vector3 camPos)
         {
             if (_baseT != null) _baseT.SetPositionAndRotation(roof + up * 0.035f, rotation);
@@ -141,8 +143,8 @@ namespace Police
             Vector3 redPos = roof + lensY - right * 0.25f, bluePos = roof + lensY + right * 0.25f;
             if (_redT != null) _redT.SetPositionAndRotation(redPos, rotation);
             if (_blueT != null) _blueT.SetPositionAndRotation(bluePos, rotation);
-            if (_redHaloT != null) Face(_redHaloT, redPos, camPos);
-            if (_blueHaloT != null) Face(_blueHaloT, bluePos, camPos);
+            if (_redHaloT != null && _look == Look.FlashRed) Face(_redHaloT, redPos, camPos);
+            if (_blueHaloT != null && _look == Look.FlashBlue) Face(_blueHaloT, bluePos, camPos);
         }
 
         private static void Face(Transform t, Vector3 pos, Vector3 cam)
@@ -153,23 +155,31 @@ namespace Police
             t.SetPositionAndRotation(pos - to.normalized * 0.4f, Quaternion.LookRotation(to));
         }
 
-        /// <summary>Idle: dim lenses. Flash: one side bright, its halo and light on. Off: both dark (ESCAPED / released).</summary>
-        internal void Show(Look look)
+        /// <summary>
+        /// Idle: dim lenses. Flash: one side bright, its halo on, and its real light when <paramref name="light"/> (the
+        /// Runner only allows that for the chasers nearest the camera: 0.6.0 perf). Off: both dark (ESCAPED / released).
+        /// Call Place after Show in the same frame, so a halo that just came on is facing the camera when drawn.
+        /// </summary>
+        internal void Show(Look look, bool light)
         {
-            if (look == _look) return;   // changes only when the look changes (4x a second while flashing)
-            _look = look;
+            if (look == _look && light == _lightOn) return;   // changes only when the look changes (4x a second while flashing)
+            bool lookChanged = look != _look;
+            _look = look; _lightOn = light;
             bool red = look == Look.FlashRed, blue = look == Look.FlashBlue;
-            if (_redR != null && s_redOn != null) _redR.sharedMaterial = red ? s_redOn : s_redOff;
-            if (_blueR != null && s_blueOn != null) _blueR.sharedMaterial = blue ? s_blueOn : s_blueOff;
-            if (_redHaloR != null) _redHaloR.enabled = red;
-            if (_blueHaloR != null) _blueHaloR.enabled = blue;
-            SetLight(_redLight, red);
-            SetLight(_blueLight, blue);
+            if (lookChanged)
+            {
+                if (_redR != null && s_redOn != null) _redR.sharedMaterial = red ? s_redOn : s_redOff;
+                if (_blueR != null && s_blueOn != null) _blueR.sharedMaterial = blue ? s_blueOn : s_blueOff;
+                if (_redHaloR != null) _redHaloR.enabled = red;
+                if (_blueHaloR != null) _blueHaloR.enabled = blue;
+            }
+            SetLight(_redLight, red && light);
+            SetLight(_blueLight, blue && light);
         }
 
         private static void SetLight(Light light, bool on)
         {
-            if (light == null) return;
+            if (light == null) return;   // (one native write pair per change, 4x a second at most)
             light.intensity = on ? 7f : 0f;
             light.enabled = on;
         }

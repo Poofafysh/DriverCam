@@ -1,0 +1,4 @@
+# working file and Blender backups (rebuilt by build_driver.py)
+*.blend
+*.blend1
+previews/

@@ -15,6 +15,11 @@ public class DriverCamBehaviour : MonoBehaviour
 {
     public DriverCamBehaviour(IntPtr ptr) : base(ptr) { }
 
+    // OnGUI only uses GUI.* (no GUILayout / GUI.Window), so skip Unity's extra Layout pass of OnGUI every frame
+    void Awake() => useGUILayout = false;
+
+    void OnDestroy() => DriverLink.Uninstall();   // the Driver plugin's AppDomain data goes off with DriverCam
+
     CameraModeSO _previousMode;
     bool _wasActive;
     float _normalNearClip = 0.3f;
@@ -25,6 +30,8 @@ public class DriverCamBehaviour : MonoBehaviour
     bool _savedCursorVisible;
     CursorLockMode _savedLockState;
     bool _guiErrorLogged;
+    float _nextTickErrorLog;
+    int _tickErrorsSkipped;
 
     void Update()
     {
@@ -34,6 +41,12 @@ public class DriverCamBehaviour : MonoBehaviour
         }
         catch (Exception e)
         {
+            // a persistent fault would otherwise log a stack trace every frame: at most one every 5 s, with the skipped count
+            float now = Time.unscaledTime;
+            if (now < _nextTickErrorLog) { _tickErrorsSkipped++; return; }
+            _nextTickErrorLog = now + 5f;
+            if (_tickErrorsSkipped > 0) Plugin.Logger.LogError($"({_tickErrorsSkipped} more errors in the last few seconds)");
+            _tickErrorsSkipped = 0;
             Plugin.Logger.LogError(e);
         }
     }
@@ -93,7 +106,7 @@ public class DriverCamBehaviour : MonoBehaviour
         _nextCycleCheck = Time.unscaledTime + 1f;
 
         var mgr = UnityEngine.Object.FindFirstObjectByType<CameraManager>();
-        var modes = mgr?.cameraModes;
+        var modes = mgr == null ? null : mgr.cameraModes;
         if (modes == null || modes.Length == 0) return;
         if (_checkedManager != null && !_checkedManager.WasCollected && _checkedManager.Pointer == mgr.Pointer) return;
 
@@ -112,7 +125,11 @@ public class DriverCamBehaviour : MonoBehaviour
         }
 
         var names = new List<string>();
-        foreach (var m in modes) names.Add(m?.cameraModeName ?? "?");
+        foreach (var m in modes)
+        {
+            string name = m == null ? null : m.cameraModeName;
+            names.Add(name == null ? "?" : name);
+        }
         Plugin.Logger.LogInfo($"Change Camera (C / Y) cycles {names.Count} views: {string.Join(" -> ", names)}");
         _checkedManager = mgr;
     }
@@ -205,8 +222,13 @@ public class DriverCamBehaviour : MonoBehaviour
                 Plugin.DriverSelected.Value = false;
                 var first = gameViews.Count > 0 ? gameViews[0] : null;
                 if (first != null && (current == null || current.Pointer != first.Pointer)) ctrl.SetCameraMode(first);
-                try { mgr.gameplaySettings?.SetCameraMode(0, true); } catch (Exception) { }
-                current = first ?? current;
+                try
+                {
+                    var gameplay = mgr.gameplaySettings;
+                    if (gameplay != null) gameplay.SetCameraMode(0, true);
+                }
+                catch (Exception) { }
+                if (first != null) current = first;
             }
             else if (gameViews.Count > 0 && _lastSeenMode.Pointer == gameViews[gameViews.Count - 1].Pointer)
             {
@@ -216,7 +238,7 @@ public class DriverCamBehaviour : MonoBehaviour
                 current = driver;
             }
             // other steps between the game's own views are handled by the game itself
-            Plugin.Logger.LogInfo($"Change Camera: {_lastSeenMode.cameraModeName} -> {current?.cameraModeName}");
+            Plugin.Logger.LogInfo($"Change Camera: {_lastSeenMode.cameraModeName} -> {(current == null ? null : current.cameraModeName)}");
         }
         else if (Plugin.DriverSelected.Value && IsGameView(current))
         {
@@ -240,7 +262,8 @@ public class DriverCamBehaviour : MonoBehaviour
         }
 
         if (current == null) return;
-        var driver = DriverMode.Instance ?? DriverMode.GetOrCreate(new Il2CppReferenceArray<CameraModeSO>(new[] { current }));
+        var driver = DriverMode.Instance;   // Unity object: == null, not ?? (a destroyed object isn't C# null)
+        if (driver == null) driver = DriverMode.GetOrCreate(new Il2CppReferenceArray<CameraModeSO>(new[] { current }));
         if (driver == null) return;
 
         _previousMode = current;
@@ -302,7 +325,8 @@ public class DriverCamBehaviour : MonoBehaviour
 
     void UpdateBodyVisibility(CameraControllerInGame ctrl)
     {
-        var body = ctrl.VehicleProvider?.BodyTransform;
+        var provider = ctrl.VehicleProvider;
+        var body = provider != null ? provider.BodyTransform : null;   // Il2Cpp object: explicit null check, not ?.
         bool wantHidden = Plugin.HideCarBody.Value && body != null;
         bool bodyChanged = _hiddenBody != null && (body == null || _hiddenBody.Pointer != body.Pointer);
         if (!wantHidden || bodyChanged) ShowBody();
@@ -402,7 +426,14 @@ public class DriverCamBehaviour : MonoBehaviour
 
         var ctrl = CameraControllerInGame.Instance;
         bool active = DriverView.IsActive(ctrl);
-        string modeName = ctrl?.CurrentCameraMode?.cameraModeName ?? "(not driving)";
+        var mode = ctrl == null ? null : ctrl.CurrentCameraMode;
+        string modeName = mode == null ? null : mode.cameraModeName;
+        if (modeName == null) modeName = "(not driving)";
+        if (modeName != _headerMode)
+        {
+            _headerMode = modeName;
+            _header = $"DriverCam   camera: {modeName}";
+        }
 
         float w = 380 * s;
         int rows = _page == 1 ? 15 : _page == 2 ? 13 : _page == 3 ? 14 : 17;
@@ -413,7 +444,7 @@ public class DriverCamBehaviour : MonoBehaviour
         float cy = y + gap;
         float inner = w - 2 * gap;
         float half = (inner - gap) / 2;
-        GUI.Label(new Rect(x + gap, cy, inner - 40 * s, rowH), $"DriverCam   camera: {modeName}");
+        GUI.Label(new Rect(x + gap, cy, inner - 40 * s, rowH), _header);
         if (GUI.Button(new Rect(x + inner + gap - 36 * s, cy, 36 * s, rowH), "X")) { ClosePanel(); return; }
         cy += rowH + gap;
 
@@ -462,6 +493,7 @@ public class DriverCamBehaviour : MonoBehaviour
     // ---------------------------------------------------------------- Parts editor
 
     int _page;   // 0 = Seat & view, 1 = Parts, 2 = Mirror
+    string _headerMode, _header;   // panel title, rebuilt only when the camera mode name changes
 
     void DrawHudPage(ref float cy, float x, float s, float gap, float rowH, float inner, float half)
     {

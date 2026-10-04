@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a realistic engine sound made from the game's own engine recordings,
 played from a simulated RPM that follows the game's gearbox and your throttle.
 
-Current version: **0.2.0**
+Current version: **0.3.0**
 
 Design doc (claude.ai): "Engine Audio - Realistic Engine Sound" (`391e5ae4-7e88-410a-a632-30b562d13148`).
 
@@ -27,11 +27,27 @@ near-silence.
   ten times a second, so a held note keeps its texture instead of buzzing. Steady mode starts when the RPM's spot moves
   slower than 0.25 s of recording per second and only ends above 0.55, so the top-speed wander practically never flips
   it back (and the pitch eases if it does).
+- **Pitch follows the RPM:** besides where in the recording it plays, the pitch itself rises from `PitchAtIdle` (0.85)
+  at idle to `PitchAtRedline` (1.3) at the redline, so holding the redline (or top speed, where the engine sits near it)
+  sounds high, not low.
+- **Exhaust pops on lift-off only:** letting go of the gas above `PopMinRpm` (60%) of the redline starts a sequence
+  of synthesized exhaust pops. Every car gets them; they're not recordings.
+  - **Timing:** the first pop comes 70-150 ms after the lift (the overrun reaching the hot exhaust), then crackles
+    every 60-220 ms: 1 pop at 60% revs, up to 5 near the redline.
+  - **What ends it:** pressing the gas again, the revs dropping below `PopMinRpm`, or slowing below 8 m/s. A new
+    sequence can start 0.6 s later.
+  - **The sound:** each pop is a 45-90 ms bang (a low thump plus a crack) that starts at its first sample, so it lands
+    exactly when it should. Until 0.3.0 the game's turbo blow-off recordings were used; their bang comes 130-300 ms
+    into the clip, so every pop came late.
+  - **Logged:** the first 6 sequences per car (lift revs, delay to the first pop, pop count, span).
+  - Nothing pops on throttle or on upshifts. The lift is caught however quickly you let go (a gamepad trigger too).
+  - The game's own blow-off sounds stay muted while EngineAudio is on, including with `Pops` off.
 - **Drift flare:** drifting on the throttle flares the revs by up to 6% of redline (the driven wheels spin up).
 - **Tyre squeal:** drifting or cornering hard squeals, layered over the game's own drift sound (a soft rubber hiss,
   which stays). The squeal is synthesized in the background when the plugin loads (about 50 ms of work, off the main
-  thread). It is not a recording, and nothing from other games is used. Each clip is a bright tonal whine with harmonics, a stick-slip roughness and a little hiss: two 2 s loops
-  (960 Hz and 1240 Hz) and three chirps.
+  thread). It is not a recording, and nothing from other games is used. Each clip is a tonal howl with soft
+  harmonics, a stick-slip roughness and a little hiss: two 2 s loops (520 Hz and 680 Hz; before 0.3.0 they were
+  960 / 1240 Hz, far too shrill) and three chirps. `Tires.Pitch` moves all of it up or down, live.
   - What drives it is your **slip angle**: where the visible body points against where it is really going. The
     game's drift state also counts, and hard cornering without a drift squeals a little.
   - Small angles play the lower squeal and big angles blend into the higher one. The pitch rises with the angle and
@@ -43,7 +59,7 @@ near-silence.
   at the position that matches the RPM, held there as short overlapping grains when the RPM is steady, with a small
   pitch correction between grains. Throttle (eased over about 0.1 s, so a keyboard's on/off becomes a short blend)
   mixes on-load and off-load with an equal-power crossfade, the idle loop
-  takes over near a standstill (its pitch follows the RPM), and the RX7's blow-off plays on a hard upshift. The game's
+  takes over near a standstill (its pitch follows the RPM), and exhaust pops play when you lift off the gas at high RPM (see below). The game's
   boost pitch carries over.
 - **Traffic:** each traffic car's engine loop now changes pitch with its own speed through four simple gears, with a
   small fixed difference per car, and starts its loop at a random point.
@@ -63,8 +79,16 @@ near-silence.
 - Traffic: a Harmony postfix on `AIVehicleSoundHandler.HandleSFXs` (the game's per-frame traffic sound update) sets
   pitch and volume; the game rewrites pitch every frame itself, and the volume each source had before is written back
   when it's turned off. A postfix on `SetupEngineSound` picks a random start point.
+- Per frame it uses plain C# maths (`Shared/FastMath.cs`, `MathF`) instead of Unity's `Mathf`, which is a slow interop
+  call in this IL2CPP game, and the debug overlay skips Unity's IMGUI Layout pass. Same results.
 - Sound only: nothing about the car's physics, gearbox, inputs or the network is written. It works the same in
   multiplayer (your own car's sound, locally).
+- **Shared RPM for other plugins:** while it drives the engine, EngineAudio publishes AppDomain data
+  `rogue.engineaudio` = `float[8]` { rpm, idle, redline, gear (0 = first), 1 = live, `Time.unscaledTime` of the last
+  write, throttle 0-1, 1 = on the limiter } (`EngineLink.cs`), written once a frame (re-stamped with the RPM held while
+  the game is paused or has stopped its engine sound). It goes to 0 = off on every hand-back (F1, disabled, no car, new
+  car, errors) and is removed when the plugin unloads. DriverCam's working tachometer reads it, so the needle shows the
+  RPM you hear; a reader treats it as live only when [4] is 1 and [5] is under about 0.25 s old.
 
 ## Settings (`rogue.engineaudio.cfg`)
 
@@ -79,13 +103,18 @@ near-silence.
 | `Engine.DriftFlare` | true | revs flare up when you drift on the throttle |
 | `Tires.Enabled` | true | tyre squeal when drifting / cornering hard (read live) |
 | `Tires.Volume` | 0.5 | tyre squeal volume (0-2); the game's sound-effects volume applies on top |
+| `Tires.Pitch` | 1 | tyre squeal pitch (0.5-1.5; lower = deeper; read live) |
+| `Engine.PitchAtIdle` | 0.85 | engine pitch at idle, on top of the recording (0.5-1.5; read live) |
+| `Engine.PitchAtRedline` | 1.3 | engine pitch at the redline (0.8-2; read live). The pitch rises smoothly with the RPM between the two, so a held redline / top speed sounds high |
+| `Exhaust.Pops` | true | synthesized pops and crackles when you lift off the gas at high RPM; never on throttle or upshifts |
+| `Exhaust.PopMinRpm` | 0.6 | pops only when lifting off above this share of the redline (0.3-0.95); more pops the higher the revs |
 | `Engine.Volume` | 1 | relative to the car's own engine volume (0-2) |
 | `Traffic.Enabled` | true | speed-following traffic engine pitch |
 | `Debug.Overlay` | false | one-line readout: RPM, gear, span, throttle, active recordings, slip angle, squeal level |
 
 ## Log (`/game-log EngineAudio`)
 
-- `[EngineAudio] game check OK: player engine, gearbox, tyres, traffic engines` and `traffic engines patched`.
+- `[EngineAudio] game check OK: player engine, gearbox, tyres, traffic engines`, `[EngineAudio] traffic engines patched (AIVehicleSoundHandler.HandleSFXs, SetupEngineSound)` and `EngineAudio 0.3.0 loaded. F1 switches between EngineAudio and the game's own engine sound.`
 - `[EngineAudio] engine voices ready: rev-up <clips>; rev-down <clips>; blow-offs N; the game's gearbox, mixer group
   'Engine', clip load type ...; tyre squeal on (mixer group '<the drift sound's group>')` once per car (or `tyre squeal
   off (<why>)`, or `clips still being made` followed a moment later by `[EngineAudio] tyre squeal on (...)`).

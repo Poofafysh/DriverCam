@@ -46,6 +46,7 @@
   <ItemGroup>
     <!-- shared timing helper (each plugin compiles its own copy; data is shared at runtime through AppDomain data) -->
     <Compile Include="..\Shared\Perf.cs" Link="Perf.cs" />
+    <Compile Include="..\Shared\HubLink.cs" Link="HubLink.cs" />
   </ItemGroup>
 
   <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -p:SkipDeploy=true skips it. -->

@@ -56,11 +56,12 @@ internal static class DriverView
             {
                 Cockpit.SetVisible(false);
                 MirrorView.SetActive(false);
+                DriverLink.SetView(false);
                 return;
             }
 
             var vehicle = ctrl.VehicleProvider;
-            var body = vehicle?.BodyTransform;
+            var body = vehicle != null ? vehicle.BodyTransform : null;   // Il2Cpp object: explicit null check, not ?.
             var cam = ctrl.CurrentCamera;
             if (body == null || cam == null) return;
 
@@ -113,7 +114,7 @@ internal static class DriverView
     static void ApplyPose()
     {
         var body = _body;
-        var cam = _ctrl?.CurrentCamera;
+        var cam = _ctrl == null ? null : _ctrl.CurrentCamera;
         if (body == null || body.WasCollected || cam == null) return;
 
         // Stable vehicle frame and the shaken (rendered) body frame
@@ -124,13 +125,18 @@ internal static class DriverView
         // The cockpit is part of the car: it always moves with the rendered body
         var cockpitHead = shakenPos + shakenRot * _head;
         Cockpit.UpdatePose(cockpitHead, shakenPos, shakenRot, _turn);
+        DriverLink.Publish(shakenPos, shakenRot, _head, _turn);   // seat / eye / wheel for the Driver plugin
 
         // The driver's head follows the shake by the configured amount
         float follow = Mathf.Clamp01(Plugin.HeadFollowsShake.Value);
         var frameRot = Quaternion.Slerp(stableRot, shakenRot, follow);
         var framePos = Vector3.Lerp(stablePos, shakenPos, follow);
         var headWorld = framePos + frameRot * _head;
-        var lookRot = frameRot * Quaternion.Euler(Plugin.Pitch.Value, _turn * Plugin.LookIntoTurn.Value, 0f);
+        // head turn from the HeadLook plugin when installed (right stick / right mouse), else 0; never in Edit mode,
+        // where the right stick moves the seat, eye and parts
+        float headYaw = 0f, headPitch = 0f;
+        if (!EditMode.Active) HeadLookLink.Get(out headYaw, out headPitch);
+        var lookRot = frameRot * Quaternion.Euler(Plugin.Pitch.Value - headPitch, _turn * Plugin.LookIntoTurn.Value + headYaw, 0f);
         cam.transform.SetPositionAndRotation(headWorld, lookRot);
         cam.nearClipPlane = Plugin.NearClip.Value;
 
@@ -259,7 +265,7 @@ internal static class DriverView
         {
             if (m == null) continue;
             var sh = m.shader;
-            sb.Append($" | mat '{m.name}' shader '{sh?.name}' passes=[");
+            sb.Append($" | mat '{m.name}' shader '{(sh != null ? sh.name : null)}' passes=[");
             for (int p = 0; p < m.passCount; p++) sb.Append(p == 0 ? "" : ",").Append(m.GetPassName(p));
             sb.Append(']');
             foreach (var prop in new[] { "_Cull", "_CullMode", "_RenderFace", "_Outline", "_OutlineSize", "_OutlineWidth", "_Surface" })
@@ -281,6 +287,7 @@ internal static class DriverView
         _active = false;
         Cockpit.SetVisible(false);
         MirrorView.SetActive(false);
+        DriverLink.SetView(false);
     }
 }
 

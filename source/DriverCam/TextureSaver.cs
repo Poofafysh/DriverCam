@@ -14,10 +14,12 @@ internal static class TextureSaver
         if (w <= 0 || h <= 0) return false;
 
         var previous = RenderTexture.active;
-        var rt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32);
-        var copy = new Texture2D(w, h, TextureFormat.RGBA32, false);
+        RenderTexture rt = null;
+        Texture2D copy = null;
         try
         {
+            rt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32);
+            copy = new Texture2D(w, h, TextureFormat.RGBA32, false);
             Graphics.Blit(texture, rt);
             RenderTexture.active = rt;
             copy.ReadPixels(new Rect(0, 0, w, h), 0, 0);
@@ -36,9 +38,8 @@ internal static class TextureSaver
         finally
         {
             RenderTexture.active = previous;
-            rt.Release();
-            UnityEngine.Object.Destroy(rt);
-            UnityEngine.Object.Destroy(copy);
+            if (rt != null) { rt.Release(); UnityEngine.Object.Destroy(rt); }
+            if (copy != null) UnityEngine.Object.Destroy(copy);
         }
     }
 }

@@ -62,10 +62,12 @@ namespace Police
             ModeOk = Has(asm, "Game.Runtime.GameState", missing, "IsMultiplayerMode");
             CheckBoss(asm, missing);
             CheckDaredevil(asm, missing);
+            CheckScore(asm, missing);   // GameApi.Score.cs: PURSUIT category, results / Victory rows, run position
 
-            if (missing.Count == 0) Plugin.Log.LogInfo("[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode, boss car models, daredevils");
+            if (missing.Count == 0) Plugin.Log.LogInfo("[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode, boss car models, daredevils, pursuit score, results/victory rows");
             else Plugin.Log.LogWarning($"[Police] game check: missing {string.Join(", ", missing)}. Patrols {On(TrafficOk && PlayerOk)}, " +
-                                       $"crash notice + lead bar events {On(ScoreOk)}, caught penalty {On(TimerOk)}, game mode {On(ModeOk)}, boss car looks {On(BossOk && SkinOk)}, daredevils {On(DaredevilOk)} " +
+                                       $"crash notice + lead bar events {On(ScoreOk)}, caught penalty {On(TimerOk)}, game mode {On(ModeOk)}, boss car looks {On(BossOk && SkinOk)}, daredevils {On(DaredevilOk)}, " +
+                                       $"pursuit score {On(PursuitOk)}, results row {On(ResultsOk)}, victory row {On(VictoryOk)}, run reset {On(RunOk)} " +
                                        "(without it the plugin assumes multiplayer and stays off).");
         }
 
@@ -98,9 +100,13 @@ namespace Police
         private static MonoBehaviour _veh, _follower, _movement;
         private static IntPtr _vehPtr;
 
-        /// <summary>Reads the local player's car. False when there is none (menus, loading). Only call when PlayerOk.</summary>
+        /// <summary>
+        /// Reads the local player's car. False when there is none (menus, loading). Only call when PlayerOk.
+        /// scores = false skips the collision / near-miss counts (Hits / NearMisses stay -1): the daredevils, which read
+        /// you every frame, never use them (0.6.0 perf: about 6 native calls a frame).
+        /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static bool ReadPlayer(ref PlayerState p)
+        internal static bool ReadPlayer(ref PlayerState p, bool scores = true)
         {
             var veh = VehicleManager.Instance;
             if (veh == null) { _veh = null; _vehPtr = IntPtr.Zero; return false; }
@@ -122,7 +128,7 @@ namespace Police
             p.Drifting = move.Drifting;
             p.LevelEnded = veh.LevelWasEnded;
             p.Hits = -1; p.NearMisses = -1;
-            if (ScoreOk) ReadScoreCounts(ref p);
+            if (scores && ScoreOk) ReadScoreCounts(ref p);
             return true;
         }
 

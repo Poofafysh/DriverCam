@@ -56,6 +56,8 @@
     <!-- shared world-effect materials and HUD toolkit (halos, pursuit HUD) -->
     <Compile Include="..\Shared\Fx.cs" Link="Fx.cs" />
     <Compile Include="..\Shared\UiKit.cs" Link="UiKit.cs" />
+    <!-- shared mod score rows on the results and Victory screens (RacingLine's RACING LINE rank 1, PURSUIT rank 2) -->
+    <Compile Include="..\Shared\ScoreRows.cs" Link="ScoreRows.cs" />
   </ItemGroup>
 
   <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -p:SkipDeploy=true skips it. -->

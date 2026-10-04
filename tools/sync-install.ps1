@@ -227,18 +227,7 @@ foreach ($p in $plugins) {
     Info "$($p.Name): $from -> $($p.Version)"
 }
 
-if (-not $DryRun) {
-    foreach ($p in $plugins) {
-        $proj = Join-Path $root $p.Dir
-        $out = & dotnet build $proj -c Release -nologo "-p:GameDir=$GameDir" 2>&1
-        $errs = $out | Select-String -Pattern ' error ' | Select-Object -First 3
-        $locked = $out | Select-String -Pattern 'MSB3021|MSB3027' | Select-Object -First 1
-        if ($LASTEXITCODE -ne 0 -or $errs) { Fail "$($p.Name) build failed: $(($errs | ForEach-Object { $_.Line.Trim() }) -join ' | ')" }
-        elseif ($locked) { Fail "$($p.Name) built but could not be copied into the game (file locked - is the game running?)" }
-    }
-}
-
-# ================================================================ 4. verify
+# ---------------------------------------------------------------- shipped files (helpers used before and after the build)
 function Hash($f) { if (Test-Path $f) { (Get-FileHash $f -Algorithm SHA256).Hash } else { $null } }
 
 # Files a project's DeployToGame target copies (besides the DLL itself), as {Src, Dst} pairs.
@@ -265,6 +254,40 @@ function Get-DeployMap([string]$projDir) {
     }
     return ,$result
 }
+# Shipped settings files you changed in the game (e.g. DriverCam's plugins/DriverCam/cars/*.cfg edited in place): the
+# build's DeployToGame copy would overwrite them. A file counts as yours when it differs from what the repo shipped
+# before this update (the pre-pull HEAD, compared as git blobs); it is put back after the build and reported, never
+# lost. Only settings (.cfg/.ini/.json/.txt): models and textures that differ are build output, not edits.
+$kept = @{}
+if (-not $DryRun) {
+    foreach ($p in $plugins) {
+        foreach ($e in (Get-DeployMap (Join-Path $root $p.Dir))) {
+            if ($e.Dst -notmatch '\.(cfg|ini|json|txt)$') { continue }
+            if (-not (Test-Path $e.Dst)) { continue }
+            if ((Hash $e.Src) -eq (Hash $e.Dst)) { continue }
+            $rel = $e.Src.Substring($root.Length + 1).Replace('\', '/')
+            $shipped = @(GitOut rev-parse "${preRev}:$rel")[0]
+            if (-not $shipped) { continue }   # new in this update: nothing of yours to keep
+            $mine = @(GitOut hash-object "--path=$rel" -- $e.Dst)[0]
+            if ($mine -and $mine -ne $shipped) { $kept[$e.Dst] = [IO.File]::ReadAllBytes($e.Dst) }
+        }
+    }
+}
+
+if (-not $DryRun) {
+    foreach ($p in $plugins) {
+        $proj = Join-Path $root $p.Dir
+        $out = & dotnet build $proj -c Release -nologo "-p:GameDir=$GameDir" 2>&1
+        $errs = $out | Select-String -Pattern ' error ' | Select-Object -First 3
+        $locked = $out | Select-String -Pattern 'MSB3021|MSB3027' | Select-Object -First 1
+        if ($LASTEXITCODE -ne 0 -or $errs) { Fail "$($p.Name) build failed: $(($errs | ForEach-Object { $_.Line.Trim() }) -join ' | ')" }
+        elseif ($locked) { Fail "$($p.Name) built but could not be copied into the game (file locked - is the game running?)" }
+    }
+    foreach ($dst in $kept.Keys) { [IO.File]::WriteAllBytes($dst, $kept[$dst]) }
+    if ($kept.Count -gt 0) { Warn "kept your own edited copies of $(Short @($kept.Keys | ForEach-Object { (Split-Path (Split-Path $_ -Parent) -Leaf) + '/' + (Split-Path $_ -Leaf) })) (they differ from what the repo shipped before). The repo's new versions were NOT installed over them; to take the repo's, delete those files in BepInEx/plugins and run the sync again." }
+}
+
+# ================================================================ 4. verify
 if (-not $DryRun) {
     foreach ($p in $plugins) {
         $built = Join-Path $root "$($p.Dir)/bin/Release/$($p.Assembly).dll"
@@ -277,7 +300,7 @@ if (-not $DryRun) {
         $map = Get-DeployMap (Join-Path $root $p.Dir)
         $missing = @(); $differ = @()
         foreach ($e in $map) {
-            if (-not (Test-Path $e.Dst)) { $missing += (Split-Path $e.Dst -Leaf) } elseif ((Hash $e.Src) -ne (Hash $e.Dst)) { $differ += (Split-Path $e.Dst -Leaf) }
+            if (-not (Test-Path $e.Dst)) { $missing += (Split-Path $e.Dst -Leaf) } elseif ((Hash $e.Src) -ne (Hash $e.Dst) -and -not $kept.ContainsKey($e.Dst)) { $differ += (Split-Path $e.Dst -Leaf) }
         }
         if ($missing) { Fail "$($p.Name): shipped files missing in the game: $(Short $missing)" }
         if ($differ) { Fail "$($p.Name): files in the game differ from the repo: $(Short $differ)" }

@@ -33,7 +33,7 @@ internal static class DriverMode
             if (Plugin.DumpModes.Value) LogMode(i, m);
             if (template == null && m.followTarget == FollowTarget.Hood) template = m;
         }
-        template ??= builtIn[0];
+        if (template == null) template = builtIn[0];   // Unity object: == null, not ??=
 
         _mode = Keep.Hold(Object.Instantiate(template));
         _mode.name = "DriverCam";

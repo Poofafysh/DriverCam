@@ -21,6 +21,7 @@ namespace CurbFeel
             Plugin.Log = ctx.Log;
             Plugin.Cfg = ctx.Config;
             Settings.Bind(ctx.Config);
+            CurbFeelCore.HookConfig(ctx.Config);
 
             _harmony = new Harmony(ctx.HarmonyId);
             ScrapePatches.Install(_harmony);
@@ -35,6 +36,7 @@ namespace CurbFeel
 
         public void Unload()
         {
+            CurbFeelCore.UnhookConfig();
             try { CurbFeelCore.RevertAll(); }
             catch (Exception e) { Plugin.Log.LogError($"[CurbFeel] revert on unload failed: {e}"); }
             try { _harmony?.UnpatchSelf(); }

@@ -24,6 +24,7 @@ namespace Police
         private Renderer _r;
         private State _state = (State)(-1);
         private float _phase;
+        private bool _shown = true;   // the renderer's enabled flag as we last set it (no native read per frame)
 
         internal static Marker Create()
         {
@@ -100,7 +101,7 @@ namespace Police
             if (_t == null) return;
             float dist = Vector3.Distance(roof, camPos);
             bool show = dist > 35f && dist < 900f;
-            if (_r.enabled != show) _r.enabled = show;
+            if (_shown != show) { _shown = show; _r.enabled = show; }
             if (!show) return;
             float size = Mathf.Clamp(dist * 0.011f, 0.7f, 5f) * Mathf.Clamp01((dist - 35f) / 25f + 0.2f);
             float bob = Mathf.Sin(time * 2.2f + _phase) * 0.15f * size;

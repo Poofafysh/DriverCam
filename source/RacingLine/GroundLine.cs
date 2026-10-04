@@ -2,6 +2,7 @@ using System;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 using UnityEngine.Rendering;
+using FM = RogueShared.FastMath;
 
 namespace RacingLine
 {
@@ -123,7 +124,9 @@ namespace RacingLine
             int raycasts = 0;
             float half = width * 0.5f;
             float fadeIn = 4f / line.Step, fadeOut = Math.Max(2f, count * 0.2f);
-            Vector3 last = Vector3.zero;
+            // built from fields (FM.V3 / FM.V2): `new Vector3(...)`, Vector3.zero and Mathf are interop calls, and this runs
+            // for every sample every frame
+            Vector3 last = default;
             for (int k = 0; k < count; k++)
             {
                 int i = start + k;
@@ -136,7 +139,7 @@ namespace RacingLine
                     if (raycasts < 60)
                     {
                         raycasts++;
-                        if (Physics.Raycast(new Vector3(cx, line.Py[i] + 4f, cz), Vector3.down, out RaycastHit hit, 10f, 1 << StreetLayer, QueryTriggerInteraction.Ignore))
+                        if (Physics.Raycast(FM.V3(cx, line.Py[i] + 4f, cz), Vector3.down, out RaycastHit hit, 10f, 1 << StreetLayer, QueryTriggerInteraction.Ignore))
                             y = hit.point.y;
                         _groundY[i] = y;   // a miss caches the path height (no retry every frame)
                     }
@@ -145,16 +148,16 @@ namespace RacingLine
                 float rx = line.Nx[i] * half, rz = line.Nz[i] * half;
                 int v = k * 2;
                 var c = Tint[k];
-                float a = c.a * Mathf.Clamp01(k / fadeIn) * Mathf.Clamp01((count - 1 - k) / fadeOut);
+                float a = c.a * FM.Clamp01(k / fadeIn) * FM.Clamp01((count - 1 - k) / fadeOut);
                 c.a = a;
-                _verts[v] = new Vector3(cx - rx, y + Lift, cz - rz);
-                _verts[v + 1] = new Vector3(cx + rx, y + Lift, cz + rz);
+                _verts[v] = FM.V3(cx - rx, y + Lift, cz - rz);
+                _verts[v + 1] = FM.V3(cx + rx, y + Lift, cz + rz);
                 _cols[v] = c; _cols[v + 1] = c;
                 float along = i * line.Step / 3f;   // one chevron every 3 m, anchored to the road (doesn't slide with the car)
-                _uvs[v] = new Vector2(0f, along); _uvs[v + 1] = new Vector2(1f, along);
-                last = new Vector3(cx, y + Lift, cz);
+                _uvs[v] = FM.V2(0f, along); _uvs[v + 1] = FM.V2(1f, along);
+                last = FM.V3(cx, y + Lift, cz);
             }
-            var clear = new Color(0f, 0f, 0f, 0f);
+            Color clear = default;   // (0, 0, 0, 0)
             for (int k = count; k < MaxSamples; k++)
             {
                 int v = k * 2;

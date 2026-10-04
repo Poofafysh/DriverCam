@@ -19,12 +19,13 @@ namespace EngineAudio
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.engineaudio";
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, Limiter, TrafficEnabled, Overlay, DriftFlare, TiresEnabled;
         internal static ConfigEntry<Key> ToggleKey;
-        internal static ConfigEntry<float> IdleRpm, RedlineRpm, Volume, TopSpeedRpm, TiresVolume;
+        internal static ConfigEntry<float> IdleRpm, RedlineRpm, Volume, TopSpeedRpm, TiresVolume, TiresPitch, PitchLow, PitchHigh, PopMinRpm;
+        internal static ConfigEntry<bool> Pops;
 
         public override void Load()
         {
@@ -37,8 +38,19 @@ namespace EngineAudio
             TopSpeedRpm = Config.Bind("Engine", "TopSpeedRpm", 0.93f,
                 "Where the engine sits at top speed in the last gear, as a share of RedlineRpm (0.7-0.99). Most of a race is spent here: a steady high note with a slight natural wander, not the limiter.");
             DriftFlare = Config.Bind("Engine", "DriftFlare", true, "The revs flare up (wheelspin) when you drift on the throttle.");
+            PitchLow = Config.Bind("Engine", "PitchAtIdle", 0.85f, new ConfigDescription(
+                "Engine pitch at idle RPM, on top of where the recording plays (1 = as recorded). The pitch rises smoothly with the RPM to PitchAtRedline.",
+                new AcceptableValueRange<float>(0.5f, 1.5f)));
+            PitchHigh = Config.Bind("Engine", "PitchAtRedline", 1.3f, new ConfigDescription(
+                "Engine pitch at the redline (and so at top speed, where the engine sits near the redline). Higher = a higher scream.",
+                new AcceptableValueRange<float>(0.8f, 2f)));
+            Pops = Config.Bind("Exhaust", "Pops", true, "Exhaust pops and crackles when you lift off the gas at high RPM (synthesized: a first pop 70-150 ms after the lift, then up to 4 crackles while the revs fall; never on throttle).");
+            PopMinRpm = Config.Bind("Exhaust", "PopMinRpm", 0.6f, new ConfigDescription(
+                "Pops only when you lift off above this share of the redline (0.3-0.95).", new AcceptableValueRange<float>(0.3f, 0.95f)));
             TiresEnabled = Config.Bind("Tires", "Enabled", true, "Tyre squeal when you drift or corner hard, layered over the game's own drift sound (synthesized, follows your slip angle).");
             TiresVolume = Config.Bind("Tires", "Volume", 0.5f, "Tyre squeal volume (0-2). The game's sound-effects volume applies on top.");
+            TiresPitch = Config.Bind("Tires", "Pitch", 1f, new ConfigDescription(
+                "Tyre squeal pitch (1 = as built, around 520-680 Hz; lower = deeper). Read live.", new AcceptableValueRange<float>(0.5f, 1.5f)));
             Volume = Config.Bind("Engine", "Volume", 1f, "Engine volume relative to the game's own engine volume for the car (0-2). The game's engine volume setting still applies on top.");
             TrafficEnabled = Config.Bind("Traffic", "Enabled", true, "Traffic engine pitch follows each car's speed through simple gears, with a little per-car variety.");
             Overlay = Config.Bind("Debug", "Overlay", false, "Show a one-line readout: RPM, gear, throttle and which recordings play.");
@@ -46,6 +58,7 @@ namespace EngineAudio
             try { GameApi.Check(); }
             catch (Exception e) { Log.LogError($"[EngineAudio] game check crashed, plugin stays idle: {e}"); return; }
             if (GameApi.TiresOk && TiresEnabled.Value) TireSqueal.Prepare();   // the squeal's samples, on a worker thread
+            if (Pops.Value) ExhaustPops.Prepare();                             // the pops' samples, likewise
 
             // the runner first: if it can't be registered, nothing is patched either (no half-loaded plugin)
             ClassInjector.RegisterTypeInIl2Cpp<Runner>();

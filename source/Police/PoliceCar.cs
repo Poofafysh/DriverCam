@@ -74,7 +74,8 @@ namespace Police
         }
 
         /// <summary>
-        /// Shared meshes and materials (PoliceModels): one body renderer, one renderer per wheel under its spin pivot.
+        /// Shared meshes and one shared palette material (PoliceModels): a body renderer (the only shadow caster), a decal
+        /// renderer and one renderer per wheel under its spin pivot: 6 draws per pass, 1 per shadow cascade.
         /// Livery: Classic = black and white as modelled; Interceptor = the white panels black too. Boss = Classic here.
         /// </summary>
         private void Make(PoliceModel model, string livery)
@@ -84,38 +85,36 @@ namespace Police
             _rootT = _root.transform;
             _rootT.position = new Vector3(0f, -1000f, 0f);
 
-            var mats = (Material[])model.BodyMats.Clone();
-            if (string.Equals(livery, "Interceptor", StringComparison.OrdinalIgnoreCase) && model.PaintBSlot >= 0)
-            {
-                var black = PoliceModels.InterceptorPaint(model);
-                if (black != null) mats[model.PaintBSlot] = black;
-            }
-            Part(_rootT, "Body", model.Body, mats);
-            foreach (var (pivot, mesh, wheelMats) in model.Wheels)
+            // 0.6.0 perf: one palette material for every opaque part (PoliceModels): the body casts the car's shadow; the
+            // decals (6 mm off the door) and the wheels (inside the arches, under the body's shadow) cast none
+            var paint = model.Paint(livery);
+            Part(_rootT, "Body", model.Body, paint, ShadowCastingMode.On);
+            foreach (var (mesh, mat) in model.Decals) Part(_rootT, "Decal", mesh, mat, ShadowCastingMode.Off);
+            foreach (var (pivot, mesh) in model.Wheels)
             {
                 var pt = new GameObject("Wheel").transform;
                 pt.SetParent(_rootT, false);
                 pt.localPosition = pivot;
                 _spin.Add(pt);
                 _spinBase.Add(Quaternion.identity);
-                Part(pt, "Tyre", mesh, wheelMats);
+                Part(pt, "Tyre", mesh, paint, ShadowCastingMode.Off);
             }
             _local = model.Bounds;
             foreach (var w in _spin) _front.Add(w.localPosition.z > _local.center.z);
             _wheelRadius = model.WheelRadius;
             _roofLocal = model.Roof.y;
             _roofCentre = new Vector3(model.Roof.x, 0f, model.Roof.z);
-            Plugin.Log.LogInfo($"[Police] police car built: {Name} ({_spin.Count} wheels, {_local.size.x:0.00} x {_local.size.y:0.00} x {_local.size.z:0.00} m, livery {livery})");
+            Plugin.Log.LogInfo($"[Police] police car built: {Name} ({1 + model.Decals.Count + _spin.Count} draws, {_spin.Count} wheels, {_local.size.x:0.00} x {_local.size.y:0.00} x {_local.size.z:0.00} m, livery {livery})");
         }
 
-        private static void Part(Transform parent, string name, Mesh mesh, Material[] mats)
+        private static void Part(Transform parent, string name, Mesh mesh, Material mat, ShadowCastingMode shadows)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var r = go.AddComponent<MeshRenderer>();
-            r.sharedMaterials = mats;
-            r.shadowCastingMode = ShadowCastingMode.On;
+            r.sharedMaterial = mat;
+            r.shadowCastingMode = shadows;
         }
 
         /// <summary>Builds the look from a boss model. Throws on failure (the caller keeps the traffic look).</summary>
@@ -147,7 +146,7 @@ namespace Police
             var renderers = prefab.GetComponentsInChildren<MeshRenderer>(true);
             bool haveBounds = false, haveBody = false;
             var bodyBounds = new Bounds();
-            int kept = 0;
+            int kept = 0, verts = 0, draws = 0;
             for (int r = 0; r < renderers.Length; r++)
             {
                 var mr = renderers[r];
@@ -188,8 +187,11 @@ namespace Police
                 go.AddComponent<MeshFilter>().sharedMesh = mesh;
                 var nr = go.AddComponent<MeshRenderer>();
                 nr.sharedMaterials = Paint(mr.sharedMaterials, livery);
-                nr.shadowCastingMode = ShadowCastingMode.On;
+                // wheels cast no shadow (inside the arches, under the body's shadow: 0.6.0 perf, same as the police models)
+                nr.shadowCastingMode = spinPivot != null ? ShadowCastingMode.Off : ShadowCastingMode.On;
                 kept++;
+                verts += mesh.vertexCount;
+                draws += Math.Max(1, Math.Min(mesh.subMeshCount, nr.sharedMaterials.Length));
 
                 // bounds in root space
                 var toRoot = pT.worldToLocalMatrix * t.localToWorldMatrix;
@@ -203,7 +205,7 @@ namespace Police
             foreach (var w in _spin) _front.Add(w.localPosition.z > _local.center.z);
             _roofLocal = haveBody ? bodyBounds.max.y : _local.max.y;
             _roofCentre = haveBody ? new Vector3(bodyBounds.center.x, 0f, bodyBounds.center.z) : new Vector3(_local.center.x, 0f, _local.center.z);
-            Plugin.Log.LogInfo($"[Police] police car built from {Name}: {kept} parts, {_spin.Count} wheels, {_local.size.x:0.00} x {_local.size.y:0.00} x {_local.size.z:0.00} m, livery {livery}");
+            Plugin.Log.LogInfo($"[Police] police car built from {Name}: {kept} parts ({draws} draws, {verts} vertices), {_spin.Count} wheels, {_local.size.x:0.00} x {_local.size.y:0.00} x {_local.size.z:0.00} m, livery {livery}");
         }
 
         private Vector3 _roofCentre;

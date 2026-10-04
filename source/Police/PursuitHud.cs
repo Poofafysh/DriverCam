@@ -10,7 +10,11 @@ namespace Police
     /// - Pursuit panel, top-centre below TrafficDensity's toast: siren glows (red left / blue right, alternating at 2 Hz),
     ///   "PURSUIT", unit count, time left, and a BUSTED &lt;-&gt; EVADE meter with a glossy fill and a needle at the lead.
     /// - Banner under it: big shadowed text with a coloured underline that pops in (scale 1.25 -> 1) and fades out.
-    /// Built once, values pushed only when they change. Panel and banner fade with CanvasGroups.
+    /// Built once, values pushed only when they change (0.6.0 perf: alphas, meter, needle, fill colour, banner scale are
+    /// all compared with what was last written, so an idle HUD writes nothing and the canvas is not rebuilt). Panel and
+    /// banner fade with CanvasGroups. The siren glows pulse every frame while the panel shows: that goes through their
+    /// CanvasRenderer colour (a multiplier on the image), which re-batches the canvas but doesn't regenerate the image
+    /// mesh the way Image.color does.
     /// </summary>
     internal sealed class PursuitHud
     {
@@ -22,6 +26,10 @@ namespace Police
         private float _panelAlpha, _bannerStart = -10f, _bannerUntil;
         private bool _panelOn;
         private int _shownUnits = -1, _shownSec = -1;
+        private CanvasRenderer _glowLcr, _glowRcr;
+        // what was last written (NaN / -1 = never)
+        private float _wPanelAlpha = float.NaN, _wBannerAlpha = float.NaN, _wBannerScale = float.NaN, _wLead = float.NaN, _wGlowL = float.NaN, _wGlowR = float.NaN;
+        private int _wFill = -1;
 
         private const float MeterW = 440f;
         private static readonly Color PanelColor = new Color(0.06f, 0.07f, 0.1f, 0.88f);
@@ -55,6 +63,8 @@ namespace Police
             _glowR = k.Image(_panel, "SirenR", k.Glow, BlueC, false);
             RogueShared.UiKit.Place(_glowR.rectTransform, new Vector2(1f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-6f, 0f), new Vector2(150f, 150f));
             k.ShadowedPanel(_panel, "Back", PanelColor);
+            _glowLcr = _glowL.canvasRenderer; _glowRcr = _glowR.canvasRenderer;
+            _glowLcr.SetColor(new Color(1f, 1f, 1f, 0f)); _glowRcr.SetColor(new Color(1f, 1f, 1f, 0f));
 
             _title = k.Text(_panel, "Title", 22f, Color.white, TextAlignmentOptions.TopLeft);
             RogueShared.UiKit.Fill(_title.Rect, 22f, 0f, 0f, 10f);
@@ -114,19 +124,25 @@ namespace Police
             float now = Time.unscaledTime, dt = Time.unscaledDeltaTime;
             _panelOn = chasing;
             _panelAlpha = Mathf.MoveTowards(_panelAlpha, chasing ? 1f : 0f, dt * 5f);
-            _panelGroup.alpha = _panelAlpha;
+            if (_panelAlpha != _wPanelAlpha) { _wPanelAlpha = _panelAlpha; _panelGroup.alpha = _panelAlpha; }
             if (_panelAlpha > 0f)
             {
                 bool redPhase = ((int)(now * 4f) & 1) == 0;
                 float pulse = 0.55f + 0.45f * Mathf.Abs(Mathf.Sin(now * Mathf.PI * 2f));
-                _glowL.color = new Color(RedC.r, RedC.g, RedC.b, redPhase ? 0.85f * pulse : 0.08f);
-                _glowR.color = new Color(BlueC.r, BlueC.g, BlueC.b, redPhase ? 0.08f : 0.85f * pulse);
+                float aL = redPhase ? 0.85f * pulse : 0.08f, aR = redPhase ? 0.08f : 0.85f * pulse;
+                if (aL != _wGlowL) { _wGlowL = aL; _glowLcr.SetColor(new Color(1f, 1f, 1f, aL)); }   // x the image's RedC
+                if (aR != _wGlowR) { _wGlowR = aR; _glowRcr.SetColor(new Color(1f, 1f, 1f, aR)); }   // x the image's BlueC
                 if (chasing)
                 {
                     float f = Mathf.Clamp01(lead / 100f);
-                    _fillRt.sizeDelta = new Vector2(Mathf.Max(8f, MeterW * f), 20f);
-                    _needle.anchoredPosition = new Vector2(MeterW * f, 0f);
-                    _fill.color = f >= 0.7f ? GoodC : f <= 0.3f ? RedC : WarnC;
+                    if (f != _wLead)
+                    {
+                        _wLead = f;
+                        _fillRt.sizeDelta = new Vector2(Mathf.Max(8f, MeterW * f), 20f);
+                        _needle.anchoredPosition = new Vector2(MeterW * f, 0f);
+                    }
+                    int fill = f >= 0.7f ? 2 : f <= 0.3f ? 0 : 1;
+                    if (fill != _wFill) { _wFill = fill; _fill.color = fill == 2 ? GoodC : fill == 0 ? RedC : WarnC; }
                     if (units != _shownUnits) { _shownUnits = units; _units.Set(units == 1 ? "1 UNIT" : $"{units} UNITS"); }   // strings only on change
                     if (secondsLeft != _shownSec)
                     {
@@ -139,11 +155,11 @@ namespace Police
             // banner: pop in, hold, fade
             float age = now - _bannerStart;
             float a = now < _bannerUntil ? Mathf.Clamp01(age / 0.12f) * Mathf.Clamp01((_bannerUntil - now) / 0.4f) : 0f;
-            _bannerGroup.alpha = a;
+            if (a != _wBannerAlpha) { _wBannerAlpha = a; _bannerGroup.alpha = a; }
             if (a > 0f)
             {
                 float s = 1f + 0.25f * Mathf.Clamp01(1f - age / 0.18f);
-                _banner.localScale = new Vector3(s, s, 1f);
+                if (s != _wBannerScale) { _wBannerScale = s; _banner.localScale = new Vector3(s, s, 1f); }
             }
         }
 

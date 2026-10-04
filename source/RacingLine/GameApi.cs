@@ -22,7 +22,8 @@ namespace RacingLine
         internal static bool WidthOk { get; private set; }
         internal static bool PlayerOk { get; private set; }    // GameApi.Player.cs
         internal static bool ScoreOk { get; private set; }     // GameApi.Native.cs: drift flag, hit count, native provider
-        internal static bool ResultsOk { get; private set; }   // GameApi.Results.cs
+        internal static bool ResultsOk { get; private set; }   // per-race results row (RogueShared.ModScoreRows)
+        internal static bool VictoryOk { get; private set; }   // Victory screen row (RogueShared.ModScoreRows)
         internal static bool ModeOk { get; private set; }      // GameState.IsMultiplayerMode
         // TrafficOk: GameApi.Traffic.cs (spawner, traffic cars)
 
@@ -39,7 +40,6 @@ namespace RacingLine
             PathOk = Has(asm, "Game.Runtime.Systems.LevelGeneration.RoadPathGenerator", missing, "Instance", "RegularPath")
                   && Has(asm, "IRoadPath", missing, "TotalLength", "GetPositionFromDistance", "GetDirectionFromDistance");
             WidthOk = Has(asm, "Game.Runtime.Manager.RunWorldManager", missing, "CurrentRoadWidth", "laneOffsetList", "currentStageIndex", "currentRaceIndex");
-            CheckVictory(asm, missing);
             PlayerOk = Has(asm, "Game.Runtime.Vehicle.VehicleManager", missing, "Instance", "Rigidbody", "PlayerPathFollower", "VehicleMovement",
                                "VehicleInputHandler", "LevelWasEnded", "WaitingFirstInput")
                     && Has(asm, "Game.Runtime.Vehicle.PlayerPathFollower", missing, "GetDistanceTravelled", "GetLaneOffset")
@@ -54,18 +54,29 @@ namespace RacingLine
                    && Has(asm, "Game.Runtime.Data.CollisionScoreProviderSO", missing, "TotalHits")
                    && Has(asm, "Game.Runtime.Data.NearMissScoreProviderSO", missing, "TotalNearMiss")
                    && Has(asm, "Game.Runtime.Data.DriftScoreProviderSO", missing);
-            ResultsOk = Has(asm, "Game.Runtime.UI.RankingStatsController", missing, "rankingStatList")
-                     && Has(asm, "Game.Runtime.UI.RankingStatItem", missing, "Setup");
+            CheckRows(asm, missing);
             ModeOk = Has(asm, "Game.Runtime.GameState", missing, "IsMultiplayerMode");
             CheckTraffic(asm, missing);
 
             if (missing.Count == 0) Plugin.Log.LogInfo("[RacingLine] game check OK: path, road width, player, scoring, results screen, game mode, traffic");
             else Plugin.Log.LogWarning($"[RacingLine] game check: missing {string.Join(", ", missing)}. Line {On(PathOk)}, road width {On(WidthOk)}, " +
-                                       $"player {On(PlayerOk)}, scoring {On(ScoreOk)}, results row {On(ResultsOk)}, game mode {On(ModeOk)}, " +
+                                       $"player {On(PlayerOk)}, scoring {On(ScoreOk)}, results row {On(ResultsOk)}, victory row {On(VictoryOk)}, game mode {On(ModeOk)}, " +
                                        $"traffic-aware line {On(TrafficOk)}. Re-check the contract table after a game update.");
         }
 
         private static string On(bool ok) => ok ? "on" : "OFF";
+
+        /// <summary>
+        /// The results and Victory screen rows (shared code): RankingStatsController.rankingStatList, RankingStatItem.Setup,
+        /// VictoryScreenPanel.resultsWindowCanvasGroup / scoreController, VictoryScreenScoreController.nearMissScoreItem,
+        /// VictoryScreenScoreItem.SetupItem / scoreValueText / newRecordObject.
+        /// </summary>
+        private static void CheckRows(Assembly asm, List<string> missing)
+        {
+            RogueShared.ModScoreRows.Check((type, members) => Has(asm, type, missing, members), out bool results, out bool victory);
+            ResultsOk = results;
+            VictoryOk = victory;
+        }
 
         private static bool Has(Assembly asm, string typeName, List<string> missing, params string[] members)
         {
@@ -157,6 +168,18 @@ namespace RacingLine
             for (int i = 0; i < lanes.Count; i++) { lo = Mathf.Min(lo, lanes[i]); hi = Mathf.Max(hi, lanes[i]); }
             float laneWidth = (hi - lo) / (lanes.Count - 1);
             return hi - lo + laneWidth;
+        }
+
+        /// <summary>The run's position: stage and race index (both 0 = the first race of a new run). Only when WidthOk.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static bool RunPosition(out int stage, out int race)
+        {
+            stage = -1; race = -1;
+            if (_world == null) RoadWidth();   // finds the world manager (throttled)
+            if (_world == null) return false;
+            var w = (RunWorldManager)_world;
+            stage = w.currentStageIndex; race = w.currentRaceIndex;
+            return true;
         }
 
         internal static void ForgetScene() => _world = null;

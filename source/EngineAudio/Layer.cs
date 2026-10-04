@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using FM = RogueShared.FastMath;
 
 namespace EngineAudio
 {
@@ -71,11 +72,11 @@ namespace EngineAudio
                 return;
             }
             float len = Math.Max(0.05f, clip.length);
-            target = Mathf.Clamp(target, 0f, len - 0.05f);
+            target = FM.Clamp(target, 0f, len - 0.05f);
 
             // how fast the engine moves through the recording (seconds of clip per second), smoothed
             if (!float.IsNaN(_lastTarget) && dt > 0f)
-                _targetVel += ((target - _lastTarget) / dt - _targetVel) * (1f - Mathf.Exp(-dt * 6f));
+                _targetVel += ((target - _lastTarget) / dt - _targetVel) * (1f - MathF.Exp(-dt * 6f));
             _lastTarget = target;
             float av = Math.Abs(_targetVel);
             _steady = !loopClip && (_steady ? av < SteadyAbove : av < SteadyBelow);
@@ -93,8 +94,8 @@ namespace EngineAudio
 
             // pitch: the game's (boost) pitch, times (RPM moving) a correction pulling the lead voice towards the target;
             // a steady grain plays at its own pace (the RPM is in where it starts, not in a pitch bend)
-            float paceTarget = !loopClip && !steady ? Mathf.Clamp(1f + 2.5f * (target - _lead.S.time), 0.88f, 1.15f) : 1f;
-            _pace += (paceTarget - _pace) * (dt > 0f ? 1f - Mathf.Exp(-dt * 12f) : 0f);   // eased: no pitch jump on a mode change
+            float paceTarget = !loopClip && !steady ? FM.Clamp(1f + 2.5f * (target - _lead.S.time), 0.88f, 1.15f) : 1f;
+            _pace += (paceTarget - _pace) * (dt > 0f ? 1f - MathF.Exp(-dt * 12f) : 0f);   // eased: no pitch jump on a mode change
             float pitch = _pace * pitchMul;
             _a.S.pitch = pitch;
             _b.S.pitch = pitch;
@@ -104,7 +105,7 @@ namespace EngineAudio
         /// <summary>Starts the target position on the quieter voice (the lead's partner unless forced mid-fade) and crossfades to it.</summary>
         private void StartGrain(float target, bool loop, bool forced, bool steady, float len)
         {
-            if (steady && !loop) target = Mathf.Clamp(target - Math.Min(SteadyWindow, 0.03f * len) * (float)_rng.NextDouble(), 0f, len - 0.05f);
+            if (steady && !loop) target = FM.Clamp(target - Math.Min(SteadyWindow, 0.03f * len) * (float)_rng.NextDouble(), 0f, len - 0.05f);
             _fade = steady && !loop ? SteadyFade : Fade;
             var next = Other(_lead);
             if (forced && next.Level > _lead.Level) next = _lead;   // restart whichever is quieter: never cut the audible one
@@ -130,7 +131,7 @@ namespace EngineAudio
         {
             if (v.Level < v.Target) v.Level = Math.Min(v.Target, v.Level + step);
             else if (v.Level > v.Target) v.Level = Math.Max(v.Target, v.Level - step);
-            float g = Mathf.Sin(v.Level * Mathf.PI * 0.5f);
+            float g = MathF.Sin(v.Level * Mathf.PI * 0.5f);
             v.S.volume = volume * g;
             if (v.Level <= 0f && v.Target <= 0f && v.S.isPlaying) v.S.Stop();
         }

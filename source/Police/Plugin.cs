@@ -13,23 +13,29 @@ namespace Police
     /// what the player does, never random escalation; no heat levels, nothing carries over between races.
     ///
     /// 0.0.1 = doc phases 1-3 in "pursuit lite" form: patrols (traffic cars with a lightbar), noticing, and a chase by the
-    /// traffic AI itself with a lead bar (ESCAPED / CAUGHT). Single-player only. No Harmony patches, no score category yet.
+    /// traffic AI itself with a lead bar (ESCAPED / CAUGHT). Single-player only. No Harmony patches.
+    /// PURSUIT score category (PursuitScore, GameApi.Score): live points during a chase, an escape bonus, coins, and
+    /// its own rows on the results and Victory screens (shared RogueShared.ModScoreRows).
     /// </summary>
     [BepInPlugin(Guid, "Police", Version)]
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.police";
-        public const string Version = "0.5.0";
+        public const string Version = "0.7.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, LogEvents, Markers, NoticeNearMiss, NoticeDrift;
         internal static ConfigEntry<string> Mode, CarModels, Livery;
         internal static ConfigEntry<int> MaxPatrols, MaxChasers, ConfigVersion;
         internal static ConfigEntry<float> PatrolSpacing, NoticeRange, OverspeedKmh, CloseLaneMetres, PassWindow;
-        internal static ConfigEntry<float> Duration, CaughtPenaltySeconds, Cooldown, SpeedFactor, ChaseSmoothness, BackupPenalty;
+        internal static ConfigEntry<float> Duration, CaughtPenaltySeconds, Cooldown, SpeedFactor, ChaseSmoothness, BackupPenalty, CatchUp;
         internal static ConfigEntry<bool> DareEnabled, DareBossLooks, DareRaceLine, DareDefend, DareSlipstream;
         internal static ConfigEntry<string> DareDriftCars;
         internal static ConfigEntry<float> DareSpeedFactor, DareSkillMin, DareSkillMax, DareDriftCornerFactor, DareMaxSlip;
+        internal static ConfigEntry<bool> PursuitEnabled, ChaseDrive;
+        internal static ConfigEntry<float> PursuitPointsScale;
+        internal static ConfigEntry<int> PursuitCoinReward;
+        internal static ConfigEntry<double> PursuitBestRunTotal;
 
         public override void Load()
         {
@@ -63,6 +69,11 @@ namespace Police
                 "Chasing cars inherit your car's stats: their top speed is this fraction of your car's current top speed, upgrades and boosts included (0.5-1.1). 1 = exactly yours.");
             ChaseSmoothness = Config.Bind("Chase", "Acceleration", 0.8f,
                 "How quickly a chasing car reaches its top speed: the traffic AI's speed smoothing time in seconds while chasing (0.2-5; lower = quicker; it never gets slower than the car's own).");
+            CatchUp = Config.Bind("Chase", "CatchUp", 0.15f,
+                new ConfigDescription("A chasing car that falls more than 60 m behind you gets up to this much more top speed (0.15 = +15%), in full at 200 m and none again within 60 m: the traffic AI loses ground fast (0-0.5, 0 = off).",
+                                      new AcceptableValueRange<float>(0f, 0.5f)));
+            ChaseDrive = Config.Bind("Chase", "Drive", true,
+                "Chasing cars drive like the daredevils: they pass traffic round the gaps (also across lanes), take corners at full speed and only brake for a car they can't get round; they never steer into you. Off = the game's traffic driving (they queue behind traffic in their lane).");
             DareEnabled = Config.Bind("Daredevils", "Enabled", true,
                 "The game's red daredevil cars (the devil icon when one is close behind you) become rivals: drawn as the game's boss cars and racing the optimal racing line. Independent of patrols (Mode, F3). Single-player only.");
             DareBossLooks = Config.Bind("Daredevils", "BossLooks", true, "Draw daredevils as the game's boss cars (each boss's own car, paint and body kit). Off = the game's red traffic car.");
@@ -78,6 +89,15 @@ namespace Police
             DareDefend = Config.Bind("Daredevils", "Defend", true, "Rivals cover the inside line before a corner when you close in from 25-60 m behind (one move per corner; it gives way rather than move across you).");
             DareSlipstream = Config.Bind("Daredevils", "Slipstream", true, "Rivals tow behind other cars (within 30 m, lined up within 1.5 m): +6% top speed.");
             DareMaxSlip = Config.Bind("Daredevils", "MaxSlipAngle", 30f, "How far drift cars slide (degrees between where the car points and where it goes) in a hard corner (0-50).");
+            PursuitEnabled = Config.Bind("Pursuit", "Enabled", true,
+                "Single-player: PURSUIT is a real score category. Points count up live during a chase (8 per 1% of lead gained, 10/s at 80%+ of your top speed), " +
+                "an escape adds a bonus (longer, closer chases and more units pay more) and coins; getting caught loses that chase's points. " +
+                "Counts toward TOTAL, so it is part of the run total the game uploads to its Steam leaderboard. A copy of Top Speed, so Top Speed cards also affect it. Off = chases score nothing (applies at once: a running chase's live points are dropped).");
+            PursuitPointsScale = Config.Bind("Pursuit", "PointsScale", 1f,
+                new ConfigDescription("Multiplies every PURSUIT point (live and escape bonus), before the game's own multipliers (0-3).", new AcceptableValueRange<float>(0f, 3f)));
+            PursuitCoinReward = Config.Bind("Pursuit", "CoinReward", 100,
+                new ConfigDescription("Coins at full target: 2 escapes in a race (the game's own categories use 130) (0-1000).", new AcceptableValueRange<int>(0, 1000)));
+            PursuitBestRunTotal = Config.Bind("Records", "BestRunTotal", 0.0, "Best PURSUIT run total so far (the Victory screen shows NEW RECORD when a run beats it). Written by the plugin.");
             LogEvents = Config.Bind("Debug", "LogEvents", true, "Log patrols picked and released, notices, chases and their outcome (for /game-log).");
             ConfigVersion = Config.Bind("Debug", "ConfigVersion", 0, "Written by the plugin (settings migration). Don't edit.");
             Migrate();
@@ -89,7 +109,7 @@ namespace Police
             AddComponent<Runner>();
             ClassInjector.RegisterTypeInIl2Cpp<Daredevils>();
             AddComponent<Daredevils>();
-            Log.LogInfo($"Police {Version} loaded (police-car patrols that only engage on a reckless pass, backup units, chases that match your car; daredevils as boss cars racing the racing line; single-player only). F3 turns patrols off / on.");
+            Log.LogInfo($"Police {Version} loaded (police-car patrols that only engage on a reckless pass, backup units, chases that match your car; daredevils as boss cars racing the racing line; PURSUIT score category {(PursuitEnabled.Value ? "on" : "off")}; single-player only). F3 turns patrols off / on.");
         }
 
         /// <summary>

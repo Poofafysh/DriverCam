@@ -19,6 +19,40 @@ internal sealed class CockpitModel
         public bool HasPivot;
         public UnityEngine.Vector3 PivotPos, PivotForward, PivotUp;
         public readonly Dictionary<string, (List<UnityEngine.Vector3> verts, List<UnityEngine.Vector3> normals, List<UnityEngine.Vector2> uvs)> ByTag = new();
+        /// <summary>Working gauges (pivot parts only): needle ranges (`n`), digit quads (`dg`) and bar quads (`db`).</summary>
+        public readonly List<Needle> Needles = new();
+        public readonly List<DigitSpec> Digits = new();
+        public readonly List<BarSpec> Bars = new();
+        /// <summary>Quads claimed so far by `dg` / `db` lines (they take the part's first mesh's quads in order).</summary>
+        public int QuadCursor;
+        public bool IsGauge => Needles.Count > 0 || Digits.Count > 0 || Bars.Count > 0;
+    }
+
+    /// <summary>
+    /// `n source unit|- lo hi a0 a1 [red]`: the part is a needle built at rest pointing at angle a0 (maths degrees in the
+    /// dial plane, counter-clockwise as the driver sees it); value v turns it to a0 + (a1 - a0) * (v - lo) / (hi - lo).
+    /// </summary>
+    public sealed class Needle
+    {
+        public string Source, Unit;
+        public float Lo, Hi, A0, A1, Red = float.NaN;
+    }
+
+    /// <summary>`dg source unit|- count u0 v0 du`: `count` quads are digits (most significant first); glyph k is du * k to the right of glyph 0.</summary>
+    public sealed class DigitSpec
+    {
+        public string Source, Unit;
+        public int Count, FirstQuad;
+        public float U0, V0, Du;
+    }
+
+    /// <summary>`db source count lo hi red dlu dlv dru drv`: `count` quads are bars; bar i lights at lo + (i + 1) / count * (hi - lo).</summary>
+    public sealed class BarSpec
+    {
+        public string Source;
+        public int Count, FirstQuad;
+        public float Lo, Hi, Red;
+        public UnityEngine.Vector2 Lit, RedLit;
     }
 
     /// <summary>How far left of the car's center line the driver sits, in model meters.</summary>
@@ -30,9 +64,19 @@ internal sealed class CockpitModel
     /// <summary>Driver's eye in body coordinates (body-frame models only), before the seat offsets.</summary>
     public UnityEngine.Vector3 Eye;
     public string Source;
+    /// <summary>
+    /// Interior layout version from a `layout N` line. 2 = the modelled interiors, built where the old tuned dash sat,
+    /// so a saved Part.Interior offset from layout 1 must not be applied again (CarPresets migrates it once).
+    /// </summary>
+    public int Layout = 1;
     public string ModelFolder;
     /// <summary>Material tag -> texture file (next to the .dcm); textured tags use alpha cutout for window holes.</summary>
     public readonly Dictionary<string, string> TagTextures = new();
+    /// <summary>
+    /// Material tag -> the model's own colour ("mat tag r g b smoothness metallic glow" lines). Tags listed here use these
+    /// instead of DriverCam's built-in neon palette, so a model can carry a realistic cabin (leather, wood, chrome...).
+    /// </summary>
+    public readonly Dictionary<string, (UnityEngine.Color color, float smoothness, float metallic, float glow)> TagColors = new();
     public readonly List<Part> Parts = new();
 
     static readonly Dictionary<string, CockpitModel> _cache = new();
@@ -88,14 +132,19 @@ internal sealed class CockpitModel
             if (raw.Length < 2 || raw[0] == '#') continue;
             var tok = raw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             float F(int i) => float.Parse(tok[i], inv);
-            UnityEngine.Vector3 V(int i) => new(F(i), F(i + 1), F(i + 2));
+            // built from fields: `new Vector3(...)` / `new Vector2(...)` are interop calls, and a cockpit has ~15k corners
+            UnityEngine.Vector3 V(int i) => RogueShared.FastMath.V3(F(i), F(i + 1), F(i + 2));
 
             switch (tok[0])
             {
                 case "s": model.DriverSide = F(1); break;
                 case "w": model.ReferenceWidth = F(1); break;
                 case "frame": model.BodyFrame = tok[1] == "body"; break;
+                case "layout": model.Layout = int.Parse(tok[1], inv); break;
                 case "tex": model.TagTextures[tok[1]] = tok[2]; break;
+                case "mat":
+                    if (tok.Length >= 8) model.TagColors[tok[1]] = (new UnityEngine.Color(F(2), F(3), F(4)), F(5), F(6), F(7));
+                    break;
                 case "e": model.Eye = V(1); break;
                 case "o":
                     part = new Part { Name = tok[1] };
@@ -107,6 +156,12 @@ internal sealed class CockpitModel
                     part.PivotPos = V(1);
                     part.PivotForward = V(4);
                     part.PivotUp = V(7);
+                    break;
+                case "n":
+                case "dg":
+                case "db":
+                    // working-gauge lines belong to a pivot part (after its `p` line); a bad or short line is skipped
+                    if (part != null && part.HasPivot && !ParseGauge(part, tok)) Plugin.Logger.LogWarning($"Cockpit model: ignored gauge line '{raw}'.");
                     break;
                 case "g": part.Group = tok[1]; break;
                 case "m": tag = tok[1]; break;
@@ -123,12 +178,55 @@ internal sealed class CockpitModel
                     {
                         lists.verts.Add(V(1 + k * stride));
                         lists.normals.Add(V(4 + k * stride));
-                        lists.uvs.Add(hasUv ? new UnityEngine.Vector2(F(7 + k * stride), F(8 + k * stride)) : UnityEngine.Vector2.zero);
+                        lists.uvs.Add(hasUv ? RogueShared.FastMath.V2(F(7 + k * stride), F(8 + k * stride)) : default);
                     }
                     break;
             }
         }
         return model;
+    }
+
+    static bool TryF(string[] tok, int i, out float v)
+    {
+        v = 0f;
+        return i < tok.Length && float.TryParse(tok[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !float.IsNaN(v) && !float.IsInfinity(v);
+    }
+
+    static bool TryI(string[] tok, int i, out int v)
+    {
+        v = 0;
+        return i < tok.Length && int.TryParse(tok[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out v);
+    }
+
+    /// <summary>One `n` / `dg` / `db` line into the part; false (nothing added) when it is short or malformed.</summary>
+    static bool ParseGauge(Part part, string[] tok)
+    {
+        switch (tok[0])
+        {
+            case "n":
+            {
+                if (tok.Length < 7 || !TryF(tok, 3, out var lo) || !TryF(tok, 4, out var hi) || !TryF(tok, 5, out var a0) || !TryF(tok, 6, out var a1) || hi == lo) return false;
+                part.Needles.Add(new Needle { Source = tok[1], Unit = tok[2], Lo = lo, Hi = hi, A0 = a0, A1 = a1, Red = TryF(tok, 7, out var red) ? red : float.NaN });
+                return true;
+            }
+            case "dg":
+            {
+                if (tok.Length < 7 || !TryI(tok, 3, out var count) || count < 1 || count > 9 || !TryF(tok, 4, out var u0) || !TryF(tok, 5, out var v0) || !TryF(tok, 6, out var du)) return false;
+                part.Digits.Add(new DigitSpec { Source = tok[1], Unit = tok[2], Count = count, FirstQuad = part.QuadCursor, U0 = u0, V0 = v0, Du = du });
+                part.QuadCursor += count;
+                return true;
+            }
+            case "db":
+            {
+                if (tok.Length < 10 || !TryI(tok, 2, out var count) || count < 1 || count > 64 || !TryF(tok, 3, out var lo) || !TryF(tok, 4, out var hi) || hi == lo
+                    || !TryF(tok, 5, out var red) || !TryF(tok, 6, out var dlu) || !TryF(tok, 7, out var dlv) || !TryF(tok, 8, out var dru) || !TryF(tok, 9, out var drv)) return false;
+                part.Bars.Add(new BarSpec { Source = tok[1], Count = count, FirstQuad = part.QuadCursor, Lo = lo, Hi = hi, Red = red,
+                                            Lit = new UnityEngine.Vector2(dlu, dlv), RedLit = new UnityEngine.Vector2(dru, drv) });
+                part.QuadCursor += count;
+                return true;
+            }
+        }
+        return false;
     }
 }
 

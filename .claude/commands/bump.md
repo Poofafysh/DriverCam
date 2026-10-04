@@ -17,4 +17,14 @@ or an explicit `x.y.z`).
 4. Show `git diff --stat` and the relevant hunks (`git diff -U1 -- source/<Plugin> README.md`). Check for any other
    place that still shows the old version (`git grep -n "<old version>" -- source/<Plugin> README.md`), for example a
    hard-coded "loaded" log string, and point it out.
-5. Do not commit unless the person asks; suggest `/ship` next.
+5. Do not commit unless the person asks; suggest `/ship` next. Report in exactly this shape:
+   ```
+   BUMP <Plugin>: <old> -> <new> (origin/main has <x>) | REFUSED: <the script's "bump-version: ..." text>
+   Files: <git diff --stat lines for the files it changed>
+   Still old: <file:line of each remaining "<old version>" hit, or "none">
+   RESULT: OK | WARN | FAIL
+   ```
+   `FAIL` = the script exited 1; `WARN` = a "Still old" hit (e.g. DriverCam's hard-coded `"DriverCam x.y.z loaded"`
+   line, which must be fixed by hand); else `OK`. Another session may be editing the same plugin: if
+   `git diff -- source/<Plugin>` shows changes besides the version lines that this conversation didn't make, say so
+   on a `Note:` line (the bump is for the whole plugin folder, including their work).

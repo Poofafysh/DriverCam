@@ -20,6 +20,7 @@ namespace RacingLine
     {
         internal const string NativeId = "rogue.racingline";
         internal const string NativeName = "RACING LINE";
+        private const string OtherModId = "rogue.police";   // Police's PURSUIT: also a Top Speed copy
 
         // untyped: see _world. _native = our provider, _nativeOwner = the score manager whose list holds it
         private static ScriptableObject _native;
@@ -68,7 +69,8 @@ namespace RacingLine
                     log = "[RacingLine] Racing Line category already in this level's score list; reusing it";
                     return true;
                 }
-                if (template == null) template = p.TryCast<TopSpeedScoreProviderSO>();
+                // the stock Top Speed comes first (mod copies are appended); never copy another mod's copy (Police's PURSUIT)
+                if (template == null && p.GetId() != OtherModId) template = p.TryCast<TopSpeedScoreProviderSO>();
             }
             if (template == null) { log = "[RacingLine] no Top Speed category to copy: display mode"; return false; }
 

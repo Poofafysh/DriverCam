@@ -83,6 +83,7 @@ internal static class CarPresets
         }
 
         var values = Read(path);
+        MigrateInterior(car, path, values);
         _loading = true;
         try
         {
@@ -102,6 +103,46 @@ internal static class CarPresets
         Plugin.SettingsVersion++;
         DriverMode.Apply();
         Plugin.Logger.LogInfo($"Loaded DriverCam settings for {car}.");
+    }
+
+    /// <summary>
+    /// The Part.Interior offsets the shipped setups had for the layout-1 cockpits. A layout-2 cockpit (modelled interior)
+    /// is already built at that tuned place, so applying the old offset again would shift it twice.
+    /// </summary>
+    static readonly Dictionary<string, float[]> OldInterior = new()
+    {
+        ["Bond"] = new[] { -0.0088f, 0.1546f, 0.2691f, 0f, -3.03f, 0f, 0.86f },
+        ["Centaur"] = new[] { -0.0293f, 0.1279f, 0.39f, 0f, -1.81f, 0f, 0.88f },
+        ["Centipede"] = new[] { 0.0462f, 0.1808f, 0.5221f, 0f, -2.39f, 0f, 0.86f },
+        ["Delivery"] = new[] { 0.0205f, 0.1557f, 0.4437f, 0f, -2.17f, 0f, 0.84f },
+        ["Justice"] = new[] { -0.0032f, 0.1367f, 0.5766f, 0f, -2.38f, 0f, 0.785f },
+        ["Phoenix"] = new[] { 0.0101f, 0.1619f, 0.3822f, 0f, -2.75f, 0f, 0.84f },
+        ["Rotary"] = new[] { 0.017f, 0.2234f, 0.1503f, 0f, -2.62f, 0f, 0.82f },
+        ["Saber"] = new[] { 0.0177f, 0.1079f, 0.2901f, 0f, 0.05f, 0f, 0.88f },
+        ["Shadow"] = new[] { -0.0548f, 0.2136f, 0.2302f, 0f, -0.16f, 0f, 0.82f },
+        ["Vektor"] = new[] { 0.0248f, 0.1737f, 0.0916f, 0f, -1.18f, 0f, 0.84f },
+    };
+
+    /// <summary>
+    /// Once, for a layout-2 cockpit: a saved Part.Interior that is still (within 6 cm / 1.5 deg / 0.05 scale) the old
+    /// shipped offset for this car is reset to identity and the file saved. A value tuned for the new interior never
+    /// resembles those, so it is never touched.
+    /// </summary>
+    static void MigrateInterior(string car, string path, Dictionary<string, string> values)
+    {
+        if (Cockpit.Current == null || Cockpit.Current.Layout < 2) return;
+        if (!OldInterior.TryGetValue(car, out var old) || !values.TryGetValue("Part.Interior", out var v)) return;
+        var p = v.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length < 7) return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        for (int i = 0; i < 7; i++)
+        {
+            if (!float.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var f)) return;
+            float tol = i < 3 ? 0.06f : i < 6 ? 1.5f : 0.05f;
+            if (Math.Abs(f - old[i]) > tol) return;
+        }
+        values["Part.Interior"] = "0 0 0 0 0 0 1";
+        Plugin.Logger.LogInfo($"{car}: the modelled interior is already built at your tuned dash position; reset the old Part.Interior offset ({v}) in {Path.GetFileName(path)}.");
     }
 
     public static bool HasShared => _car != null && File.Exists(SharedFor(_car));

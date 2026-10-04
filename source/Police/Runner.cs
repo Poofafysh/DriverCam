@@ -17,12 +17,28 @@ namespace Police
     /// - The chase uses the traffic AI itself, on each chaser's AIPathFollower: rubber banding off; MaxSpeed =
     ///   SpeedFactor x your car's CURRENT top speed (upgrades and boosts included: they inherit your stats);
     ///   speedSmoothness lowered to Acceleration (quicker to reach it); behindDistanceDespawn raised past the escape
-    ///   distance (the pool no longer takes a chaser away mid-chase). All captured first and restored when the chase ends,
-    ///   when the car goes back to the pool (at once: pooled cars keep serialized fields) and when the plugin switches off.
+    ///   distance (the pool no longer takes a chaser away mid-chase). A chaser more than 60 m behind you gets up to CatchUp
+    ///   (15%) more top speed, in full at 200 m (the traffic AI loses ground fast). All captured first and restored when
+    ///   the chase ends, when the car goes back to the pool (at once: pooled cars keep serialized fields) and when the
+    ///   plugin switches off.
+    /// - Chase driving (0.7.0, Chase.Drive; review 2026-10-04: units fell 200 m behind in 6 s because the game's traffic
+    ///   braking stops them behind any car in their lane): each chaser is driven every frame like a daredevil, by
+    ///   DaredevilPlanner on a traffic snapshot (every 0.1 s): it heads for your lane, passes traffic round the gaps,
+    ///   takes corners at full speed (the game's curve slow-down held off) and only brakes for a car it can't get round;
+    ///   it never steers into you (the planner's never-hit rules). Handed back to its home lane when the chase ends.
+    /// - Ends: lead bar full / empty, time up (at or past the middle = escaped), every chaser more than 200 m behind for
+    ///   3 s (only with the lead bar at or past the middle and not in the first 12 s), every unit lost (despawned, or 260 m
+    ///   behind: "lost them" below the middle), the last unit wrecked ("they crashed"; cancelled in the first 3 s), or the
+    ///   race ending (at or past the middle = escaped at the finish, else its points are banked).
+    /// - Fairness (0.7.0): a wrecked unit leaves the chase at once and can't start one; a collision only costs lead when
+    ///   a unit is near enough to see it, and the bar only empties (BUSTED) with a unit on you. At 80%+ of your top
+    ///   speed a unit on your tail no longer drains the bar: busted means caught slow or boxed in.
     /// - Looks (LateUpdate): each patrol is drawn as one of the plugin's own police car models (PoliceModels, cycled), or
     ///   a boss's car in a police livery (Look.CarModels); the traffic car's own model is never drawn meanwhile
     ///   (PoliceCar). Plus a lightbar (Lightbar) and a 3D marker (Marker); none of them parented to the pooled car.
     /// - HUD: PursuitHud (uGUI panel + banners); the old IMGUI drawing stays as the fallback if it can't be built.
+    /// - Score: PursuitScore (the PURSUIT category: live points during a chase, escape bonus, results and Victory rows)
+    ///   is told when a chase starts, ticks and ends; every exit path of a chase ends its live action.
     /// - Circuit breakers: patrols, visuals, HUD and the caught penalty each switch themselves off after an error;
     ///   5 errors in 10 s switch the whole plugin off for the session (everything restored and destroyed first).
     /// </summary>
@@ -33,6 +49,10 @@ namespace Police
         private const float TickSeconds = 0.15f;
         private const float PickMinAhead = 300f, PickMaxAhead = 700f, PickLaneClear = 100f;
         private const float ReleaseBehind = 150f, EscapeBehind = 200f, ChaseDespawnBehind = 260f;
+        private const float CatchUpFrom = 60f, CatchUpFull = 200f;   // a chaser further back than this drives up to CatchUp faster (in full at CatchUpFull)
+        private const float EscapeLead = 50f, MinEscapeSeconds = 12f; // a distance escape needs the lead bar at or past the middle, and not in a chase's first 12 s (0.7.0: was 6)
+        private const float OutOfSightSeconds = 3f;                   // ... and every unit more than EscapeBehind back for this long (0.7.0)
+        private const float SeeCrashBehind = 80f, SeeCrashAhead = 40f; // a collision costs lead only with a unit this close (behind / ahead of you) (0.7.0)
         private const float LaunchFactor = 0.85f;   // a unit that joins a chase launches to this share of your speed (it isn't left crawling at traffic pace)
         // BUSTED <-> EVADE meter (0.1.1, from live logs: 6 of 6 chases were "busted" in 2-8 s just for overtaking,
         // because a patrol ahead of or alongside you counted as closing in). Now only a chaser BEHIND you (or level
@@ -42,11 +62,15 @@ namespace Police
         private const float RisePerSecond = 3f;                               // EVADE %/s at GapSpan past CloseGap
         private const float BustAtSpeed = 1.5f, BustWhenSlow = 9.5f;          // BUSTED %/s with a chaser on you: at >= 60% top speed / stopped
         private const float FastBonus = 1f, StuckPenalty = 2f;              // %/s: above 80% of top speed / below 60% stuck behind a patrol
+        private const float SafeShare = 0.8f, SlowShare = 0.6f;              // a unit on you: no drain at 80%+ of your top speed, BustAtSpeed at 60%, more below
         private const float NearMissBonus = 4f, CrashPenalty = 12f;           // % per event
         private const float StartGrace = 3f;                                  // seconds at the start of a chase in which the meter can't fall
         private const float PenaltyKeepSeconds = 3f;
+        // chase driving (0.7.0)
+        private const float DriveSnapSeconds = 0.1f, DriveLimit = 7.5f, DriveRate = 4.5f, DriveLookAhead = 260f;
 
         private enum Outcome { None, Escaped, Caught }
+        private const string RaceOver = "race over";   // the one cancel reason that banks a chase's pending points
 
         private sealed class Patrol
         {
@@ -68,10 +92,19 @@ namespace Police
             public float RoofHeight = 1.6f, NextHeight;
             public Vector3 Roof;
             public bool HasRoof;
+            public float CamDist2;             // squared distance roof - camera this frame (which chasers get a real light)
+            public bool Lit;                   // its lightbar's real light is allowed (near the camera, hysteresis)
             // chase
             public bool Chasing;
             public bool SavedRubber;
             public float SavedMax = float.NaN, Written = float.NaN, Offset, SavedSmooth = float.NaN, SavedDespawn = float.NaN;
+            public float ChaseTop = float.NaN;  // the chase top speed of the last tick (before the planner's cap)
+            // chase driving (0.7.0)
+            public MonoBehaviour Lane;         // AIVehicleLaneHandler, untyped
+            public int HomeLane;
+            public bool Driving;
+            public float LatOffset, PlanTarget = float.NaN, Yaw;
+            public bool Reverse;               // on the oncoming path: never driven by us
         }
 
         private readonly List<Patrol> _patrols = new List<Patrol>();
@@ -85,6 +118,19 @@ namespace Police
         private float _nextPatrolAt = float.NaN, _nextPickTry, _cooldownUntil, _lastTickTime = -1f, _nextTick;
         private int _lastHits = -1, _lastNear = -1;
         private float _bar, _chaseTime;
+        private float _maxGap, _catchUpTime;   // this chase: farthest any unit fell behind you, seconds a unit drove with catch-up (log)
+        private float _farTime;                // this chase: seconds every unit has been more than EscapeBehind back (out of sight)
+        // this chase, what drained the bar (log): seconds with a unit on you (and slow), collisions counted / unseen, backup
+        private float _onYouTime, _slowOnYouTime, _crashLoss, _backupLoss;
+        private int _crashesSeen, _crashesUnseen;
+        // chase driving (0.7.0)
+        private readonly RoadCar[] _road = new RoadCar[128];
+        private int _roadN;
+        private float _snapTime, _nextSnap = -1f;
+        private PlayerState _dp;               // you, read each frame while chasers are driven
+        private float _dpTime = -1f, _dpLaneVel, _dpLastLane = float.NaN;
+        private Action _drive;
+        private bool _driveOff;
         private bool _sessionOn = true;
         private string _state = "", _offReason;
 
@@ -98,13 +144,18 @@ namespace Police
         private readonly Queue<float> _errors = new Queue<float>();
         private bool _broken, _tickOff, _visualsOff, _hudOff, _penaltyOff, _markersOff;
         private Action _tick, _visuals, _hud;
+        private PursuitScore _pursuit;   // created on the first Update
 
         // input, camera (refreshed every 2 s, not fetched every frame)
         private Keyboard _kb;
         private UnityEngine.InputSystem.Controls.KeyControl _f3;
         private float _nextKbFetch;
         private Camera _cam;
+        private Transform _camT;               // kept with _cam: no transform wrapper per frame
         private float _nextCamFetch;
+        // real lights (0.6.0 perf): only the chasers nearest the camera light the scene; the halo carries the look further
+        private const float LightOnDist = 70f, LightOffDist = 80f;
+        private const int MaxLitChasers = 2;
 
         // HUD (new uGUI one, else the IMGUI fallback below)
         private PursuitHud _phud;
@@ -132,18 +183,25 @@ namespace Police
 
         private void Update()
         {
-            if (_broken) return;
+            if (_broken) { if (_pursuit != null) _pursuit.CleanupRows(); return; }   // rows still go once their screen has closed
             using var perf = RogueShared.Perf.Scope("Police.Update");   // shared timing overlay (TrafficDensity [Perf]); free when off
             try
             {
-                if (_tick == null) { _tick = Tick; _visuals = Visuals; _hud = Hud; }   // created once: no delegate per frame
+                if (_tick == null)
+                {
+                    _tick = Tick; _visuals = Visuals; _hud = Hud; _drive = Drive; _pursuit = new PursuitScore(Fault);   // created once: no delegate per frame
+                    try { useGUILayout = false; } catch { /* only skips the IMGUI layout pass; GUI.Box / GUI.Label need none */ }
+                }
                 ReadHotkey();
                 float now = Time.unscaledTime;
                 if (now >= _nextTick)
                 {
                     _nextTick = now + TickSeconds;
                     if (!_tickOff) Guard(ref _tickOff, "patrols", _tick);
+                    // after the patrol tick: a chase cut short by a new race has already ended its live action
+                    if (!_broken) _pursuit.Tick(!_tickOff && WhyOff() == null);
                 }
+                if (!_broken) _pursuit.Frame();   // PURSUIT rows on the results and Victory screens
             }
             catch (Exception e) { Fault(e); }
         }
@@ -152,6 +210,7 @@ namespace Police
         {
             if (_broken) return;
             using var perf = RogueShared.Perf.Scope("Police.LateUpdate");
+            if (!_driveOff && !_tickOff && _chasers.Count > 0) Guard(ref _driveOff, "chase driving", _drive);
             if (!_visualsOff && _patrols.Count > 0) Guard(ref _visualsOff, "car looks / lightbars", _visuals);
             if (!_hudOff) PursuitHudTick();
         }
@@ -183,12 +242,15 @@ namespace Police
         private void OnGUI()
         {
             if (_broken || _hudOff) return;
-            var ev = Event.current;
-            if (ev == null || ev.type != EventType.Repaint) return;
+            // cheap checks first, before Event.current (a wrapper per call): most of the time there is nothing to draw
             bool markers = _markersOff || !Plugin.Markers.Value;           // the 3D markers can't be used: draw the flat ones
-            bool fallbackHud = _phud == null;
+            // the flat HUD only once the new one has failed: until its first need it is built in LateUpdate (before
+            // OnGUI) whenever there is a chase or banner, so the flat one never had anything to draw then
+            bool fallbackHud = _phud == null && _phudTried;
             if (!markers && !fallbackHud) return;
             if (_patrols.Count == 0 && !Chasing && (_toast == null || Time.unscaledTime > _toastUntil)) return;
+            var ev = Event.current;
+            if (ev == null || ev.type != EventType.Repaint) return;
             using var perf = RogueShared.Perf.Scope("Police.OnGUI");
             _drawMarkers = markers; _drawHud = fallbackHud;
             Guard(ref _hudOff, "HUD", _hud);
@@ -200,6 +262,7 @@ namespace Police
         {
             Shutdown("plugin unloaded");
             DestroyShared();
+            try { if (_pursuit != null) _pursuit.Destroy(); } catch { /* shutting down */ }
         }
 
         // ------------------------------------------------------------------ hotkey
@@ -214,7 +277,7 @@ namespace Police
                 if (kb == null) { _kb = null; _f3 = null; return; }
                 if (_kb == null || _kb.Pointer != kb.Pointer) { _kb = kb; _f3 = kb.f3Key; }
             }
-            if (_f3 == null || !_f3.wasPressedThisFrame) return;
+            if (_f3 == null || Time.timeScale <= 0f || !_f3.wasPressedThisFrame) return;   // no input (and no chase cancelled) while paused
             _sessionOn = !_sessionOn;
             Toast(_sessionOn ? "POLICE ON" : "POLICE OFF", _sessionOn ? Good : Warn);
             Plugin.Log.LogInfo($"[Police] F3: patrols {(_sessionOn ? "on" : "off")} for this session");
@@ -281,7 +344,9 @@ namespace Police
             }
             if (_player.LevelEnded)
             {
-                if (_patrols.Count > 0) ReleaseAll("race over");
+                // 0.7.0: at or past the middle when the race ends = escaped at the finish (the time-up rule); else banked
+                if (_chaseLive && _bar >= EscapeLead) EndChase(Outcome.Escaped, $"ahead at the finish at {_bar:0}%", true);
+                if (_patrols.Count > 0) ReleaseAll(RaceOver);   // a running chase's pending PURSUIT points are banked
                 SetState("race over");
                 return;
             }
@@ -300,7 +365,9 @@ namespace Police
             UpdatePatrols(rawDt);
             bool wasChasing = Chasing;
             if (dt > 0f) Notice(hits, nears, now, dt);
-            if (Chasing && wasChasing) StepChase(dt, hits, nears);   // a chase that just started doesn't also pay for the event that started it
+            // a chase that just started doesn't also pay for the event that started it; paused (dt 0): no chase step, no writes
+            if (Chasing && wasChasing && dt > 0f) StepChase(dt, hits, nears);
+            if (_broken || _tickOff) return;   // a breaker tripped inside the chase step: pick nothing new (nothing would restore it)
             MaybePick();
         }
 
@@ -333,12 +400,26 @@ namespace Police
                     }
                 }
                 p.LastTravelled = p.S.Travelled;
+                if (p.Chasing && p.S.WasHit)
+                {
+                    // 0.7.0: a wrecked unit leaves the chase at once (it used to stay until the pool took it at 260 m,
+                    // draining the bar while you were slow beside it, then "escaping" you with a close-call bonus)
+                    float at = p.S.Road - _player.Distance;
+                    Release(p, $"wrecked ({at:+0;-0} m from you)", false);
+                    if (_chaseLive)
+                    {
+                        if (_chasers.Count > 0) Toast("UNIT WRECKED", Good);
+                        else if (_chaseTime < StartGrace) EndChase(Outcome.None, "the unit crashed at the start");   // you hit it as it noticed you: no chase, no points
+                        else EndChase(Outcome.Escaped, "they crashed: the last unit was wrecked");
+                    }
+                    continue;
+                }
                 float rel = _player.Distance - p.S.Road;
                 if (!p.Chasing && rel > ReleaseBehind) { Release(p, "left behind", false); continue; }
                 p.InZone = Mathf.Abs(rel) <= range;
                 if (p.Look != null && p.Skin != null) p.Look.HideTraffic(p.Skin);   // undo anything that switched the traffic model back on
             }
-            if (!Chasing && _chaseLive) EndChase(Outcome.Escaped, "every unit was despawned");
+            if (!Chasing && _chaseLive) EndChase(Outcome.Escaped, LostAll("every unit was despawned"));
         }
 
         private bool _chaseLive;   // a chase is running (set by StartChase, cleared by EndChase)
@@ -365,7 +446,8 @@ namespace Police
                 float rel = _player.Distance - p.S.Road;
                 if (!p.Chasing && normal)
                 {
-                    bool watching = Chasing ? _chasers.Count + _scratch.Count < maxChasers : canNotice;
+                    // a wrecked patrol can't chase (0.7.0: ramming a patrol used to start a chase that paid an escape)
+                    bool watching = !p.S.WasHit && (Chasing ? _chasers.Count + _scratch.Count < maxChasers : canNotice);
                     // the pass itself: you were behind it at the last tick and are level with or ahead of it now
                     bool passing = !float.IsNaN(p.LastRel) && p.LastRel < 0f && rel >= 0f;
                     if (passing) p.PassedAt = now;
@@ -523,18 +605,24 @@ namespace Police
         private void StartChase(Patrol p, string reason)
         {
             _bar = 50f; _chaseTime = 0f; _chaseLive = true;
+            _maxGap = 0f; _catchUpTime = 0f; _farTime = 0f;
+            _onYouTime = _slowOnYouTime = _crashLoss = _backupLoss = 0f; _crashesSeen = _crashesUnseen = 0;
             _barShownPct = -1;
             AddChaser(p);
+            if (_pursuit != null) _pursuit.ChaseStart(_chasers.Count);   // PURSUIT live action
             Toast("POLICE PURSUIT", Bad);
             if (Plugin.LogEvents.Value)
                 Plugin.Log.LogInfo($"[Police] noticed: {reason}. Chase on (you {_player.Speed * 3.6f:0} km/h, your top speed now {Basis() * 3.6f:0} km/h, patrol {p.S.Speed * 3.6f:0} km/h, " +
-                                   $"its top speed {p.SavedMax * 3.6f:0} -> {p.Written * 3.6f:0} km/h, acceleration smoothing {p.SavedSmooth:0.00} -> {Smooth(p):0.00} s, rubber banding {p.SavedRubber} -> False)");
+                                   $"its top speed {p.SavedMax * 3.6f:0} -> {p.Written * 3.6f:0} km/h, acceleration smoothing {p.SavedSmooth:0.00} -> {Smooth(p):0.00} s, rubber banding {p.SavedRubber} -> False, " +
+                                   $"driving: {(Driven && p.Lane != null && !p.Reverse ? "own (passes traffic)" : "game traffic")})");
         }
 
         private void JoinChase(Patrol p)
         {
             AddChaser(p);
+            float before = _bar;
             _bar = Mathf.Max(1f, _bar - Mathf.Clamp(Plugin.BackupPenalty.Value, 0f, 50f));
+            _backupLoss += before - _bar;
             Toast($"BACKUP JOINED  ({_chasers.Count} UNITS)", Bad);
             if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] backup joined: {_chasers.Count} units, lead {_bar:0}%");
         }
@@ -543,10 +631,17 @@ namespace Police
         {
             GameApi.ReadChase(p.Pf, out p.SavedRubber, out p.SavedMax, out p.SavedSmooth, out p.SavedDespawn);
             p.Written = float.NaN; p.Offset = 0f;
+            p.Driving = false; p.PlanTarget = float.NaN; p.Yaw = 0f;
+            if (p.Lane == null && GameApi.DaredevilOk)
+            {
+                p.Lane = GameApi.LaneHandlerOf(p.Car);
+                if (p.Lane != null) p.HomeLane = GameApi.ReadHomeLane(p.Lane);
+                p.Reverse = GameApi.IsReversePath(p.Car);   // an oncoming patrol keeps the game's driving (the steering frame is verified for your direction only)
+            }
             p.Chasing = true;
             _chasers.Add(p);
             ApplyChase(p);
-            GameApi.Launch(p.Pf, LaunchFactor * _player.Speed);
+            if (!Driven || p.Lane == null || p.Reverse) GameApi.Launch(p.Pf, LaunchFactor * _player.Speed);   // driven: Drive launches it once the way is clear
         }
 
         /// <summary>Your car's current top speed (upgrades and boosts), or its base top speed if unknown.</summary>
@@ -560,19 +655,29 @@ namespace Police
 
         /// <summary>
         /// Rubber banding off, MaxSpeed = SpeedFactor x your current top speed, quicker acceleration, no despawn behind
-        /// you. Re-applied every tick. The game itself only moves MaxSpeed for slow motion (-/+ 0.2 x the car's base
-        /// speed): any change we didn't write is kept as an offset, applied on top of ours and given back on restore.
+        /// you. Re-applied every tick. A chaser more than CatchUpFrom behind you (behind = your distance - its distance)
+        /// gets up to +CatchUp on that, in full at CatchUpFull, none again within CatchUpFrom. The game itself only moves
+        /// MaxSpeed for slow motion (-/+ 0.2 x the car's base speed): any change we didn't write is kept as an offset,
+        /// applied on top of ours and given back on restore. Returns the catch-up share used (0 = none).
         /// </summary>
-        private void ApplyChase(Patrol p)
+        private float ApplyChase(Patrol p, float behind = 0f)
         {
             float cur = GameApi.ReadMaxSpeed(p.Pf);
-            if (!float.IsNaN(p.Written) && Mathf.Abs(cur - p.Written) > 0.01f) p.Offset += cur - p.Written;
+            if (!p.Driving && !float.IsNaN(p.Written) && Mathf.Abs(cur - p.Written) > 0.01f) p.Offset += cur - p.Written;   // driven: Drive folds it (never twice)
             float basis = Basis();
-            float target = basis > 1f ? Mathf.Clamp(Plugin.SpeedFactor.Value, 0.5f, 1.1f) * basis : p.SavedMax;
+            float boost = 0f;
+            float target = p.SavedMax;
+            if (basis > 1f)
+            {
+                boost = Mathf.Clamp(Plugin.CatchUp.Value, 0f, 0.5f) * Mathf.Clamp01((behind - CatchUpFrom) / (CatchUpFull - CatchUpFrom));
+                target = Mathf.Clamp(Plugin.SpeedFactor.Value, 0.5f, 1.1f) * basis * (1f + boost);
+            }
             float v = Mathf.Max(1f, target + p.Offset);
-            GameApi.WriteChase(p.Pf, false, v);
+            p.ChaseTop = v;   // the driving (each frame) caps it for traffic it can't get round and writes MaxSpeed itself
+            GameApi.WriteChase(p.Pf, false, p.Driving ? float.NaN : v);
             GameApi.WriteChaseExtras(p.Pf, Smooth(p), float.IsNaN(p.SavedDespawn) ? ChaseDespawnBehind : Mathf.Max(p.SavedDespawn, ChaseDespawnBehind));
-            p.Written = v;
+            if (!p.Driving) p.Written = v;   // driven: Drive keeps Written on what it wrote
+            return boost;
         }
 
         /// <summary>Gives the car its own values back. writeMax false = only the serialized fields (the game reset MaxSpeed).</summary>
@@ -580,6 +685,8 @@ namespace Police
         {
             if (!p.Chasing) return;
             p.Chasing = false;
+            bool driving = p.Driving;
+            p.Driving = false; p.Yaw = 0f;
             try
             {
                 if (p.Pf != null)
@@ -587,6 +694,8 @@ namespace Police
                     GameApi.WriteChase(p.Pf, p.SavedRubber, writeMax && !float.IsNaN(p.SavedMax) ? p.SavedMax + p.Offset : float.NaN);
                     GameApi.WriteChaseExtras(p.Pf, p.SavedSmooth, p.SavedDespawn);
                 }
+                // driven (0.7.0): home lane back and the game's own eased lane change into it (not for a wreck or a reused car)
+                if (driving && writeMax && p.Lane != null && p.S.Active && !p.S.WasHit) GameApi.HandBack(p.Lane, p.HomeLane);
             }
             catch (Exception e) { Plugin.Log.LogWarning($"[Police] restoring a patrol car's AI values failed: {e.Message}"); }
         }
@@ -596,22 +705,37 @@ namespace Police
             float gap = float.MaxValue;        // to the nearest chaser either way (+ = you're ahead of it)
             float behind = float.MaxValue;     // to the nearest chaser behind you or level with you
             int onYou = 0;                     // chasers within CloseGap behind / level
+            float lastLost = float.NaN;        // the last unit fell past the hold distance (ends the chase below)
+            bool catchUp = false;
+            bool sees = false;                 // a unit close enough to see a collision of yours
+            // distance counts only once earned: the lead bar at or past the middle, after the first seconds of the chase
+            bool distanceCounts = _bar >= EscapeLead && _chaseTime >= MinEscapeSeconds;
             for (int i = _chasers.Count - 1; i >= 0; i--)
             {
                 var c = _chasers[i];
-                ApplyChase(c);
+                if (c.S.WasHit) continue;          // a wreck never counts (it is released at the next read)
                 float g = _player.Distance - c.S.Road;
-                if (g > EscapeBehind && _chasers.Count > 1)
+                _maxGap = Mathf.Max(_maxGap, g);
+                bool lost = g > ChaseDespawnBehind || (distanceCounts && g > EscapeBehind);
+                if (lost && _chasers.Count > 1)
                 {
                     Release(c, $"lost you ({g:0} m behind)", false);   // one unit dropped off; the others keep going
                     Toast("UNIT LOST", Good);
                     continue;
                 }
+                if (g > ChaseDespawnBehind) lastLost = g;
+                if (ApplyChase(c, g) > 0f) catchUp = true;
                 gap = Mathf.Min(gap, g);
                 if (g >= -AlongsideAhead) { behind = Mathf.Min(behind, g); if (g <= CloseGap) onYou++; }
+                if (g >= -SeeCrashAhead && g <= SeeCrashBehind) sees = true;
             }
             if (!Chasing) return;
             _chaseTime += dt;
+            if (catchUp) _catchUpTime += dt;
+            _farTime = gap > EscapeBehind ? _farTime + dt : 0f;
+            // a collision only costs lead when a unit is close enough to see it (0.7.0)
+            int counted = sees ? hits : 0;
+            _crashesSeen += counted; _crashesUnseen += hits - counted;
 
             float top = Basis();
             float frac = top > 1f ? _player.Speed / top : 1f;
@@ -622,30 +746,54 @@ namespace Police
                 rate = RisePerSecond * Mathf.Clamp01((behind - CloseGap) / GapSpan) + (frac > 0.8f ? FastBonus : 0f);
             else
             {
-                // a chaser on you: at speed it barely gains; slowed down or stopped next to it, you're busted quickly
-                float slow = Mathf.Clamp01(1f - frac / 0.6f);
+                // a chaser on you: at 80%+ of your top speed it can't gain (0.7.0: units now keep up, and a unit on your
+                // tail at full speed isn't a bust); from 80% down to 60% it nibbles up to BustAtSpeed; slowed down or
+                // stopped next to it, you're busted quickly
+                float slow = Mathf.Clamp01(1f - frac / SlowShare);
+                float nibble = Mathf.Clamp01((SafeShare - frac) / (SafeShare - SlowShare));
                 float close = 1f - Mathf.Clamp01(Mathf.Max(0f, behind) / CloseGap);
-                rate = -(BustAtSpeed + (BustWhenSlow - BustAtSpeed) * slow) * (0.5f + 0.5f * close) * (1f + 0.25f * (onYou - 1));
+                rate = -(BustAtSpeed * nibble + (BustWhenSlow - BustAtSpeed) * slow) * (0.5f + 0.5f * close) * (1f + 0.25f * (onYou - 1));
+                if (_chaseTime >= StartGrace) { _onYouTime += dt; if (frac < SlowShare) _slowOnYouTime += dt; }
             }
             if (_chaseTime < StartGrace && rate < 0f) rate = 0f;   // nobody is busted in the first seconds of a chase
-            _bar = Mathf.Clamp(_bar + rate * dt + nears * NearMissBonus - hits * CrashPenalty, 0f, 100f);
+            float before = _bar;
+            float after = _bar + rate * dt + nears * NearMissBonus - counted * CrashPenalty;
+            if (onYou == 0) after = Mathf.Max(after, Mathf.Min(_bar, 1f));   // the bar only empties with a unit on you (0.7.0)
+            _crashLoss += counted * CrashPenalty;
+            _bar = Mathf.Clamp(after, 0f, 100f);
+            if (_pursuit != null) _pursuit.ChaseStep(before, _bar, dt, top > 1f && frac >= PursuitScore.FastShare, _chasers.Count);
 
             float duration = Mathf.Clamp(Plugin.Duration.Value, 10f, 300f);
-            if (gap > EscapeBehind) EndChase(Outcome.Escaped, $"left it {gap:0} m behind");
+            if (!float.IsNaN(lastLost)) EndChase(Outcome.Escaped, LostAll($"the last unit fell {lastLost:0} m behind"));
+            else if (_farTime >= OutOfSightSeconds && _bar >= EscapeLead && _chaseTime >= MinEscapeSeconds) EndChase(Outcome.Escaped, $"left it {gap:0} m behind");
             else if (_bar >= 100f) EndChase(Outcome.Escaped, "lead bar full");
             else if (_bar <= 0f) EndChase(Outcome.Caught, "lead bar empty");
-            else if (_chaseTime >= duration) EndChase(_bar > 50f ? Outcome.Escaped : Outcome.Caught, $"time up at {_bar:0}%");
+            else if (_chaseTime >= duration) EndChase(_bar >= EscapeLead ? Outcome.Escaped : Outcome.Caught, $"time up at {_bar:0}%", true);   // 0.7.0: the middle counts as escaped
         }
 
-        private void EndChase(Outcome outcome, string reason)
+        /// <summary>The reason for a chase that ended because every unit was lost: "lost them" below the middle of the bar.</summary>
+        private string LostAll(string detail) => _bar < EscapeLead ? "lost them: " + detail : detail;
+
+        private void EndChase(Outcome outcome, string reason, bool timeUp = false)
         {
             if (!_chaseLive) return;
             _chaseLive = false;
             int units = _chasers.Count;
             if (outcome != Outcome.None) _cooldownUntil = Time.time + Mathf.Clamp(Plugin.Cooldown.Value, 0f, 300f);
 
+            // PURSUIT: escaped = into the combo with the escape bonus, caught = lost, race over = banked, else cancelled
+            double pts = 0;
+            if (_pursuit != null)
+            {
+                var kind = outcome == Outcome.Escaped ? (timeUp ? PursuitScore.End.TimeUp : PursuitScore.End.Escaped)
+                         : outcome == Outcome.Caught ? PursuitScore.End.Caught
+                         : string.Equals(reason, RaceOver, StringComparison.Ordinal) ? PursuitScore.End.Bank : PursuitScore.End.Cancel;
+                pts = _pursuit.ChaseEnd(kind, _chaseTime, Mathf.Clamp(Plugin.Duration.Value, 10f, 300f), units, reason);
+            }
+
             string penalty = "";
-            if (outcome == Outcome.Escaped) Toast("ESCAPED", Good);
+            if (outcome == Outcome.Escaped)
+                Toast(pts >= 1 ? "ESCAPED  +" + Math.Round(pts).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "ESCAPED", Good);
             else if (outcome == Outcome.Caught)
             {
                 float taken = 0f; string note = null;
@@ -661,7 +809,8 @@ namespace Police
             }
             if (Plugin.LogEvents.Value)
                 Plugin.Log.LogInfo($"[Police] chase over: {(outcome == Outcome.None ? "cancelled" : outcome.ToString().ToUpperInvariant())} ({reason}) after {_chaseTime:0.0} s, " +
-                                   $"lead {_bar:0}%, {units} unit(s){penalty}; patrol AI values restored");
+                                   $"lead {_bar:0}%, {units} unit(s){penalty}, max gap {_maxGap:0} m, catch-up used {_catchUpTime:0.0} s; " +
+                                   $"drain: unit on you {_onYouTime:0.0} s (slow {_slowOnYouTime:0.0} s), collisions {_crashesSeen} (-{_crashLoss:0}%), unseen {_crashesUnseen}, backup -{_backupLoss:0}%; patrol AI values restored");
             for (int i = _chasers.Count - 1; i >= 0; i--) Release(_chasers[i], "chase over", false);
             _chasers.Clear();
             float spacing = Mathf.Clamp(Plugin.PatrolSpacing.Value, 300f, 10000f);
@@ -681,7 +830,11 @@ namespace Police
             _patrols.Remove(p);
             _patrolPtrs.Remove(p.Ptr);
             if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] patrol released: {reason} ({_patrols.Count} left{(wasChaser ? $", {_chasers.Count} chasing" : "")})");
-            if (wasChaser && lostMidChase && _chaseLive && _chasers.Count == 0) EndChase(Outcome.Escaped, $"the last unit was despawned ({reason})");
+            if (wasChaser && lostMidChase && _chaseLive)
+            {
+                if (_chasers.Count == 0) EndChase(Outcome.Escaped, LostAll($"the last unit was despawned ({reason})"));
+                else Toast("UNIT LOST", Good);   // one unit despawned; the others keep going
+            }
         }
 
         private void ReleaseAll(string reason)
@@ -706,6 +859,7 @@ namespace Police
                 }
                 _patrols.Clear(); _patrolPtrs.Clear(); _chasers.Clear(); _chaseLive = false;
             }
+            if (_pursuit != null) _pursuit.Close(false);   // never leave the game's live action open (never throws)
             try { _phud?.Destroy(); } catch { /* scene */ }
             _phud = null;
         }
@@ -729,14 +883,123 @@ namespace Police
             }
         }
 
+        // ------------------------------------------------------------------ chase driving (every frame, 0.7.0)
+
+        /// <summary>Chasers are driven by us: Chase.Drive on, and the lane fields verified (the daredevils' game check).</summary>
+        private static bool DriveOn => Plugin.ChaseDrive.Value && GameApi.DaredevilOk;
+        /// <summary>DriveOn and the chase-driving breaker hasn't tripped.</summary>
+        private bool Driven => DriveOn && !_driveOff;
+
+        /// <summary>
+        /// Drives every chaser for the next physics steps like a daredevil: the gap planner on a traffic snapshot (every
+        /// 0.1 s) picks its offset across the road (towards your lane, round traffic, never into you) and caps its speed
+        /// for a car it can't get round; GameApi.Steer writes the offset, holds the game's curve slow-down and (unless the
+        /// snapshot was full) its obstruction braking off, and writes the capped top speed. Nothing while paused.
+        /// </summary>
+        private void Drive()
+        {
+            float now = Time.time, dt = Time.deltaTime;
+            if (dt <= 0f || Time.timeScale <= 0f) return;   // nothing is written to the game while paused (a switch-off waits too)
+            if (!DriveOn)
+            {
+                // switched off mid-chase: back to the game's driving (home lane, game factors)
+                foreach (var c in _chasers) if (c.Driving) StopDriving(c);
+                return;
+            }
+            if (!GameApi.ReadPlayer(ref _dp, false)) return;
+            if (_dpTime >= 0f && now - _dpTime > 1e-4f && now - _dpTime < 0.5f && !float.IsNaN(_dpLastLane) && !float.IsNaN(_dp.Lane))
+                _dpLaneVel += ((_dp.Lane - _dpLastLane) / (now - _dpTime) - _dpLaneVel) * (1f - Mathf.Exp(-(now - _dpTime) * 8f));
+            else if (_dpTime < 0f || now - _dpTime >= 0.5f) _dpLaneVel = 0f;
+            _dpLastLane = _dp.Lane; _dpTime = now;
+
+            if (now >= _nextSnap || now < _snapTime)
+            {
+                _nextSnap = now + DriveSnapSeconds;
+                float lo = -60f, hi = 60f;
+                foreach (var c in _chasers) { float rel = c.S.Road - _dp.Distance; lo = Mathf.Min(lo, rel - 40f); hi = Mathf.Max(hi, rel + DriveLookAhead); }
+                _roadN = GameApi.ReadRoad(_dp.Distance, -lo, hi, _road);
+                TrafficTracker.Update(_road, _roadN, now);
+                _snapTime = now;
+            }
+            float youV = Mathf.Max(0f, _dp.Speed);
+            float soon = _dp.Lane + Mathf.Clamp(_dpLaneVel, -8f, 8f) * 0.6f;
+            for (int i = 0; i < _chasers.Count; i++)
+            {
+                var c = _chasers[i];
+                if (c.Lane == null || c.T == null || c.Reverse) continue;
+                if (!GameApi.ReadCar(c.Car, c.Pf, ref c.S) || !c.S.Active || c.S.WasHit) continue;   // the tick releases it
+                if (float.IsNaN(c.ChaseTop)) continue;
+                // reused by the pool since the last tick (a different car now): never steer it; the tick releases it
+                float moved = c.S.Travelled - c.LastTravelled;
+                if (!float.IsNaN(c.LastTravelled) && (moved < -5f || moved > Mathf.Max(60f, Mathf.Abs(c.S.Speed) * 0.5f + 20f))) continue;
+                // the game's slow-motion change to MaxSpeed (-/+0.2 x base) since our last write: kept as the offset, as in ApplyChase
+                float cur = GameApi.ReadMaxSpeed(c.Pf);
+                if (!float.IsNaN(c.Written) && Mathf.Abs(cur - c.Written) > 0.01f) { c.Offset += cur - c.Written; c.ChaseTop += cur - c.Written; }
+                float v = Mathf.Max(0f, c.S.Speed);
+                bool start = !c.Driving;
+                if (start)
+                {
+                    c.Driving = true;
+                    c.LatOffset = c.S.Lane;
+                    c.PlanTarget = float.NaN;
+                    GameApi.ClampSpeed(c.Pf, v);   // from what it really drives: no jump when the game's slow-down factors go to 1
+                }
+                float halfW = Mathf.Clamp(c.BoxS.x * 0.5f, 0.8f, 1.3f), halfL = Mathf.Clamp(c.BoxS.z * 0.5f, 1.8f, 3.2f);
+                var plan = DaredevilPlanner.Plan(new PlanInput
+                {
+                    Self = c.Ptr, S = c.S.Road, V = v, Offset = c.LatOffset, HalfW = halfW, HalfL = halfL,
+                    LineTarget = Mathf.Clamp(_dp.Lane, -DriveLimit, DriveLimit), PrevTarget = c.PlanTarget,
+                    Limit = DriveLimit, Rate = DriveRate, Vmax = c.ChaseTop, SinceSnap = now - _snapTime,
+                    YouValid = true, YouRoad = _dp.Distance, YouLane = _dp.Lane,
+                    YouLo = Mathf.Min(_dp.Lane, soon), YouHi = Mathf.Max(_dp.Lane, soon), YouSpeed = youV,
+                }, _road, _roadN);
+                c.PlanTarget = plan.Target;
+                float before = c.LatOffset;
+                c.LatOffset = Mathf.MoveTowards(c.LatOffset, plan.Target, DriveRate * (plan.Evading ? 1.6f : 1f) * dt);
+                float sideways = (c.LatOffset - before) / dt;
+                c.Yaw = v > 1f ? Mathf.Atan2(sideways, v) * Mathf.Rad2Deg : 0f;   // the look points where it goes
+                float top = Mathf.Max(1f, Mathf.Min(c.ChaseTop, plan.Cap));
+                GameApi.Steer(c.Pf, c.Lane, c.LatOffset, top, _roadN < _road.Length);   // a full snapshot: keep the game's braking too
+                c.Written = top;   // ours: ApplyChase doesn't take it for a slow-motion change
+                if (plan.Instant < v) GameApi.ClampSpeed(c.Pf, plan.Instant);
+                else if (start) GameApi.Launch(c.Pf, Mathf.Min(LaunchFactor * youV, top));   // the launch, now that the way is known to be clear
+            }
+        }
+
+        /// <summary>Gives a driven chaser back to the game's driving (still chasing: its chase values stay).</summary>
+        private static void StopDriving(Patrol c)
+        {
+            c.Driving = false; c.Yaw = 0f;
+            try { if (c.Lane != null && c.S.Active && !c.S.WasHit) GameApi.HandBack(c.Lane, c.HomeLane); }
+            catch { /* destroyed with the scene */ }
+        }
+
         // ------------------------------------------------------------------ visuals (every frame)
 
         private void Visuals()
         {
             var look = ((int)(Time.time * 4f) & 1) == 0 ? Lightbar.Look.FlashRed : Lightbar.Look.FlashBlue;   // 2 Hz red/blue
             float now = Time.unscaledTime, dt = Time.deltaTime, t = Time.time;
-            if (now >= _nextCamFetch || _cam == null) { _nextCamFetch = now + 2f; _cam = Camera.main; }
-            Vector3 camPos = _cam != null ? _cam.transform.position : Vector3.zero;
+            if (now >= _nextCamFetch || _cam == null || _camT == null) FetchCamera(now);
+            Vector3 camPos = _camT != null ? _camT.position : Vector3.zero;
+            // which chasers may light the scene: within LightOnDist of the camera (off again past LightOffDist), the
+            // MaxLitChasers nearest (from last frame's roof: one frame late is invisible at 2 Hz flashing)
+            for (int i = 0; i < _patrols.Count; i++)
+            {
+                var p = _patrols[i];
+                bool near = p.Chasing && p.HasRoof && _camT != null && p.CamDist2 < (p.Lit ? LightOffDist * LightOffDist : LightOnDist * LightOnDist);
+                if (near)
+                {
+                    int closer = 0;
+                    for (int j = 0; j < _patrols.Count; j++)
+                    {
+                        var q = _patrols[j];
+                        if (j != i && q.Chasing && q.HasRoof && (q.CamDist2 < p.CamDist2 || q.CamDist2 == p.CamDist2 && j < i)) closer++;
+                    }
+                    near = closer < MaxLitChasers;
+                }
+                p.Lit = near;
+            }
             for (int i = 0; i < _patrols.Count; i++)
             {
                 var p = _patrols[i];
@@ -745,7 +1008,7 @@ namespace Police
                 Vector3 up = p.T.up;
                 if (p.Look != null)
                 {
-                    p.Look.Place(p.T, p.BoxC, p.BoxS, p.S.Speed, dt);
+                    p.Look.Place(p.T, p.BoxC, p.BoxS, p.S.Speed, dt, p.Yaw);
                     p.Roof = p.Look.Placed ? p.Look.Roof : pos + up * p.RoofHeight;
                 }
                 else
@@ -762,10 +1025,11 @@ namespace Police
                     p.Roof = pos + up * p.RoofHeight;
                 }
                 p.HasRoof = true;
+                p.CamDist2 = (p.Roof - camPos).sqrMagnitude;
                 if (p.Bar != null)
                 {
+                    p.Bar.Show(p.Chasing ? look : Lightbar.Look.Idle, p.Lit);   // before Place: a halo that comes on is placed this frame
                     p.Bar.Place(p.Roof, p.T.rotation, p.T.right, up, camPos);
-                    p.Bar.Show(p.Chasing ? look : Lightbar.Look.Idle);
                 }
                 if (p.Mark != null && _cam != null)
                 {
@@ -773,6 +1037,15 @@ namespace Police
                     p.Mark.Place(p.Roof, camPos, t);
                 }
             }
+        }
+
+        /// <summary>The main camera and its transform, refreshed every 2 s (not fetched every frame).</summary>
+        private void FetchCamera(float now)
+        {
+            _nextCamFetch = now + 2f;
+            var cam = Camera.main;
+            if (cam == null) { _cam = null; _camT = null; return; }
+            if (_cam == null || _camT == null || _cam.Pointer != cam.Pointer) { _cam = cam; _camT = cam.transform; }
         }
 
         // ------------------------------------------------------------------ fallback HUD (IMGUI; GUI.Box / GUI.Label only: GUI.DrawTexture is stripped)
@@ -809,7 +1082,7 @@ namespace Police
         private void DrawMarkers(float s)
         {
             float now = Time.unscaledTime;
-            if (now >= _nextCamFetch || _cam == null) { _nextCamFetch = now + 2f; _cam = Camera.main; }
+            if (now >= _nextCamFetch || _cam == null || _camT == null) FetchCamera(now);
             if (_cam == null) return;
             for (int i = 0; i < _patrols.Count; i++)
             {
@@ -897,6 +1170,7 @@ namespace Police
                 Plugin.Log.LogWarning($"[Police] {feature} switched off for this session after an error: {e.Message}");
                 if (feature == "patrols") Shutdown("patrols off");
                 else if (feature == "car looks / lightbars") DestroyVisuals();
+                else if (feature == "chase driving") foreach (var c in _chasers) { if (c.Driving) StopDriving(c); }
                 else if (feature == "HUD") { try { _phud?.Destroy(); } catch { /* scene */ } _phud = null; }   // nothing frozen on screen
                 Fault(e);
             }

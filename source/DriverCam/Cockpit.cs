@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using FM = RogueShared.FastMath;
 
 namespace DriverCam;
 
@@ -70,6 +71,7 @@ internal static class Cockpit
         {
             _root.transform.localScale = Vector3.one * _modelScale;
             if (_wheel != null) _wheel.localRotation = Quaternion.Euler(0f, 0f, -turn * Plugin.SteerAngle.Value);
+            if (_root.activeSelf) Gauges.Update();   // once a frame (this runs twice), only while the cockpit shows
         }
         else if (_wheel != null)
         {
@@ -81,6 +83,11 @@ internal static class Cockpit
     public static void Rebuild(Transform body, Bounds car, Vector3 head)
     {
         if (Alive) { Keep.Release(_root); Object.Destroy(_root); }
+        Gauges.Clear(Current);
+        // the old cockpit's meshes are not owned by its GameObjects, so destroying the root alone leaks them
+        foreach (var built in _builtMeshes)
+            if (built != null && !built.WasCollected) Object.Destroy(built);
+        _builtMeshes.Clear();
         EnsureMaterials(body);
 
         var model = Current;
@@ -176,6 +183,10 @@ internal static class Cockpit
             list.Add(part);
         }
 
+        // Tags whose `mat` colours are identical draw with identical materials, so the group's static parts of all of
+        // them are merged into one mesh (fewer renderers, draw calls and outline passes; the look is unchanged)
+        var sameLook = SameLookTags(model);
+
         foreach (var (groupName, parts) in partsByGroup)
         {
             var center = GroupCenter(parts);
@@ -195,20 +206,28 @@ internal static class Cockpit
                     pivot.localRotation = Quaternion.LookRotation(part.PivotForward, part.PivotUp);
                     var spin = new GameObject(part.Name).transform;
                     spin.SetParent(pivot, false);
+                    Mesh firstMesh = null;
+                    List<Vector2> firstUvs = null;
                     foreach (var (tag, lists) in part.ByTag)
-                        AddMesh(spin, part.Name + "_" + tag, lists.verts, lists.normals, lists.uvs, TagMaterial(tag, body), layer, Textured(tag) || IsMirror(tag));
+                    {
+                        // gauge parts (needles, digital readout) get no outline pass: thin, and seen through the bezel
+                        var pr = AddMesh(spin, part.Name + "_" + tag, lists.verts, lists.normals, lists.uvs, TagMaterial(tag, body), layer, Textured(tag) || IsMirror(tag) || part.IsGauge);
+                        if (part.IsGauge && firstMesh == null) { firstMesh = pr.GetComponent<MeshFilter>().sharedMesh; firstUvs = lists.uvs; }
+                    }
                     if (part.Name == "SteeringWheel") _wheel = spin;
+                    if (part.IsGauge) Gauges.Register(spin, part, firstMesh, firstUvs);
                     continue;
                 }
 
-                foreach (var (tag, lists) in part.ByTag)
+                foreach (var (partTag, lists) in part.ByTag)
                 {
+                    var tag = sameLook.TryGetValue(partTag, out var shared) ? shared : partTag;
                     if (!staticByTag.TryGetValue(tag, out var acc))
                     {
                         acc = (new List<Vector3>(), new List<Vector3>(), new List<Vector2>());
                         staticByTag[tag] = acc;
                     }
-                    foreach (var v in lists.verts) acc.v.Add(v - center);
+                    foreach (var v in lists.verts) acc.v.Add(FM.Sub(v, center));   // field maths: Vector3 '-' is an interop call
                     acc.n.AddRange(lists.normals);
                     acc.uv.AddRange(lists.uvs);
                 }
@@ -217,36 +236,55 @@ internal static class Cockpit
             foreach (var (tag, acc) in staticByTag)
                             {
                 var uv = IsMirror(tag) ? PlanarUVs(acc.v) : acc.uv;
-                var r = AddMesh(group, groupName + "_" + tag, acc.v, acc.n, uv, TagMaterial(tag, body), layer, Textured(tag) || IsMirror(tag));
+                var r = AddMesh(group, groupName + "_" + tag, acc.v, acc.n, uv, TagMaterial(tag, body), layer, Textured(tag) || IsMirror(tag), weld: true);
                 if (IsMirror(tag)) MirrorView.SetGlass(tag, r);
             }
         }
 
+        RecordDriverSeat(partsByGroup);   // for DriverLink (the Driver plugin)
         ApplyLayout();
         _root.SetActive(false);
         Plugin.Logger.LogInfo($"Built cockpit {model.Source} for {CarId} at scale {_modelScale:0.00} with parts: {string.Join(", ", GroupNames)}.");
     }
 
+    /// <summary>
+    /// The model tags whose `mat` line matches an earlier tag's exactly (colour, smoothness, metallic, glow) -> that
+    /// earlier tag. Only plain coloured tags: paint (the car's colour), mirrors and textured tags keep their own.
+    /// </summary>
+    static Dictionary<string, string> SameLookTags(CockpitModel model)
+    {
+        var result = new Dictionary<string, string>();
+        var firstByLook = new Dictionary<(float, float, float, float, float, float, float), string>();
+        foreach (var (tag, own) in model.TagColors)
+        {
+            if (tag == "paint" || IsMirror(tag) || model.TagTextures.ContainsKey(tag)) continue;
+            var look = (own.color.r, own.color.g, own.color.b, own.color.a, own.smoothness, own.metallic, own.glow);
+            if (firstByLook.TryGetValue(look, out var first)) result[tag] = first;
+            else firstByLook[look] = tag;
+        }
+        return result;
+    }
+
+    /// <summary>Centre of the group's bounding box (pivot positions for pivot parts). Plain field maths, once per build.</summary>
     static Vector3 GroupCenter(List<CockpitModel.Part> parts)
     {
-        var b = new Bounds();
+        float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
+        float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
         bool any = false;
+        void Add(Vector3 v)
+        {
+            any = true;
+            if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+            if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+            if (v.z < minZ) minZ = v.z; if (v.z > maxZ) maxZ = v.z;
+        }
         foreach (var part in parts)
         {
-            if (part.HasPivot)
-            {
-                if (!any) { b = new Bounds(part.PivotPos, Vector3.zero); any = true; }
-                else b.Encapsulate(part.PivotPos);
-                continue;
-            }
+            if (part.HasPivot) { Add(part.PivotPos); continue; }
             foreach (var lists in part.ByTag.Values)
-                foreach (var v in lists.verts)
-                {
-                    if (!any) { b = new Bounds(v, Vector3.zero); any = true; }
-                    else b.Encapsulate(v);
-                }
+                foreach (var v in lists.verts) Add(v);
         }
-        return b.center;
+        return any ? FM.V3((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f) : default;
     }
 
     /// <summary>Applies the saved Parts-editor placement to every group without rebuilding meshes.</summary>
@@ -265,6 +303,57 @@ internal static class Cockpit
     /// <summary>The cockpit model's current world scale (part offsets are in model units).</summary>
     public static float CurrentModelScale => _modelScale;
 
+    // ---------------------------------------------------------------- published for the Driver plugin (DriverLink)
+
+    static Transform _seatGroup;
+    static Vector3 _seatCushionLocal, _seatBackLocal;   // in the seat group's local space (model units)
+
+    /// <summary>The steering wheel's unspun pivot (model cockpits only), else null.</summary>
+    internal static Transform WheelPivot => _usingModel && Alive && _wheel != null && _wheel.parent != null ? _wheel.parent : null;
+
+    internal static bool HasDriverSeat => _usingModel && _seatGroup != null && !_seatGroup.WasCollected;
+
+    /// <summary>World points: the driver seat cushion's top centre and the seat back's front-bottom point.</summary>
+    internal static void DriverSeatWorld(out Vector3 cushion, out Vector3 back)
+    {
+        cushion = _seatGroup.TransformPoint(_seatCushionLocal);
+        back = _seatGroup.TransformPoint(_seatBackLocal);
+    }
+
+    /// <summary>Once per build: the parts RL_SeatDriver_Cushion (max y, centre x / z) and RL_SeatDriver_Back (centre x, min y, max z).</summary>
+    static void RecordDriverSeat(Dictionary<string, List<CockpitModel.Part>> partsByGroup)
+    {
+        _seatGroup = null;
+        foreach (var (groupName, parts) in partsByGroup)
+        {
+            CockpitModel.Part cushion = null, back = null;
+            foreach (var p in parts)
+            {
+                if (p.Name == "RL_SeatDriver_Cushion") cushion = p;
+                else if (p.Name == "RL_SeatDriver_Back") back = p;
+            }
+            if (cushion == null || back == null || !_groups.TryGetValue(groupName, out var g)) continue;
+            Box(cushion, out var cMin, out var cMax);
+            Box(back, out var bMin, out var bMax);
+            _seatCushionLocal = FM.V3((cMin.x + cMax.x) * 0.5f - g.center.x, cMax.y - g.center.y, (cMin.z + cMax.z) * 0.5f - g.center.z);
+            _seatBackLocal = FM.V3((bMin.x + bMax.x) * 0.5f - g.center.x, bMin.y - g.center.y, bMax.z - g.center.z);
+            _seatGroup = g.t;
+            return;
+        }
+    }
+
+    static void Box(CockpitModel.Part part, out Vector3 min, out Vector3 max)
+    {
+        min = FM.V3(float.MaxValue, float.MaxValue, float.MaxValue);
+        max = FM.V3(float.MinValue, float.MinValue, float.MinValue);
+        foreach (var lists in part.ByTag.Values)
+            foreach (var v in lists.verts)
+            {
+                if (v.x < min.x) min.x = v.x; if (v.y < min.y) min.y = v.y; if (v.z < min.z) min.z = v.z;
+                if (v.x > max.x) max.x = v.x; if (v.y > max.y) max.y = v.y; if (v.z > max.z) max.z = v.z;
+            }
+    }
+
     /// <summary>Shows or hides one group (Edit mode blinks the selected part).</summary>
     public static void SetGroupVisible(string group, bool visible)
     {
@@ -275,24 +364,61 @@ internal static class Cockpit
     /// <summary>UVs for a flat part (the mirror glass): spread over its two largest dimensions.</summary>
     static List<Vector2> PlanarUVs(List<Vector3> verts)
     {
-        var b = new Bounds(verts[0], Vector3.zero);
-        foreach (var v in verts) b.Encapsulate(v);
-        var uvs = new List<Vector2>(verts.Count);
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
         foreach (var v in verts)
-            uvs.Add(new Vector2((v.x - b.min.x) / Mathf.Max(1e-4f, b.size.x), (v.y - b.min.y) / Mathf.Max(1e-4f, b.size.y)));
+        {
+            if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+            if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+        }
+        float sx = System.Math.Max(1e-4f, maxX - minX), sy = System.Math.Max(1e-4f, maxY - minY);
+        var uvs = new List<Vector2>(verts.Count);
+        foreach (var v in verts) uvs.Add(FM.V2((v.x - minX) / sx, (v.y - minY) / sy));
         return uvs;
     }
 
-    static Renderer AddMesh(Transform parent, string name, List<Vector3> verts, List<Vector3> normals, List<Vector2> uvs, Material mat, int layer, bool textured)
+    /// <summary>
+    /// Builds one mesh object. The .dcm stores 3 corners per triangle; with weld (static parts) corners that are exactly
+    /// equal (position, normal and UV) are shared, which roughly halves the vertices the GPU transforms for the mesh
+    /// and its outline pass, and a mesh under 65536 vertices gets 16-bit indices. Pivot parts are never welded: the
+    /// working gauges address their digit / bar quads by corner order.
+    /// </summary>
+    static readonly List<Mesh> _builtMeshes = new();
+
+    static Renderer AddMesh(Transform parent, string name, List<Vector3> verts, List<Vector3> normals, List<Vector2> uvs, Material mat, int layer, bool textured, bool weld = false)
     {
-        var mesh = new Mesh { name = name, indexFormat = IndexFormat.UInt32 };
-        mesh.vertices = verts.ToArray();
-        mesh.normals = normals.ToArray();
-        if (uvs != null && uvs.Count == verts.Count) mesh.uv = uvs.ToArray();
+        bool hasUv = uvs != null && uvs.Count == verts.Count;
+        Vector3[] v; Vector3[] n; Vector2[] uv;
         var tris = new int[verts.Count];
-        for (int i = 0; i < tris.Length; i++) tris[i] = i;
+        if (weld)
+        {
+            var index = new Dictionary<(float, float, float, float, float, float, float, float), int>(verts.Count);
+            var vl = new List<Vector3>(verts.Count); var nl = new List<Vector3>(verts.Count); var ul = new List<Vector2>(verts.Count);
+            for (int i = 0; i < verts.Count; i++)
+            {
+                var p = verts[i]; var q = normals[i]; var t = hasUv ? uvs[i] : default;
+                var key = (p.x, p.y, p.z, q.x, q.y, q.z, t.x, t.y);
+                if (!index.TryGetValue(key, out int k))
+                {
+                    k = vl.Count;
+                    index[key] = k;
+                    vl.Add(p); nl.Add(q); ul.Add(t);
+                }
+                tris[i] = k;
+            }
+            v = vl.ToArray(); n = nl.ToArray(); uv = ul.ToArray();
+        }
+        else
+        {
+            v = verts.ToArray(); n = normals.ToArray(); uv = hasUv ? uvs.ToArray() : null;
+            for (int i = 0; i < tris.Length; i++) tris[i] = i;
+        }
+        var mesh = new Mesh { name = name, indexFormat = v.Length <= 65535 ? IndexFormat.UInt16 : IndexFormat.UInt32 };
+        mesh.vertices = v;
+        mesh.normals = n;
+        if (hasUv) mesh.uv = uv;
         mesh.triangles = tris;
         mesh.RecalculateBounds();
+        _builtMeshes.Add(mesh);
 
         var go = new GameObject(name);
         go.layer = layer;
@@ -363,7 +489,7 @@ internal static class Cockpit
                 "Color" => m.GetColor(prop).ToString(),
                 "Vector" => m.GetVector(prop).ToString(),
                 "Float" or "Range" or "Int" => m.GetFloat(prop).ToString("0.###"),
-                "Texture" => m.GetTexture(prop)?.name ?? "none",
+                "Texture" => m.GetTexture(prop) is var tex && tex != null ? tex.name : "none",
                 _ => "?",
             };
             sb.Append($" {prop}={value};");
@@ -403,7 +529,7 @@ internal static class Cockpit
         if (!_tagMaterials.TryGetValue(key, out var m) || m == null || m.WasCollected)
         {
             m = Keep.Hold(Make(_shader, _shaderTemplate, Color.white));
-            var tex = LoadTexture(Current.TagTextures[tag]);
+            var tex = LoadTexture(tag == "gauges" ? GaugeFaceFile(Gauges.FaceMph) : Current.TagTextures[tag]);
             if (tex != null)
             {
                 if (m.HasProperty("_BaseMap")) m.SetTexture("_BaseMap", tex);
@@ -427,12 +553,40 @@ internal static class Cockpit
         return m;
     }
 
+    /// <summary>The gauge faces for the game's unit: `tex gauges_mph` when the model has it (and the file is there), else `tex gauges`.</summary>
+    static string GaugeFaceFile(bool mph)
+    {
+        if (mph && HasMphFace(Current)) return Current.TagTextures["gauges_mph"];
+        return Current.TagTextures["gauges"];
+    }
+
+    /// <summary>The model lists `tex gauges_mph` and that file exists (else the km/h faces are used).</summary>
+    internal static bool HasMphFace(CockpitModel model) =>
+        model != null && model.TagTextures.TryGetValue("gauges_mph", out var file) && System.IO.File.Exists(System.IO.Path.Combine(model.ModelFolder, file));
+
+    /// <summary>Swaps the gauge faces (km/h / mph) on the current cockpit's gauge material, if it has one.</summary>
+    internal static void SetGaugeFace(bool mph)
+    {
+        if (Current == null || !Current.TagTextures.ContainsKey("gauges")) return;
+        if (!_tagMaterials.TryGetValue("tex:" + Current.Source + ":gauges", out var m) || m == null || m.WasCollected) return;
+        var tex = LoadTexture(GaugeFaceFile(mph));
+        if (tex == null || m.mainTexture == tex) return;
+        if (m.HasProperty("_BaseMap")) m.SetTexture("_BaseMap", tex);
+        m.mainTexture = tex;
+        if (m.HasProperty("_EmissionMap")) m.SetTexture("_EmissionMap", tex);
+    }
+
     static Material TagMaterial(string tag, Transform body)
     {
         if (IsMirror(tag)) return MirrorView.GlassMaterial(tag, _shader);
         if (Textured(tag)) return TexturedMaterial(tag);
-        // Neon palette to sit alongside the game's HUD: deep navy/purple cabin, cyan and hot-pink highlights
-        var (color, smoothness, metallic, glow) = tag switch
+        // A model can carry its own colours (realistic cabins); per model, so the same tag can differ between cars
+        string key = tag;
+        (Color color, float smoothness, float metallic, float glow) own = default;
+        bool hasOwn = Current != null && tag != "paint" && Current.TagColors.TryGetValue(tag, out own);
+        if (hasOwn) key = Current.Source + ":" + tag;
+        // Otherwise the neon palette to sit alongside the game's HUD: deep navy/purple cabin, cyan and hot-pink highlights
+        var (color, smoothness, metallic, glow) = hasOwn ? own : tag switch
         {
             "interior_dark" => (new Color(0.07f, 0.06f, 0.14f), 0.25f, 0f, 1f),
             "interior_mid" => (new Color(0.15f, 0.12f, 0.26f), 0.2f, 0f, 1f),
@@ -447,10 +601,10 @@ internal static class Cockpit
             _ => (new Color(0.12f, 0.1f, 0.2f), 0.2f, 0f, 1f),
         };
 
-        if (!_tagMaterials.TryGetValue(tag, out var m) || m == null || m.WasCollected)
+        if (!_tagMaterials.TryGetValue(key, out var m) || m == null || m.WasCollected)
         {
             m = Keep.Hold(Make(_shader, _shaderTemplate, color));
-            _tagMaterials[tag] = m;
+            _tagMaterials[key] = m;
         }
 
         m.color = color;
@@ -487,7 +641,7 @@ internal static class Cockpit
         }
 
         var t = go.transform;
-        t.SetParent(parent ?? _root.transform, false);
+        t.SetParent(parent != null ? parent : _root.transform, false);
         t.localPosition = localPos;
         t.localRotation = localRot;
         t.localScale = scale;

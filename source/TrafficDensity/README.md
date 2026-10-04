@@ -2,7 +2,9 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue** that multiplies how many NPC traffic cars are on the road.
 
-Current version: **0.2.1**
+Current version: **0.3.1**
+
+In **Rogue Hub** (0.3.0): every setting has a name, a slider range and a step there, the multiplier and car limit are clamped by BepInEx (0.25-4x, 10-100 cars), the `[Fixes]` values show -1 as a GAME switch, TrafficDensity's card shows the live multiplier and car count, a "Back to stock traffic" button sets x1, and the multiplier message goes to the hub's notification stack when the hub is installed.
 
 ## How the game decides traffic
 
@@ -84,7 +86,17 @@ The host simulates every NPC and syncs them to the other players. TrafficDensity
 - **Host:** applies only with `AllowInMultiplayer = true`, and then affects everyone in the lobby.
 - **Client** (connected to someone else's game): never changes anything. The hotkeys just say the host controls traffic.
 
+## What to check in the log (`/game-log TrafficDensity`)
+
+- `TrafficDensity 0.3.1 loaded: x2.5 (Ctrl+PageUp/PageDown to change, Ctrl+Home = stock).` at startup (the multiplier shown is the saved one).
+- `[Traffic] race start: game wants N NPC cars -> M (xK)` at each race start: the game's own count, the count now used, and the multiplier in effect.
+- `[Traffic] fixes on (game values: spawn gap ...): wrecks cleared beyond ..., lane-change check behind ..., min brake ..., obstruction check every ..., spawn gap ..., rubber band ...` when the jam fixes are applied, and `[Traffic] fixes off: game values restored on N car(s)` when they're switched off.
+- `[Traffic] multiplier set to xK ...` each time you change the multiplier with the keys or in Rogue Hub.
+- `[Traffic] restore skipped a car: ...` (warning): a car couldn't be put back to the game's values.
+- `[Perf] ...` lines: `[Perf] timing on for all Rogue mods (F4 toggles the overlay)` / `timing off`, or `[Perf] overlay owned by <plugin>; [Perf] settings here are ignored` when another mod runs the overlay.
+
 ## Notes
 
+- 0.3.1: the toast / perf overlay `OnGUI` skips Unity's IMGUI Layout pass (`useGUILayout = false`; it only uses `GUI.*`).
 - Lowering the multiplier mid-race doesn't delete cars; it stops new ones spawning until enough have driven off.
 - Pairs well with CurbFeel's traffic side-swipes (lane splitting).

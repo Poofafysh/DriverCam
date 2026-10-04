@@ -45,6 +45,7 @@ namespace Police
             {
                 _spawnerPtr = sp.Pointer;
                 _spawner = sp.TryCast<DefaultAISpawner>();   // once per spawner object
+                ForgetCars();                                // its cars are new objects
             }
             return _spawner != null ? _spawnerPtr : IntPtr.Zero;
         }
@@ -68,11 +69,15 @@ namespace Police
             {
                 var car = cars[i];
                 if (car == null || exclude.Contains(car.Pointer) || !car.IsActive) continue;
-                if (Daredevils.Owned.Contains(car.Pointer) || DaredevilOk && IsDaredevil(car)) continue;   // daredevils are rivals, never patrols
-                var pf = car.PathFollower;
-                if (pf == null || pf.WasHit) continue;
+                if (Daredevils.Owned.Contains(car.Pointer)) continue;
+                // the distance test first (it drops most cars), then the cached per-car parts: the same tests as
+                // before, all pure reads of one frame, so the same cars are found
                 float ahead = car.AvoidanceRoadDistance - playerDist;
                 if (ahead < minAhead || ahead > maxAhead || float.IsNaN(ahead)) continue;
+                var info = Info(car);
+                if (DaredevilOk && IsDaredevil(car, info)) continue;   // daredevils are rivals, never patrols
+                var pf = PathFollower(car, info);
+                if (pf == null || pf.WasHit) continue;
                 if (ahead < laneClear && Mathf.Abs(car.AvoidanceLaneOffset - playerLane) < 1.5f) continue;
                 found.Add(car);
             }
@@ -161,6 +166,59 @@ namespace Police
             if (!float.IsNaN(maxSpeed)) pf.MaxSpeed = maxSpeed;
         }
 
-        internal static void ForgetSpawner() { _spawner = null; _spawnerPtr = IntPtr.Zero; }
+        internal static void ForgetSpawner() { _spawner = null; _spawnerPtr = IntPtr.Zero; ForgetCars(); }
+
+        // ------------------------------------------------------------------ per-car parts, cached (0.6.0 perf)
+        // Every getter on a traffic car is a native call and every one that returns an object makes a new wrapper. A
+        // traffic car's path follower, box collider and skin selector are its own components for its whole life (the
+        // pool reuses the same car object), so the scans keep their wrappers by car pointer instead of fetching three
+        // new ones per car per scan. Their VALUES (WasHit, the box size, the behaviour type) are still read every time,
+        // so every scan sees exactly what it saw before. A cached component that is gone (== null) is fetched again, and
+        // the whole table is dropped when the spawner changes, every CarsLifetime seconds and when it grows past MaxCars.
+
+        private sealed class CarParts { public MonoBehaviour Pf, Sel; public BoxCollider Box; }
+
+        private const float CarsLifetime = 5f;
+        private const int MaxCars = 512;
+        private static readonly Dictionary<IntPtr, CarParts> s_cars = new Dictionary<IntPtr, CarParts>();
+        private static float s_carsUntil;
+
+        private static void ForgetCars() { s_cars.Clear(); s_carsUntil = 0f; }
+
+        private static CarParts Info(AIVehicleController car)
+        {
+            float now = Time.unscaledTime;
+            if (now >= s_carsUntil || now < s_carsUntil - 2f * CarsLifetime || s_cars.Count >= MaxCars) { s_cars.Clear(); s_carsUntil = now + CarsLifetime; }
+            var key = car.Pointer;
+            if (!s_cars.TryGetValue(key, out var info)) { info = new CarParts(); s_cars[key] = info; }
+            return info;
+        }
+
+        /// <summary>car.PathFollower through the cache (null when it has none, exactly as the getter).</summary>
+        private static AIPathFollower PathFollower(AIVehicleController car, CarParts info)
+        {
+            if (info.Pf != null) return (AIPathFollower)info.Pf;
+            var pf = car.PathFollower;
+            if (pf != null) info.Pf = pf;
+            return pf;
+        }
+
+        /// <summary>car.VehicleCollider through the cache.</summary>
+        private static BoxCollider Box(AIVehicleController car, CarParts info)
+        {
+            if (info.Box != null) return info.Box;
+            var box = car.VehicleCollider;
+            if (box != null) info.Box = box;
+            return box;
+        }
+
+        /// <summary>car.SkinSelector through the cache.</summary>
+        private static AISkinSelector Selector(AIVehicleController car, CarParts info)
+        {
+            if (info.Sel != null) return (AISkinSelector)info.Sel;
+            var sel = car.SkinSelector;
+            if (sel != null) info.Sel = sel;
+            return sel;
+        }
     }
 }

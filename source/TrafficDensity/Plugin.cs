@@ -30,7 +30,7 @@ namespace TrafficDensity
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.trafficdensity";
-        public const string Version = "0.2.1";
+        public const string Version = "0.3.1";
         public const int PoolMax = 100;
 
         internal static new ManualLogSource Log;
@@ -53,33 +53,53 @@ namespace TrafficDensity
         {
             Log = base.Log;
             Enabled = Config.Bind("General", "Enabled", true, "Master switch for the traffic multiplier and the AI fixes ([Fixes]).");
-            Multiplier = Config.Bind("General", "Multiplier", 1.5f,
-                "NPC traffic multiplier on top of the game's own amount (which already includes traffic hazard cards). 1 = stock, 2 = twice the cars, 0.5 = half.");
-            MaxCars = Config.Bind("General", "MaxCars", 60, $"Upper limit on NPC cars at once (the game's traffic pool holds at most {PoolMax}). Very high counts cost frame rate.");
-            AllowInMultiplayer = Config.Bind("General", "AllowInMultiplayer", false,
-                "Also apply the multiplier and the AI fixes in multiplayer when you are the host. The host runs everyone's traffic, so all players get the extra cars and the changed NPC behaviour. Off = stock traffic in multiplayer. As a client nothing is ever changed: the host controls traffic.");
-            Steps = Config.Bind("Keys", "Steps", "0.5,0.75,1,1.25,1.5,2,2.5,3,4",
-                "Multiplier values Ctrl+PageUp / Ctrl+PageDown step through. Ctrl+Home resets to 1.");
-            ShowToast = Config.Bind("Keys", "ShowToast", true, "Show a short on-screen message when the multiplier changes or a race starts.");
+            // ranges + hub tags (HubLink.Meta): Rogue Hub draws these as sliders with a number box; BepInEx clamps values typed into the .cfg
+            Multiplier = Config.Bind("General", "Multiplier", 1.5f, new ConfigDescription(
+                "NPC traffic multiplier on top of the game's own amount (which already includes traffic hazard cards). 1 = stock, 2 = twice the cars, 0.5 = half.",
+                new AcceptableValueRange<float>(0.25f, 4f), HubLink.Meta("Traffic multiplier", step: 0.05, unit: "x", applies: "within a second")));
+            MaxCars = Config.Bind("General", "MaxCars", 60, new ConfigDescription(
+                $"Upper limit on NPC cars at once (the game's traffic pool holds at most {PoolMax}). Very high counts cost frame rate.",
+                new AcceptableValueRange<int>(10, PoolMax), HubLink.Meta("Max cars at once", step: 1, unit: "cars", applies: "within a second")));
+            AllowInMultiplayer = Config.Bind("General", "AllowInMultiplayer", false, new ConfigDescription(
+                "Also apply the multiplier and the AI fixes in multiplayer when you are the host. The host runs everyone's traffic, so all players get the extra cars and the changed NPC behaviour. Off = stock traffic in multiplayer. As a client nothing is ever changed: the host controls traffic.",
+                null, HubLink.Meta("Also when I host multiplayer")));
+            Steps = Config.Bind("Keys", "Steps", "0.5,0.75,1,1.25,1.5,2,2.5,3,4", new ConfigDescription(
+                "Multiplier values Ctrl+PageUp / Ctrl+PageDown step through. Ctrl+Home resets to 1.", null, HubLink.Meta("Ctrl+PageUp / PageDown steps", advanced: true)));
+            ShowToast = Config.Bind("Keys", "ShowToast", true, new ConfigDescription(
+                "Show a short on-screen message when the multiplier changes or a race starts.", null, HubLink.Meta("Message when it changes")));
 
+            // the [Fixes] values keep -1 = "the game's own value", so no BepInEx range (it would clamp -1 away): the hub tag
+            // gives the slider range and shows -1 as a GAME switch
             const string game = " -1 = leave the game's value.";
-            FixesEnabled = Config.Bind("Fixes", "Enabled", true,
-                "Stop NPC traffic crashing into each other and jamming (matters most with extra traffic). Off = the game's own AI values.");
-            WreckClearDistance = Config.Bind("Fixes", "WreckClearDistance", 40f,
-                "NPC cars that crash into each other further than this many metres ahead of you are removed at once instead of blocking the lane until you pass (game: 150)." + game);
-            LaneChangeCheckBehind = Config.Bind("Fixes", "LaneChangeCheckBehind", 25f,
-                "How far behind an NPC checks the target lane before changing lanes, in metres (game: 6, so they cut in on cars beside them)." + game);
-            MinBrake = Config.Bind("Fixes", "MinBrake", 0f,
-                "Lowest throttle an NPC keeps when a car is close ahead, 0-1. 0 lets it slow right down behind a slow or stopped car (game: 0.2, Daredevil 0.6)." + game);
-            ObstructionCheckInterval = Config.Bind("Fixes", "ObstructionCheckInterval", 0.2f,
-                "Seconds between an NPC's checks for a car ahead (game: 0.5). Must be above 0." + game);
-            SpawnGap = Config.Bind("Fixes", "SpawnGap", 30f,
-                "Clear road the spawner wants around a new NPC in its lane, in metres (game: 20)." + game);
-            RubberBandSpeedFactor = Config.Bind("Fixes", "RubberBandSpeedFactor", -1f,
-                "Speed of NPCs far ahead of you, as a fraction of normal (game: 0.6). Higher = less bunching, but changes the game's pacing. -1 = leave the game's value.");
+            FixesEnabled = Config.Bind("Fixes", "Enabled", true, new ConfigDescription(
+                "Stop NPC traffic crashing into each other and jamming (matters most with extra traffic). Off = the game's own AI values.",
+                null, HubLink.Meta("Smarter traffic")));
+            WreckClearDistance = Config.Bind("Fixes", "WreckClearDistance", 40f, new ConfigDescription(
+                "NPC cars that crash into each other further than this many metres ahead of you are removed at once instead of blocking the lane until you pass (game: 150)." + game,
+                null, HubLink.Meta("Clear crashed cars past", 10, 150, 5, "m", game: -1, gameShows: 150)));
+            LaneChangeCheckBehind = Config.Bind("Fixes", "LaneChangeCheckBehind", 25f, new ConfigDescription(
+                "How far behind an NPC checks the target lane before changing lanes, in metres (game: 6, so they cut in on cars beside them)." + game,
+                null, HubLink.Meta("Look behind before a lane change", 5, 50, 1, "m", game: -1, gameShows: 6)));
+            MinBrake = Config.Bind("Fixes", "MinBrake", 0f, new ConfigDescription(
+                "Lowest throttle an NPC keeps when a car is close ahead, 0-1. 0 lets it slow right down behind a slow or stopped car (game: 0.2, Daredevil 0.6)." + game,
+                null, HubLink.Meta("Lowest throttle behind a slow car", 0, 1, 0.05, game: -1, gameShows: 0.2)));
+            ObstructionCheckInterval = Config.Bind("Fixes", "ObstructionCheckInterval", 0.2f, new ConfigDescription(
+                "Seconds between an NPC's checks for a car ahead (game: 0.5). Must be above 0." + game,
+                null, HubLink.Meta("Check for a car ahead every", 0.05, 1, 0.05, "s", game: -1, gameShows: 0.5)));
+            SpawnGap = Config.Bind("Fixes", "SpawnGap", 30f, new ConfigDescription(
+                "Clear road the spawner wants around a new NPC in its lane, in metres (game: 20)." + game,
+                null, HubLink.Meta("Space around a new car", 10, 60, 1, "m", game: -1, gameShows: 20)));
+            RubberBandSpeedFactor = Config.Bind("Fixes", "RubberBandSpeedFactor", -1f, new ConfigDescription(
+                "Speed of NPCs far ahead of you, as a fraction of normal (game: 0.6). Higher = less bunching, but changes the game's pacing. -1 = leave the game's value.",
+                null, HubLink.Meta("Speed of cars far ahead", 0.3, 1, 0.05, game: -1, gameShows: 0.6)));
 
-            PerfEnabled = Config.Bind("Perf", "Enabled", false,
-                "Shared timing overlay for all Rogue mods (each mod times its own work into it). F4 toggles the overlay while this is on. Logs one summary line every 10 s. Off = no timing at all.");
+            PerfEnabled = Config.Bind("Perf", "Enabled", false, new ConfigDescription(
+                "Shared timing overlay for all Rogue mods (each mod times its own work into it). F4 toggles the overlay while this is on. Logs one summary line every 10 s. Off = no timing at all.",
+                null, HubLink.Meta("Timing overlay for all mods", advanced: true)));
+
+            // Rogue Hub (optional): the live line on TrafficDensity's card and a back-to-stock button
+            HubLink.Status(Guid, TrafficRunner.HubStatus);
+            HubLink.Action(Guid, "stock", "Back to stock traffic (x1)", "Sets the traffic multiplier to 1, the game's own amount.", TrafficRunner.HubStock);
 
             ClassInjector.RegisterTypeInIl2Cpp<TrafficRunner>();
             AddComponent<TrafficRunner>();
@@ -120,6 +140,9 @@ namespace TrafficDensity
     public class TrafficRunner : MonoBehaviour
     {
         public TrafficRunner(IntPtr ptr) : base(ptr) { }
+
+        // OnGUI only uses GUI.* (no GUILayout / GUI.Window), so skip Unity's extra Layout pass of OnGUI every frame
+        private void Awake() => useGUILayout = false;
 
         private static string _toast = "";
         private static float _toastUntil;
@@ -193,8 +216,27 @@ namespace TrafficDensity
         internal static void Toast(string text)
         {
             if (!Plugin.ShowToast.Value) return;
+            if (HubLink.HubPresent) { HubLink.Toast(Plugin.Guid, text); return; }   // Rogue Hub shows it in its notification stack
             _toast = text;
             _toastUntil = Time.unscaledTime + 2.5f;
+        }
+
+        /// <summary>Rogue Hub: the live line on TrafficDensity's card.</summary>
+        internal static string HubStatus()
+        {
+            if (!Plugin.Enabled.Value) return "off";
+            if (IsRemoteClient()) return "multiplayer client: the host controls traffic";
+            if (!MayChangeTraffic()) return "multiplayer: stock traffic";
+            var sp = SpawnerPatch.Spawner;
+            string m = $"x{EffectiveMultiplier():0.##}";
+            return sp == null || SpawnerPatch.BaseCount < 0 ? m + ", applies at the next race" : $"{m}, {sp.aiSpawnCount} cars (stock {SpawnerPatch.BaseCount})";
+        }
+
+        /// <summary>Rogue Hub button: back to the game's own amount.</summary>
+        internal static string HubStock()
+        {
+            Set(1f);   // Set already shows "Traffic x1 ..." (in the hub's notifications when ShowToast is on)
+            return Plugin.ShowToast.Value ? null : "Traffic back to stock (x1)";
         }
 
         private void Update()

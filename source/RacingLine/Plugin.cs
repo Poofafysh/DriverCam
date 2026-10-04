@@ -12,14 +12,14 @@ namespace RacingLine
     /// Plan" (claude.ai artifact 799a19cf-48f1-4019-9d37-925b9838d47f).
     ///
     /// Builds the minimum-curvature line from the run's centre-line path, previews it on the road, scores corners
-    /// (LineScorer) and, in single-player, adds Racing Line as a real score category with its own results row
-    /// (GameApi.Native / GameApi.Results). No Harmony patches.
+    /// (LineScorer) and, in single-player, adds Racing Line as a real score category (GameApi.Native) with its own row
+    /// on the per-race results screen and the end-of-run Victory screen (shared RogueShared.ModScoreRows). No Harmony patches.
     /// </summary>
     [BepInPlugin(Guid, "RacingLine", Version)]
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.racingline";
-        public const string Version = "0.4.0";
+        public const string Version = "0.5.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;

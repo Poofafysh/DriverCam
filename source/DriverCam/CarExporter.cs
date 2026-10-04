@@ -67,73 +67,82 @@ internal static class CarExporter
                 }
                 catch (Exception)
                 {
+                    if (mesh != null) UnityEngine.Object.Destroy(mesh);
                     mesh = smr.sharedMesh;
                 }
             }
             if (mesh == null) continue;
-            total++;
-
-            Vector3[] verts = null;
-            Vector3[] normals = null;
-            int[][] subTris = null;
-            if (baked || mesh.isReadable)
+            try
             {
-                try
+                total++;
+
+                Vector3[] verts = null;
+                Vector3[] normals = null;
+                int[][] subTris = null;
+                if (baked || mesh.isReadable)
                 {
-                    verts = mesh.vertices;
-                    normals = mesh.normals;
-                    subTris = new int[mesh.subMeshCount][];
-                    for (int sub = 0; sub < mesh.subMeshCount; sub++) subTris[sub] = mesh.GetTriangles(sub);
+                    try
+                    {
+                        verts = mesh.vertices;
+                        normals = mesh.normals;
+                        subTris = new int[mesh.subMeshCount][];
+                        for (int sub = 0; sub < mesh.subMeshCount; sub++) subTris[sub] = mesh.GetTriangles(sub);
+                    }
+                    catch (Exception)
+                    {
+                        verts = null;
+                    }
                 }
-                catch (Exception)
+                if (verts == null)
                 {
-                    verts = null;
+                    // Locked on the CPU side: copy it back from the GPU instead
+                    if (GpuMeshReader.TryRead(mesh, out verts, out normals, out subTris, out var gpuError)) gpuRead++;
+                    else
+                    {
+                        if (locked++ < 3) Plugin.Logger.LogWarning($"Couldn't read '{r.name}' from the GPU: {gpuError}");
+                        continue;
+                    }
                 }
+                if (verts == null || verts.Length == 0) { locked++; continue; }
+
+                Vector2[] uvs = null;
+                try { uvs = mesh.isReadable ? mesh.uv : GpuMeshReader.TryReadUVs(mesh); } catch (Exception) { }
+                bool hasUVs = uvs != null && uvs.Length == verts.Length;
+
+                var t = r.transform;
+                obj.AppendLine($"o {Sanitize(r.name)}_{exported}");
+                foreach (var v in verts) obj.Append("v ").AppendLine(Obj(ToModel(t.TransformPoint(v))));
+                bool hasNormals = normals != null && normals.Length == verts.Length;
+                if (hasNormals)
+                    foreach (var n in normals) obj.Append("vn ").AppendLine(Obj(invRot * t.TransformDirection(n)));
+                if (hasUVs)
+                    foreach (var uv in uvs) obj.AppendLine(string.Format(inv, "vt {0:0.######} {1:0.######}", uv.x, uv.y));
+
+                var mats = r.sharedMaterials;
+                for (int sub = 0; sub < subTris.Length; sub++)
+                {
+                    var mat = mats != null && sub < mats.Length ? mats[sub] : null;
+                    if (mat != null && mat.shader != null && mat.shader.name.Contains("Outline")) continue;
+                    string matName = Sanitize(mat != null ? mat.name : "default");
+                    if (materialsWritten.Add(matName)) WriteMaterial(mtl, matName, mat, inv, savedTextures);
+                    obj.AppendLine($"usemtl {matName}");
+
+                    var tris = subTris[sub];
+                    for (int i = 0; i + 2 < tris.Length; i += 3)
+                    {
+                        // Flipping Z mirrors the mesh, so reverse the winding to keep faces pointing outwards
+                        int a = tris[i] + vertexBase, b = tris[i + 2] + vertexBase, c = tris[i + 1] + vertexBase;
+                        obj.AppendLine(Face(a, b, c, hasUVs, hasNormals));
+                    }
+                }
+                vertexBase += verts.Length;
+                exported++;
             }
-            if (verts == null)
+            finally
             {
-                // Locked on the CPU side: copy it back from the GPU instead
-                if (GpuMeshReader.TryRead(mesh, out verts, out normals, out subTris, out var gpuError)) gpuRead++;
-                else
-                {
-                    if (locked++ < 3) Plugin.Logger.LogWarning($"Couldn't read '{r.name}' from the GPU: {gpuError}");
-                    continue;
-                }
+                // the baked copy is ours: free it once its data is read (including the skip / continue paths)
+                if (baked) UnityEngine.Object.Destroy(mesh);
             }
-            if (verts == null || verts.Length == 0) { locked++; continue; }
-
-            Vector2[] uvs = null;
-            try { uvs = mesh.isReadable ? mesh.uv : GpuMeshReader.TryReadUVs(mesh); } catch (Exception) { }
-            bool hasUVs = uvs != null && uvs.Length == verts.Length;
-
-            var t = r.transform;
-            obj.AppendLine($"o {Sanitize(r.name)}_{exported}");
-            foreach (var v in verts) obj.Append("v ").AppendLine(Obj(ToModel(t.TransformPoint(v))));
-            bool hasNormals = normals != null && normals.Length == verts.Length;
-            if (hasNormals)
-                foreach (var n in normals) obj.Append("vn ").AppendLine(Obj(invRot * t.TransformDirection(n)));
-            if (hasUVs)
-                foreach (var uv in uvs) obj.AppendLine(string.Format(inv, "vt {0:0.######} {1:0.######}", uv.x, uv.y));
-
-            var mats = r.sharedMaterials;
-            for (int sub = 0; sub < subTris.Length; sub++)
-            {
-                var mat = mats != null && sub < mats.Length ? mats[sub] : null;
-                if (mat != null && mat.shader != null && mat.shader.name.Contains("Outline")) continue;
-                string matName = Sanitize(mat != null ? mat.name : "default");
-                if (materialsWritten.Add(matName)) WriteMaterial(mtl, matName, mat, inv, savedTextures);
-                obj.AppendLine($"usemtl {matName}");
-
-                var tris = subTris[sub];
-                for (int i = 0; i + 2 < tris.Length; i += 3)
-                {
-                    // Flipping Z mirrors the mesh, so reverse the winding to keep faces pointing outwards
-                    int a = tris[i] + vertexBase, b = tris[i + 2] + vertexBase, c = tris[i + 1] + vertexBase;
-                    obj.AppendLine(Face(a, b, c, hasUVs, hasNormals));
-                }
-            }
-            vertexBase += verts.Length;
-            exported++;
         }
 
         if (exported == 0)
@@ -165,7 +174,8 @@ internal static class CarExporter
         {
             foreach (var prop in new[] { "_Primary_Color", "_Base_Color", "_BaseColor", "_Color", "_Color_1", "_Custom_Color" })
                 if (mat.HasProperty(prop)) { c = mat.GetColor(prop); break; }
-            mtl.AppendLine($"# shader {mat.shader?.name}");
+            var shader = mat.shader;
+            mtl.AppendLine($"# shader {(shader != null ? shader.name : null)}");
 
             string albedo = null;
             foreach (var prop in mat.GetTexturePropertyNames())

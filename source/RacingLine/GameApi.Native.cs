@@ -105,7 +105,7 @@ namespace RacingLine
         }
 
         /// <summary>
-        /// Pays points through the game's own path. popup = show the HUD item (corner bonuses); combo ticks pass false.
+        /// Pays a lump of points through the game's own path (not used by the live scoring; kept for one-off awards).
         /// Re-checks multiplayer at every payout. Only when NativeActive.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -114,6 +114,67 @@ namespace RacingLine
             if (!NativeActive || points <= 0 || IsMultiplayer()) return;
             var p = _native.TryCast<AScoreProviderSO>();
             p?.AddToScore(points, popup);
+        }
+
+        // ------------------------------------------------------------------ live action (the game's own temporary-score path)
+        // Same sequence as DriftScoreProviderSO (verified in GameAssembly.dll): OnDriftStarts = OnScoreBegin + OnScoreActivated;
+        // UpdateDriftScore = AddToTemporaryScore(points, false, false) every frame (the HUD shows the provider's temporary
+        // score counting up while IsBeingPerformed); OnDriftEnds = TransferTempToComboScore (or CancelTemporaryScore on a
+        // failed drift) + OnScoreEnd(completed). FinishLevel(completed) itself transfers any temporary score to the final
+        // score, and OnComboFailed clears it and ends the action, so nothing in flight is ever lost or double-counted.
+        // The copy's own Top Speed logic never starts (its private active flag stays false), so it never touches these.
+
+        /// <summary>True while the game shows our live action (false again after the game failed the combo).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static bool LiveRunning()
+        {
+            var p = NativeActive ? Provider() : null;
+            return p != null && p.IsBeingPerformed;
+        }
+
+        // the provider cast once per provider object (no TryCast allocation every frame)
+        private static ScriptableObject _castFor, _cast;
+
+        private static AScoreProviderSO Provider()
+        {
+            if (_native == null) return null;
+            if (_castFor == null || _castFor.Pointer != _native.Pointer || _cast == null) { _castFor = _native; _cast = _native.TryCast<AScoreProviderSO>(); }
+            return (AScoreProviderSO)_cast;
+        }
+
+        /// <summary>
+        /// Starts a live action (HUD counter appears). activate = also the game's activation (counters, activation
+        /// bonus): once per corner. Only when NativeActive, single-player.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void BeginLive(bool activate)
+        {
+            if (!NativeActive || IsMultiplayer()) return;
+            var p = Provider();
+            if (p == null || p.IsBeingPerformed) return;
+            p.OnScoreBegin();
+            if (activate) p.OnScoreActivated();
+        }
+
+        /// <summary>Adds this frame's points to the live action (the game applies its own multipliers and card effects).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void AddLive(double points)
+        {
+            if (!NativeActive || points <= 0 || IsMultiplayer()) return;
+            var p = Provider();
+            if (p == null || !p.IsBeingPerformed) return;
+            p.AddToTemporaryScore(points, false, false);
+        }
+
+        /// <summary>Ends the live action: completed = into the combo (like a finished drift), else cancelled (a crash).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void EndLive(bool completed)
+        {
+            if (!NativeActive) return;
+            var p = Provider();
+            if (p == null) return;
+            if (completed) p.TransferTempToComboScore(); else p.CancelTemporaryScore();
+            if (p.IsBeingPerformed) p.OnScoreEnd(completed);
         }
 
         /// <summary>Adds coin action units (corner grades) to the copy's own counter, which the game resets every level.</summary>
@@ -158,6 +219,6 @@ namespace RacingLine
         /// providers for a whole run, and a destroyed one would throw inside the game's own code. If the score manager is
         /// recreated per level, that leaks one small ScriptableObject per level, which is acceptable.
         /// </summary>
-        internal static void ForgetNative() { _native = null; _nativeOwner = null; _scoreManager = null; }
+        internal static void ForgetNative() { _native = null; _nativeOwner = null; _scoreManager = null; _castFor = null; _cast = null; }
     }
 }

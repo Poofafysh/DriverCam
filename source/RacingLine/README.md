@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a new score category, **Racing Line**, that rewards driving corners well on grip: the right line, good speed, braking straight, lifting in and powering out.
 
-Current version: **0.2.0** (v2 scoring, traffic-aware line; placeholder icons)
+Current version: **0.4.0** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
 
 Design docs (claude.ai artifacts):
 - "Racing Line Mechanic - Design & Build Plan" (`799a19cf-48f1-4019-9d37-925b9838d47f`): the category itself and the Safety rules that apply to every change here.
@@ -22,14 +22,15 @@ Design docs (claude.ai artifacts):
    - **Speed:** your speed ÷ the reference speed.
    - **Grip:** how hard the car is cornering.
    - **Pedals:** before the apex anything goes, because **braking with the wheel turned starts a drift in this game, so there's no trail braking**. Brake in a straight line, then lift or use light throttle into the apex. After the apex it's 0.3 + 0.7 × throttle.
-5. **Points.**
-   - **Running points:** `PointsPerMetre` × q per metre, halved while drifting. They're paid as **combo ticks** every 0.5 s while q ≥ `TickMinQ`. Ticks keep the game's combo alive through grip corners; they don't pop up by default.
-   - **At the zone exit**, one popup pays the rest. The corner total is running × (1 + 0.5 × exit) × coasting × clean × Grip line:
-     - **exit** is early full throttle plus exit speed, times the corner type factor
-     - **coasting** is −15% per second coasting *after* the apex (floor 0.6)
-     - **clean** is ×1.15 with no collision
-     - **Grip line** is ×2 with no drift anywhere in the zone
-   - **Grade by mean q:** GOLD ≥ 0.8, SILVER ≥ 0.6, BRONZE ≥ 0.4.
+5. **Points, counted live** like the game's own categories: each corner zone is a live action, and its points count up on the HUD while you drive it (nothing is paid at the end of the corner).
+   - **Every frame** with q ≥ `TickMinQ` earns `PointsPerMetre` × 1.25 × q^1.5 per metre (halved while drifting), multiplied by everything that is true *right now*:
+     - **Grip line** ×2 while you haven't drifted in this corner (lost from the moment you drift)
+     - **clean** ×1.15 while you haven't hit anything in this corner
+     - **exit** after the apex: × (1 + 0.5 × throttle × speed ÷ reference × the corner type factor)
+     - **coasting:** −15% per second coasting *after* the apex (floor 0.6)
+     - **streak** and **pace** (below)
+   - The action goes into the game's combo when the zone ends, or after `LiveGrace` (0.6 s) below `TickMinQ`; flowing points keep the combo alive through grip corners. **A collision cancels the live action** (that corner's points so far are lost), like a crash does to a drift.
+   - **Grade by mean q:** GOLD ≥ 0.8, SILVER ≥ 0.6, BRONZE ≥ 0.4 (for coins and the streak; shown on the HUD card).
    - **Streak:** +0.15× per corner with q ≥ 0.45, up to ×2. A collision drops it two steps, and a corner under 0.3 resets it.
    - **Pace:** every payout × (0.8 + 0.4 × your average speed ÷ reference).
    - **Traffic:** "the line" is the traffic-aware line (see below), so a car sitting on the racing line moves the line around it. As a fallback, for 1.5 s after a near miss the position term holds, so dodging isn't punished.
@@ -39,10 +40,10 @@ A simulated 3 km test road with 8 long corners gave these totals:
 
 | Driving | Points |
 |---|---|
-| Tidy grip | 2,194 |
-| Coasting out of every apex | 1,521 |
-| Drifting every corner (drift points come separately) | 796 |
-| Wide and slow | 531 |
+| Tidy grip | 2,067 |
+| Coasting out of every apex | 1,603 |
+| Drifting every corner (drift points come separately) | 801 |
+| Wide and slow | 626 |
 
 ## Traffic-aware line
 
@@ -57,7 +58,7 @@ If an NPC car is sitting where the racing line goes, that can't be the perfect l
 - **Multiplayer clients** use the plain line. The host drives the traffic, and the clients' copies of the cars haven't been checked; multiplayer is display mode anyway.
 - **Turning it off:** `Enabled` = false goes back to the plain line everywhere. Missing game members switch only this feature off; the startup check names them.
 
-With F5 the preview draws this line. Orange dots mark where it goes around a car, dim red dots mark no way past, and a readout line shows `traffic: line shifted around N cars · corners shifted K · clean passes P`.
+With F5 the line on the road is this line: orange where it goes around a car, faint where there's no way past.
 
 Simulated on the same 3 km test road with a car parked on the line's apex in every corner:
 
@@ -79,13 +80,41 @@ Simulated on the same 3 km test road with a car parked on the line's apex in eve
 - it has id `rogue.racingline`, our name and icons, and `contributeToCombo` on
 - it's appended once to the level's score list
 
-Points go through the game's own `AddToScore`. The end-of-run **Victory screen** also gets a RACING LINE row (a clone of the Near Miss row, placed right after it) showing the run's Racing Line total. Each race's score is added once when its results screen opens. A run total higher than `Records.BestRunTotal` shows NEW RECORD. The total lives in this game session only: a run continued from a save only counts races played since launch. The combo event fires whatever the popup flag says, which was checked in `AddToScore` (0x1806EC990). A RACING LINE row is added to the results screen.
+Points go through the game's own live-action path, the same one Drift uses: `OnScoreBegin` + `OnScoreActivated` when a corner's points start flowing, `AddToTemporaryScore` every frame (the HUD counts up), `TransferTempToComboScore` + `OnScoreEnd` when the zone ends, `CancelTemporaryScore` on a collision. The game's own `FinishLevel` banks anything still in flight, and a failed combo clears it. The end-of-run **Victory screen** also gets a RACING LINE row (a clone of the Near Miss row, placed right after it) showing the run's Racing Line total. Each race's score is added once when its results screen opens. A run total higher than `Records.BestRunTotal` shows NEW RECORD. The total lives in this game session only: a run continued from a save only counts races played since launch. A RACING LINE row is added to the results screen.
 
 Accepted side effects:
 - **Top Speed cards also affect Racing Line**, because the copy reports type Top Speed.
 - Racing Line points are part of the single-player run total the game uploads to its Steam leaderboard.
 
-**Display mode** (any multiplayer session, or if native setup fails): corners are scored and shown in the readout only, and nothing is added to the game.
+**Display mode** (any multiplayer session, or if native setup fails): corners are scored and shown on the HUD card only, and nothing is added to the game.
+
+## The line on the road (F5)
+
+F5 lays the racing line **on the road surface ahead of you**, like the driving line in Forza or The Crew: a ribbon of chevrons (`LineWidth`, 1 m) up to `DrawAhead` (150 m) ahead, following the road's height. Its colour tells you what to do at each point at your current speed:
+
+| Colour | Means |
+|---|---|
+| green | on pace: you can carry your speed there |
+| amber | lift: you'll need some braking to make that point's reference speed |
+| red | brake: you need hard braking (or more than the car has) to make it |
+| orange | the line goes around a traffic car there |
+| faint | no way past traffic there (counts as perfect position) |
+
+The colour is physics, not a guess: from your speed v, the reference speed there v_ref and the distance d, the braking needed is (v² − v_ref²) / 2d, compared with `BrakeDecel`. Chevrons are fixed to the road (they don't slide with the car); the ribbon fades in just ahead of the car and out at the far end.
+
+A **HUD card** (bottom-left, shown with the line) gives the live corner points (green, counting up) or the race total, the last corner's grade (GOLD / SILVER / BRONZE pill, GRIP LINE tag), the streak, and a meter of where you are against the line (green band = full credit, dot = you). The old text readout is still there with `DebugText`.
+
+The ribbon is one mesh of ours drawn with the game's own URP Particles/Unlit shader (alpha-blended, vertex-coloured); if that shader isn't loaded, the old dot preview comes back. The card is uGUI with TextMeshPro in the game's HUD font.
+
+## Sharing the line with other plugins
+
+When a line is built, RacingLine publishes it as AppDomain data `rogue.racingline` (`LineShare.cs`), the same way
+HeadLook shares its head angle with DriverCam. It is an `object[]`:
+`{ int version, long pathPtr, float step, int n, float limit, float[] e, float[] curvature }`. `e` is the line's offset
+from the centre per sample, in metres, + = right. That is the same frame as a traffic car's lane offset, and sample i
+is i × step metres along the run's path. `curvature` is the racing line's own curvature (1/m, + = turning right). The
+value is `null` while there is no line. The Police plugin's daredevils race this line. Nothing is published to other
+players.
 
 ## Safety
 
@@ -109,30 +138,31 @@ Accepted side effects:
 | `traffic: line shifted in 3 of 14 corners, 5 clean passes` | per race, when its results screen opens (traffic-aware line on) |
 | `traffic line switched off for this session after an error: ...` | the traffic-aware line hit an error; scoring carries on with the plain line |
 | `results row added: 01:12, 2310 pts, 130 coins` | the results screen got its row |
+| `live scoring: 18 live actions, 2140 pts counted live (game total 2310, includes card multipliers); 24 corners: gold 9, ...` | per race: confirms points were counted live through the game's action path |
 | `victory row added: 12,345 (new record)` | the end-of-run Victory screen got its row |
 
 ## Controls
 
 | Key | Does |
 |---|---|
-| F5 | show / hide the line preview (the traffic-aware line: orange around a car, dim red where there's no way past) and the live readout (q, position, speed, pedals, streak, pace, traffic) |
+| F5 | show / hide the line on the road (coloured green / amber / red by pace, orange around traffic) and the HUD card |
 
 ## Settings (`rogue.racingline.cfg`)
 
 | Section | Keys (defaults) |
 |---|---|
 | General | `Enabled` (true) |
-| Preview | `ShowLine` (false), `DrawAhead` (150) |
+| Preview | `ShowLine` (false), `DrawAhead` (150), `LineWidth` (1), `DebugText` (false) |
 | Line | `Margin` (1.5), `SampleStep` (2.5), `FrameBudgetMs` (1) |
-| Scoring | `NativeCategory` (true), `CoinReward` (130), `CoinTargetPerCorner` (0.6), `TickPopups` (false), `CornerMinRadius` (300), `LogCorners` (false) |
-| Quality | `LineFull` (2.5), `LineZero` (8), `LineFloor` (0.25), `WeightSpeed` (0.45), `WeightGrip` (0.25), `WeightPedals` (0.30), `PointsPerMetre` (0.22), `TickInterval` (0.5), `TickMinQ` (0.3), `DriftFactor` (0.5), `TrafficGrace` (1.5) |
+| Scoring | `NativeCategory` (true), `CoinReward` (130), `CoinTargetPerCorner` (0.6), `CornerMinRadius` (300), `LogCorners` (false) |
+| Quality | `LineFull` (2.5), `LineZero` (8), `LineFloor` (0.25), `WeightSpeed` (0.45), `WeightGrip` (0.25), `WeightPedals` (0.30), `PointsPerMetre` (0.22), `TickMinQ` (0.3), `LiveGrace` (0.6), `DriftFactor` (0.5), `TrafficGrace` (1.5) |
 | Bonuses | `ExitWeight` (0.5), `Clean` (1.15), `GripLine` (2), `CoastPerSecond` (0.15), `CoastFloor` (0.6), `Gold` / `Silver` / `Bronze` (0.8 / 0.6 / 0.4), `StreakStep` (0.15), `StreakMax` (2) |
 | Car | `GripStart` (9 m/s²), `BrakeDecel` (10), `AccelRate` (5) |
 | Icons | `HudIcon` / `StatIcon` (PNG names in `plugins/RacingLine/`; missing = built-in placeholder) |
 | Records | `BestRunTotal` (0; written by the plugin: the best Racing Line run total, for the Victory screen's NEW RECORD) |
 | Traffic | `Enabled` (true), `Margin` (0.5), `PlayerHalfWidth` (1.0), `LookAhead` (150), `MinLeadIn` (15), `MaxLeadIn` (60), `LeadInSeconds` (1.2), `LeadOut` (15) |
 
-v1 keys (`Band`, `Core`, `Grace`, ...) are no longer used. They may stay in an old config file harmlessly.
+v1 keys (`Band`, `Core`, `Grace`, ...) and 0.2 keys (`TickPopups`, `TickInterval`) are no longer used. They may stay in an old config file harmlessly.
 
 ## Files
 
@@ -145,4 +175,8 @@ v1 keys (`Band`, `Core`, `Grace`, ...) are no longer used. They may stay in an o
 | `LineBuilder.cs` / `LineSolver.cs` | sampling and the two-level line solve |
 | `Corners.cs` / `SpeedProfile.cs` / `LineScorer.cs` | corners and zones, reference speed, the v2 rules (plain .NET, tested outside the game) |
 | `Icons.cs` | PNG icons or the built-in placeholder glyph |
-| `Runner.cs` | path watch, build steps, input smoothing, scoring, payouts, results row, preview, failure switches |
+| `GroundLine.cs` | the line drawn on the road (one dynamic mesh, coloured per point) |
+| `LineHud.cs` | the HUD card (uGUI) |
+| `../Shared/Fx.cs`, `../Shared/UiKit.cs` | shared with Police: the transparent material and procedural textures; the uGUI toolkit (panels, shadows, game font) |
+| `LineShare.cs` | publishes the finished line as AppDomain data `rogue.racingline` (the Police plugin's daredevils race it) |
+| `Runner.cs` | path watch, build steps, input smoothing, scoring, the live action, results row, line and card, failure switches |

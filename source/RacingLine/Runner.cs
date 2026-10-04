@@ -50,7 +50,7 @@ namespace RacingLine
         private Func<GameApi.VictoryData> _victoryData;
         private Action<string> _log;
         // created once (LoadIcons) so Update/Score don't allocate a delegate or closure every frame
-        private Action _resultsTick, _victoryTick, _score, _ensureNative, _awardTick, _payCorner, _trafficTick;
+        private Action _resultsTick, _victoryTick, _score, _ensureNative, _liveStep, _trafficTick;
         // traffic-aware line: one object for the session (preallocated buffers), re-attached to each new line
         private readonly TrafficLine _traffic = new TrafficLine();
         private readonly TrafficSettings _trafficCfg = new TrafficSettings();
@@ -61,9 +61,22 @@ namespace RacingLine
         // run total for the Victory screen: each race's Racing Line score is added once (session only)
         private double _runTotal;
         private LineScorer _countedScorer;
-        private double _pendingTick;          // read by _awardTick
-        private CornerResult _pendingCorner;  // read by _payCorner
+        private StepResult _pendingStep;      // read by _liveStep
+        private bool _liveOpen;               // our live action is running in the game's score system
+        private (LineScorer, int) _activatedCorner = (null, -1);
+        private int _liveActions;             // live actions begun this race (log)
+        private LineScorer _liveLoggedFor;
         private int _carChanges = -1;         // GameApi.CarChanges when the grip estimate was started
+
+        // ground-projected line + HUD card (created on first use; null/!Ok = fall back to the IMGUI dots / text)
+        private GroundLine _ground;
+        private LineHud _hud;
+        private bool _visualsTried, _visualsOff;
+        private string _hudGrade;
+        private bool _hudGrip;
+        private float _hudGradeUntil;
+        private Camera _cam;
+        private float _nextCamFetch;
 
         private readonly Queue<float> _errors = new Queue<float>();
         private bool _broken;
@@ -79,7 +92,7 @@ namespace RacingLine
         {
             // our results row is only ever removed once the results screen has closed (removing it mid-animation would
             // leave the player without a Continue button), and that cleanup keeps running when we're off or broken
-            if (_broken || !Plugin.Enabled.Value) { CleanupRowQuietly(); CleanupVictoryQuietly(); return; }
+            if (_broken || !Plugin.Enabled.Value) { CloseLive(true); CleanupRowQuietly(); CleanupVictoryQuietly(); LineShare.Sync(null, null); return; }
             using var perf = RogueShared.Perf.Scope("RacingLine.Update");   // shared timing overlay (TrafficDensity [Perf]); free when off
             try
             {
@@ -95,6 +108,7 @@ namespace RacingLine
                 if (!GameApi.PathOk) { _status = "game check failed (see log)"; return; }
                 if (Time.unscaledTime >= _nextWatch) { _nextWatch = Time.unscaledTime + 0.5f; Watch(); }
                 StepBuilder();
+                LineShare.Sync(_line, _lineCurvature);   // other plugins (Police daredevils) race the same line
 
                 bool traffic = _line != null && GameApi.TrafficOk && Plugin.TrafficEnabled.Value && !_trafficOff;
                 if (traffic) _traffic.SetTime(Time.time);   // detours move on with their cars between snapshots
@@ -130,12 +144,7 @@ namespace RacingLine
             _score = Score;
             _trafficTick = TrafficTick;
             _ensureNative = EnsureNative;
-            _awardTick = () => GameApi.AwardNative(_pendingTick, Plugin.TickPopups.Value);
-            _payCorner = () =>
-            {
-                if (_pendingCorner.Bonus > 0) GameApi.AwardNative(_pendingCorner.Bonus, true);
-                GameApi.AddCoinUnits(_pendingCorner.Units);
-            };
+            _liveStep = LiveStep;
             string folder = Path.Combine(Path.GetDirectoryName(typeof(Plugin).Assembly.Location) ?? ".", "RacingLine");
             Icons.Load(folder);
             Plugin.Log.LogInfo($"[RacingLine] icons: {Icons.Source} ({folder})");
@@ -188,7 +197,7 @@ namespace RacingLine
         {
             LineFull = Plugin.LineFull.Value, LineZero = Mathf.Max(Plugin.LineFull.Value + 0.5f, Plugin.LineZero.Value), LineFloor = Plugin.LineFloor.Value,
             WSpeed = Plugin.WSpeed.Value, WGrip = Plugin.WGrip.Value, WPedal = Plugin.WPedal.Value, Base = Plugin.Base.Value,
-            TickInterval = Mathf.Clamp(Plugin.TickInterval.Value, 0.1f, 0.8f), TickMinQ = Plugin.TickMinQ.Value,
+            LiveMinQ = Plugin.TickMinQ.Value, LiveGrace = Mathf.Clamp(Plugin.LiveGrace.Value, 0.1f, 0.8f),
             DriftFactor = Plugin.DriftFactor.Value, TrafficGrace = Plugin.TrafficGrace.Value,
             ExitWeight = Plugin.ExitWeight.Value, CleanBonus = Plugin.CleanBonus.Value, GripBonus = Plugin.GripBonus.Value,
             CoastPerSecond = Plugin.CoastPerSecond.Value, CoastFloor = Plugin.CoastFloor.Value,
@@ -199,7 +208,8 @@ namespace RacingLine
         /// <summary>One frame of scoring: read the player, smooth the inputs, step the scorer, pay ticks and corner bonuses.</summary>
         private void Score()
         {
-            if (!GameApi.ReadPlayer(ref _player)) { _lastHits = -1; _lastNearMisses = -1; _heading = float.NaN; return; }
+            if (!GameApi.ReadPlayer(ref _player)) { _lastHits = -1; _lastNearMisses = -1; _heading = float.NaN; CloseLive(true); return; }
+            if (_player.LevelEnded) CloseLive(true);   // the game's FinishLevel already banked the temporary score
             _playerValid = true;
             float dt = Time.deltaTime;   // game time: 0 while paused, so nothing scores
             if (dt <= 0f) return;
@@ -253,16 +263,58 @@ namespace RacingLine
             });
 
             bool native = GameApi.NativeActive && !_nativeOff;
-            if (r.Tick > 0 && native) { _pendingTick = r.Tick; Guard(ref _nativeOff, "native category", _awardTick); }
+            if (native) { _pendingStep = r; Guard(ref _nativeOff, "native category", _liveStep); _pendingStep = default; }
+            else CloseLive(true);   // native scoring went away mid-action: never leave the game's action open
             var c = r.Corner;
             if (c == null) return;
-            if (native) { _pendingCorner = c; Guard(ref _nativeOff, "native category", _payCorner); _pendingCorner = null; }
             _lastResult = $"corner {c.Index + 1}{c.Type}: {c.Label} +{c.Total:0}{(native ? "" : " (display only)")}";
             _lastResultUntil = Time.unscaledTime + 4f;
+            _hudGrade = c.Grade; _hudGrip = c.Grip; _hudGradeUntil = Time.unscaledTime + 4f;
             if (Plugin.LogCorners.Value)
                 Plugin.Log.LogInfo($"[RacingLine] corner {c.Index + 1}{c.Type}: {c.Grade ?? "-"}{(c.Grip ? " grip" : " drifted")}{(c.Clean ? "" : " hit")}{(c.TrafficShifted ? " traffic" : "")} q {c.MeanQ:0.00} " +
                                    $"exit {c.Exit:0.00} full-throttle {(float.IsNaN(c.SecondsToFullThrottle) ? "never" : c.SecondsToFullThrottle.ToString("0.0") + " s")} " +
-                                   $"coast {c.CoastAfterApex:0.0} s -> {c.Total:0} pts (bonus {c.Bonus:0}), units {c.Units:0.0}, streak x{_scorer.StreakMultiplier:0.00}, pace {_scorer.Pace:0.00}");
+                                   $"coast {c.CoastAfterApex:0.0} s -> {c.Total:0} pts (all live), units {c.Units:0.0}, streak x{_scorer.StreakMultiplier:0.00}, pace {_scorer.Pace:0.00}");
+        }
+
+        /// <summary>
+        /// Feeds one frame into the game's live action: begin when points start flowing, add them every frame, end it
+        /// (into the combo) when the corner zone ends or the line is lost for LiveGrace, cancel it on a crash.
+        /// If the game ended it itself (combo failed), the next points start a new one.
+        /// </summary>
+        private void LiveStep()
+        {
+            var r = _pendingStep;
+            if (_liveOpen && !GameApi.LiveRunning()) _liveOpen = false;
+            if (r.Lost && _liveOpen) { GameApi.EndLive(false); _liveOpen = false; }
+            if (r.Live > 0 && !_player.LevelEnded)
+            {
+                if (!_liveOpen)
+                {
+                    // the game's activation (counters, activation bonus) once per corner, not again after a LiveGrace gap
+                    var corner = (_scorer, _scorer?.CornersDone ?? -1);
+                    bool activate = !corner.Equals(_activatedCorner);
+                    _activatedCorner = corner;
+                    GameApi.BeginLive(activate);
+                    _liveOpen = GameApi.LiveRunning();
+                    if (_liveOpen) _liveActions++;
+                }
+                if (_liveOpen) GameApi.AddLive(r.Live);
+            }
+            if (!r.Open && _liveOpen) { GameApi.EndLive(true); _liveOpen = false; }
+            if (r.Corner != null && r.Corner.Units > 0) GameApi.AddCoinUnits(r.Corner.Units);
+        }
+
+        /// <summary>Ends a running live action (completed = banked into the combo). Never throws, never counts as a fault.</summary>
+        private void CloseLive(bool completed)
+        {
+            bool open = _liveOpen;
+            _liveOpen = false;
+            try
+            {
+                // also an action we didn't record as open (BeginLive threw half-way): ask the game
+                if (open || (GameApi.ScoreOk && GameApi.NativeActive && GameApi.LiveRunning())) GameApi.EndLive(completed);
+            }
+            catch { /* the level is going away */ }
         }
 
         /// <summary>One traffic snapshot (every 0.1 s): the cars near the player, then the traffic-aware line around them.</summary>
@@ -312,6 +364,13 @@ namespace RacingLine
                 _trafficLoggedFor = _scorer;
                 Plugin.Log.LogInfo($"[RacingLine] traffic: line shifted in {_scorer.TrafficCorners} of {_scorer.CornersDone} corners, {_traffic.CleanPasses} clean passes{(_trafficOff ? " (traffic line switched off after an error)" : "")}");
             }
+            if (_scorer != null && !ReferenceEquals(_scorer, _liveLoggedFor))
+            {
+                _liveLoggedFor = _scorer;
+                Plugin.Log.LogInfo($"[RacingLine] live scoring: {_liveActions} live actions, {_scorer.TotalPoints:0} pts counted live ({(counts ? $"game total {GameApi.NativeScore():0}, includes card multipliers" : "display mode")}); " +
+                                   $"{_scorer.CornersDone} corners: gold {_scorer.Gold}, silver {_scorer.Silver}, bronze {_scorer.Bronze}, grip {_scorer.GripCorners}");
+                _liveActions = 0;
+            }
             return new GameApi.ResultsData
             {
                 Amount = $"{(int)(t / 60):00}:{(int)(t % 60):00}",
@@ -358,6 +417,7 @@ namespace RacingLine
             if (!GameApi.RefreshPath(out IntPtr ptr, out float length))
             {
                 if (_line != null || _builder != null) Plugin.Log.LogInfo("[RacingLine] path gone (menu or loading): line dropped");
+                CloseLive(true);
                 _line = null; _builder = null; _watchPtr = IntPtr.Zero; _failedPtr = IntPtr.Zero;
                 // _scorer is kept: its totals feed the results row, which opens after the race
                 _status = "waiting for a run";
@@ -367,6 +427,8 @@ namespace RacingLine
             if (ptr != _watchPtr)
             {
                 // a new run: whatever was built or building belongs to the old path, drop it before anything else
+                CloseLive(true);
+                _liveActions = 0;   // a race quit before its results screen doesn't carry its count over
                 _builder = null; _line = null; _scorer = null; _nearest = -1; _lastHits = -1;
                 _watchPtr = ptr;
                 Plugin.Log.LogInfo($"[RacingLine] new path: {length:0} m");
@@ -395,20 +457,122 @@ namespace RacingLine
             _status = _line != null ? "line ready, rebuilding for the longer path" : "building line";
         }
 
+        // ------------------------------------------------------------------ the line on the road + the HUD card
+
+        private static readonly Color PaceGo = new Color(0.2f, 1f, 0.45f, 0.85f);
+        private static readonly Color PaceLift = new Color(1f, 0.82f, 0.15f, 0.9f);
+        private static readonly Color PaceBrake = new Color(1f, 0.18f, 0.12f, 0.92f);
+        private static readonly Color Detour = new Color(1f, 0.55f, 0.1f, 0.9f);
+        private static readonly Color NoWay = new Color(1f, 1f, 1f, 0.12f);
+
+        /// <summary>After the car has moved this frame: lay the ground line and update the card (or hide both).</summary>
+        private void LateUpdate()
+        {
+            if (_broken || _visualsOff) return;
+            bool show = Plugin.Enabled.Value && Plugin.ShowLine.Value && _line != null;
+            if (!show && !_visualsTried) return;   // nothing created yet, nothing to hide
+            using var perf = RogueShared.Perf.Scope("RacingLine.Visuals");
+            try
+            {
+                if (!_visualsTried)
+                {
+                    _visualsTried = true;
+                    _ground = GroundLine.Create();
+                    _hud = LineHud.Create();
+                }
+                if (!show) { _ground?.Hide(); _hud?.SetVisible(false); return; }
+                DrawGround();
+                if (_hud != null && _hud.Ok)
+                {
+                    var sc = _scorer;
+                    _hud.SetVisible(sc != null);
+                    if (sc != null)
+                    {
+                        bool recent = Time.unscaledTime < _hudGradeUntil;
+                        _hud.Show(sc.InCorner ? sc.CornerPoints : sc.TotalPoints, sc.InCorner, recent ? _hudGrade : null, _hudGrip,
+                                  sc.StreakMultiplier, sc.LastSigned, Plugin.LineFull.Value, Mathf.Max(Plugin.LineZero.Value, Plugin.LineFull.Value + 0.5f));
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                _visualsOff = true;
+                Plugin.Log.LogWarning($"[RacingLine] ground line / HUD card switched off for this session after an error (dots stay): {e.Message}");
+                DestroyVisuals();
+                Fault(e);
+            }
+        }
+
+        private void DrawGround()
+        {
+            var g = _ground;
+            var line = _line;
+            if (g == null || !g.Ok || line == null) return;
+            float now = Time.unscaledTime;
+            if (now >= _nextCamFetch || _cam == null) { _nextCamFetch = now + 2f; _cam = Camera.main; }
+            // start just ahead of the car: from the player's own road distance when known, else nearest to the camera
+            int from;
+            if (_playerValid) from = Mathf.Clamp(Mathf.FloorToInt(_player.Distance / line.Step), 0, line.N - 1);
+            else if (_cam != null) from = Nearest(line, _cam.transform.position);
+            else from = -1;
+            if (from < 0) { g.Hide(); return; }
+            int start = Mathf.Min(line.N - 1, from + 1);
+            int count = Mathf.Min(line.N - start, Mathf.Min(GroundLine.MaxSamples, Mathf.CeilToInt(Mathf.Clamp(Plugin.DrawAhead.Value, 20f, 400f) / line.Step)));
+            var traffic = _traffic.IsFor(line) ? _traffic : null;
+            var sc = _scorer;
+            float v = _playerValid ? _player.Speed : float.NaN;
+            float brake = Mathf.Max(1f, Plugin.BrakeDecel.Value);
+            for (int k = 0; k < count; k++)
+            {
+                int i = start + k;
+                float along = i * line.Step;
+                float dev = traffic != null ? traffic.Deviation(along) : 0f;
+                g.Offset[k] = line.E[i] + dev;
+                Color c;
+                if (traffic != null && traffic.IsBlocked(along)) c = NoWay;
+                else
+                {
+                    // what to do at this point at the current speed: can you slow to its reference speed in the distance left?
+                    float vr = sc != null ? sc.RefSpeed(i) : float.NaN;
+                    if (float.IsNaN(vr) || float.IsNaN(v)) c = PaceGo;
+                    else
+                    {
+                        float dist = Mathf.Max(3f, (i - from) * line.Step);
+                        float need = (v * v - vr * vr) / (2f * dist) / brake;   // fraction of full braking needed
+                        c = need < 0.3f ? PaceGo
+                          : need < 0.65f ? Color.Lerp(PaceGo, PaceLift, (need - 0.3f) / 0.35f)
+                          : Color.Lerp(PaceLift, PaceBrake, Mathf.Clamp01((need - 0.65f) / 0.35f));
+                    }
+                    if (Mathf.Abs(dev) > 0.05f) c = Color.Lerp(c, Detour, 0.65f);
+                }
+                g.Tint[k] = c;
+            }
+            g.Commit(line, start, count, Mathf.Clamp(Plugin.LineWidth.Value, 0.3f, 3f));
+        }
+
+        private void DestroyVisuals()
+        {
+            try { _ground?.Destroy(); } catch { /* scene takes it */ }
+            try { _hud?.Destroy(); } catch { /* scene takes it */ }
+            _ground = null; _hud = null;
+        }
+
         private void OnGUI()
         {
             if (_broken || !Plugin.Enabled.Value || !Plugin.ShowLine.Value) return;
             if (Event.current == null || Event.current.type != EventType.Repaint) return;
+            bool ground = _ground != null && _ground.Ok && !_visualsOff;
+            if (ground && !Plugin.DebugText.Value) return;   // the line is on the road and the card shows the numbers
             using var perf = RogueShared.Perf.Scope("RacingLine.OnGUI");
-            try { Draw(); }
+            try { Draw(!ground); }
             catch (Exception e) { Fault(e); }
         }
 
-        private void Draw()
+        private void Draw(bool dots)
         {
             var line = _line;
             var cam = Camera.main;
-            if (line != null && cam != null)
+            if (dots && line != null && cam != null)
             {
                 int idx = Nearest(line, cam.transform.position);
                 if (idx >= 0)
@@ -505,6 +669,7 @@ namespace RacingLine
             {
                 off = true;
                 Plugin.Log.LogWarning($"[RacingLine] {feature} switched off for this session after an error: {e.Message}");
+                if (off && (feature == "native category" || feature == "scoring")) CloseLive(true);   // never leave the game's live action open
                 Fault(e);
             }
         }
@@ -517,6 +682,8 @@ namespace RacingLine
             if (_errors.Count >= 5)
             {
                 _broken = true;
+                CloseLive(true);
+                DestroyVisuals();
                 _line = null; _builder = null; _scorer = null;   // a results row still showing is removed once the screen closes
                 Plugin.Log.LogError($"[RacingLine] switched off for this session after repeated errors; the game is unaffected. Last error: {e}");
             }
@@ -532,7 +699,10 @@ namespace RacingLine
 
         private void OnDestroy()
         {
+            CloseLive(true);
+            try { LineShare.Sync(null, null); } catch { /* shutting down */ }
             try { Icons.Destroy(); } catch { /* shutting down: the scene takes our row with it */ }
+            DestroyVisuals();
         }
     }
 }

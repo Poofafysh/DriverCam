@@ -2,8 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
-    <AssemblyName>RacingLine</AssemblyName>
-    <RootNamespace>RacingLine</RootNamespace>
+    <AssemblyName>EngineAudio</AssemblyName>
+    <RootNamespace>EngineAudio</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -37,23 +37,15 @@
     <Reference Include="Assembly-CSharp"><HintPath>$(GameDir)\BepInEx\interop\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Unity.InputSystem"><HintPath>$(GameDir)\BepInEx\interop\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AudioModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.AudioModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Unity.TextMeshPro"><HintPath>$(GameDir)\BepInEx\interop\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="UnityEngine.UIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="UnityEngine.UI"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Mirror"><HintPath>$(GameDir)\BepInEx\interop\Mirror.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.InputSystem"><HintPath>$(GameDir)\BepInEx\interop\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
   <ItemGroup>
-    <!-- shared timing helper (each plugin compiles its own copy; data is shared at runtime through AppDomain data) -->
+    <!-- shared timing helper (TrafficDensity's [Perf] overlay) -->
     <Compile Include="..\Shared\Perf.cs" Link="Perf.cs" />
-    <!-- shared world-effect materials and HUD toolkit (ground line, HUD card) -->
-    <Compile Include="..\Shared\Fx.cs" Link="Fx.cs" />
-    <Compile Include="..\Shared\UiKit.cs" Link="UiKit.cs" />
   </ItemGroup>
 
   <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -p:SkipDeploy=true skips it. -->

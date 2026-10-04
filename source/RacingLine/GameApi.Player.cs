@@ -12,7 +12,7 @@ namespace RacingLine
         public float Distance, Offset, Speed, TopSpeed;
         public float Vx, Vz;            // horizontal velocity (for the car's own path curvature)
         public float Throttle, Brake, Steer;
-        public bool Grounded, InControl, Drifting;
+        public bool Grounded, InControl, Drifting, LevelEnded;
         public int Hits;                // the game's own collision count (-1 = unknown)
         public int NearMisses;          // the game's own near-miss count (-1 = unknown)
     }
@@ -60,7 +60,8 @@ namespace RacingLine
             p.Throttle = input.Throttle;
             p.Brake = input.BrakeInput;
             p.Steer = input.TurnInput;
-            p.InControl = !veh.LevelWasEnded && input.CanControl && input.CanTakeInput && !veh.WaitingFirstInput;
+            p.LevelEnded = veh.LevelWasEnded;
+            p.InControl = !p.LevelEnded && input.CanControl && input.CanTakeInput && !veh.WaitingFirstInput;
             Vector3 v = rb.linearVelocity;
             p.Vx = v.x; p.Vz = v.z;
 

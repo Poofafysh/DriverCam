@@ -41,6 +41,10 @@
     <Reference Include="Unity.InputSystem"><HintPath>$(GameDir)\BepInEx\interop\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
     <!-- TextAnchor (centred labels in the lead bar and toasts) -->
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <!-- uGUI pursuit HUD (Canvas, Image, TextMeshPro) -->
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(GameDir)\BepInEx\interop\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Mirror"><HintPath>$(GameDir)\BepInEx\interop\Mirror.dll</HintPath><Private>false</Private></Reference>
@@ -49,11 +53,17 @@
   <ItemGroup>
     <!-- shared timing helper (each plugin compiles its own copy; data is shared at runtime through AppDomain data) -->
     <Compile Include="..\Shared\Perf.cs" Link="Perf.cs" />
+    <!-- shared world-effect materials and HUD toolkit (halos, pursuit HUD) -->
+    <Compile Include="..\Shared\Fx.cs" Link="Fx.cs" />
+    <Compile Include="..\Shared\UiKit.cs" Link="UiKit.cs" />
   </ItemGroup>
 
   <!-- Copy the built plugin into the game. Close the game first: BepInEx locks loaded plugin DLLs. -p:SkipDeploy=true skips it. -->
   <Target Name="DeployToGame" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true'">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\BepInEx\plugins" ContinueOnError="true" />
+    <!-- the plugin's own police car models (built by Assets/models/police_models.py) and their door decal -->
+    <ItemGroup><PoliceModel Include="Assets\models\*.pcm;Assets\models\police_decal.png" /></ItemGroup>
+    <Copy SourceFiles="@(PoliceModel)" DestinationFolder="$(GameDir)\BepInEx\plugins\Police" ContinueOnError="true" />
   </Target>
 
 </Project>

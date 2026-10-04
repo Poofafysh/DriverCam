@@ -68,6 +68,7 @@ namespace Police
             {
                 var car = cars[i];
                 if (car == null || exclude.Contains(car.Pointer) || !car.IsActive) continue;
+                if (Daredevils.Owned.Contains(car.Pointer) || DaredevilOk && IsDaredevil(car)) continue;   // daredevils are rivals, never patrols
                 var pf = car.PathFollower;
                 if (pf == null || pf.WasHit) continue;
                 float ahead = car.AvoidanceRoadDistance - playerDist;
@@ -101,13 +102,51 @@ namespace Police
             return true;
         }
 
-        /// <summary>The path follower's rubber-banding switch and MaxSpeed (m/s).</summary>
+        /// <summary>
+        /// The chase values of a path follower: rubber-banding switch, MaxSpeed (m/s), speedSmoothness (the SmoothDamp time
+        /// HandleSpeed uses to reach TargetSpeed: lower = quicker acceleration) and behindDistanceDespawn (how far behind
+        /// the player HandleDistanceFromPlayer returns it to the pool). All serialized fields of the pooled car: always
+        /// captured first and given back (RestoreChase).
+        /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static void ReadChase(MonoBehaviour pfObj, out bool rubberBanding, out float maxSpeed)
+        internal static void ReadChase(MonoBehaviour pfObj, out bool rubberBanding, out float maxSpeed, out float smoothness, out float behindDespawn)
         {
             var pf = (AIPathFollower)pfObj;
             rubberBanding = pf.rubberBandingEnabled;
             maxSpeed = pf.MaxSpeed;
+            smoothness = pf.speedSmoothness;
+            behindDespawn = pf.behindDistanceDespawn;
+        }
+
+        /// <summary>
+        /// A unit joining a chase launches: its current Speed is raised to at least <paramref name="speed"/> (m/s, capped by
+        /// its chase MaxSpeed), so it doesn't crawl up from traffic pace. Speed is the follower's running state (the game
+        /// smooth-damps it towards TargetSpeed every frame and resets it on spawn), not a setting, so nothing to restore.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void Launch(MonoBehaviour pfObj, float speed)
+        {
+            var pf = (AIPathFollower)pfObj;
+            float v = Mathf.Min(speed, pf.MaxSpeed);
+            if (!float.IsNaN(v) && v > pf.Speed) pf.Speed = v;
+        }
+
+        /// <summary>Writes speedSmoothness / behindDistanceDespawn (NaN = leave as is).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void WriteChaseExtras(MonoBehaviour pfObj, float smoothness, float behindDespawn)
+        {
+            var pf = (AIPathFollower)pfObj;
+            if (!float.IsNaN(smoothness) && pf.speedSmoothness != smoothness) pf.speedSmoothness = smoothness;
+            if (!float.IsNaN(behindDespawn) && pf.behindDistanceDespawn != behindDespawn) pf.behindDistanceDespawn = behindDespawn;
+        }
+
+        /// <summary>The car's box collider centre and size in car space (zero size if none).</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static void BoxOf(MonoBehaviour car, out Vector3 centre, out Vector3 size)
+        {
+            var box = ((AIVehicleController)car).VehicleCollider;
+            if (box == null) { centre = Vector3.zero; size = Vector3.zero; return; }
+            centre = box.center; size = box.size;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

@@ -5,40 +5,50 @@ using UnityEngine.Rendering;
 namespace Police
 {
     /// <summary>
-    /// A patrol car's lightbar: two small cubes (red, blue) and two point lights, all created and owned by us.
-    /// Never parented to the car: Place() moves them onto the car's roof every LateUpdate, so a pooled car that gets
-    /// reused can never carry our objects along. Each cube's collider is disabled and destroyed at once (physics is
-    /// unaffected), each cube gets its own Material copy (destroyed with it). Unity APIs used are all in dump.cs:
-    /// GameObject.CreatePrimitive, GetComponent/AddComponent, Collider.enabled, Renderer.sharedMaterial /
-    /// shadowCastingMode / receiveShadows / enabled, new Material(Material), Material.HasProperty/SetColor(int),
-    /// Shader.PropertyToID, Light.type/color/intensity/range/shadows/enabled, Transform.position/rotation/localScale,
-    /// Object.Destroy.
+    /// A patrol car's lightbar, all created and owned by us: a black base bar, a red and a blue lens, a soft glow halo
+    /// over each lens (an additive, camera-facing quad: reads as a real light from far away and at night) and two point
+    /// lights. Never parented to the car: Place() moves it onto the roof every LateUpdate, so a pooled car that gets
+    /// reused can never carry our objects along. Colliders of the primitives are disabled and destroyed at once.
+    /// Materials: lenses / base from "Universal Render Pipeline/Unlit" (always bright, ignores scene light), halos from
+    /// RogueShared.Fx.Transparent (additive). Shared by every lightbar, created once, destroyed by DestroyShared().
+    /// Unity APIs used are all in dump.cs: GameObject.CreatePrimitive, Shader.Find, new Material(Shader), SetColor(string),
+    /// Light.type/color/intensity/range/shadows/enabled, Renderer.sharedMaterial/enabled/shadowCastingMode, Transform pose.
     /// </summary>
     internal sealed class Lightbar
     {
         internal enum Look { Idle, FlashRed, FlashBlue, Off }
 
-        private static readonly Color Red = new Color(1f, 0.08f, 0.06f), Blue = new Color(0.1f, 0.3f, 1f);
-        private static readonly Color RedDim = new Color(0.35f, 0.03f, 0.03f), BlueDim = new Color(0.03f, 0.08f, 0.35f);
-        private static readonly Vector3 CubeSize = new Vector3(0.45f, 0.14f, 0.28f);
+        private static readonly Color Red = new Color(1f, 0.06f, 0.05f), Blue = new Color(0.12f, 0.32f, 1f);
+        private static readonly Color RedDim = new Color(0.35f, 0.03f, 0.03f), BlueDim = new Color(0.03f, 0.07f, 0.35f);
 
-        private static int s_colorId = -1;        // _BaseColor (URP Lit) or _Color (built-in), chosen once
-        private static int s_emissionId = -1;
-        private static bool s_checked, s_noColor;
+        // shared materials (one set for every lightbar)
+        private static Material s_base, s_redOn, s_redOff, s_blueOn, s_blueOff, s_haloRed, s_haloBlue;
+        private static Texture2D s_glow;
+        private static bool s_made;
+        private static string s_shaderName = "?";
 
-        private GameObject _redGo, _blueGo;
-        private Transform _redT, _blueT;
-        private Material _redMat, _blueMat;
+        private GameObject _baseGo, _redGo, _blueGo, _redHalo, _blueHalo;
+        private Transform _baseT, _redT, _blueT, _redHaloT, _blueHaloT;
+        private Renderer _redR, _blueR, _redHaloR, _blueHaloR;
         private Light _redLight, _blueLight;
         private Look _look = (Look)(-1);
 
         internal static Lightbar Create()
         {
+            MakeShared();
             var bar = new Lightbar();
             try
             {
-                bar.MakeCube(true);
-                bar.MakeCube(false);
+                bar._baseGo = Part("Police.Lightbar.Base", PrimitiveType.Cube, new Vector3(1.0f, 0.07f, 0.26f), s_base, out bar._baseT, out _);
+                bar._redGo = Part("Police.Lightbar.Red", PrimitiveType.Cube, new Vector3(0.42f, 0.11f, 0.22f), s_redOff, out bar._redT, out bar._redR);
+                bar._blueGo = Part("Police.Lightbar.Blue", PrimitiveType.Cube, new Vector3(0.42f, 0.11f, 0.22f), s_blueOff, out bar._blueT, out bar._blueR);
+                if (s_haloRed != null)
+                {
+                    bar._redHalo = Part("Police.Lightbar.HaloRed", PrimitiveType.Quad, new Vector3(2.4f, 2.4f, 1f), s_haloRed, out bar._redHaloT, out bar._redHaloR);
+                    bar._blueHalo = Part("Police.Lightbar.HaloBlue", PrimitiveType.Quad, new Vector3(2.4f, 2.4f, 1f), s_haloBlue, out bar._blueHaloT, out bar._blueHaloR);
+                }
+                bar._redLight = MakeLight(bar._redGo, Red);
+                bar._blueLight = MakeLight(bar._blueGo, Blue);
                 bar.Show(Look.Idle);
                 return bar;
             }
@@ -49,130 +59,129 @@ namespace Police
             }
         }
 
-        private void MakeCube(bool red)
+        private static GameObject Part(string name, PrimitiveType type, Vector3 size, Material mat, out Transform t, out Renderer r)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            if (red) _redGo = go; else _blueGo = go;   // tracked before anything else can throw
-            go.name = red ? "Police.Lightbar.Red" : "Police.Lightbar.Blue";
+            var go = GameObject.CreatePrimitive(type);
+            go.name = name;
             var col = go.GetComponent<Collider>();
             if (col != null) { col.enabled = false; UnityEngine.Object.Destroy(col); }
-            var t = go.transform;
-            t.localScale = CubeSize;
+            t = go.transform;
+            t.localScale = size;
             t.position = new Vector3(0f, -1000f, 0f);   // out of sight until the first Place()
-
-            var r = go.GetComponent<Renderer>();
-            Material mat = null;
+            r = go.GetComponent<Renderer>();
             if (r != null)
             {
                 r.shadowCastingMode = ShadowCastingMode.Off;
                 r.receiveShadows = false;
-                // CreatePrimitive's default material uses a built-in shader this URP build doesn't ship (it renders as
-                // Hidden/InternalErrorShader), so build our own from a URP shader the game itself uses
-                var shader = PickShader();
-                var src = r.sharedMaterial;
-                if (shader != null) mat = new Material(shader);
-                else if (src != null) mat = new Material(src);
-                if (mat != null)
-                {
-                    if (s_emissionKeyword) mat.EnableKeyword("_EMISSION");
-                    r.sharedMaterial = mat;
-                    CheckShader(mat);
-                }
+                if (mat != null) r.sharedMaterial = mat;
             }
+            return go;
+        }
 
-            var light = go.AddComponent<Light>();
+        private static Light MakeLight(GameObject host, Color c)
+        {
+            var light = host.AddComponent<Light>();
             light.type = LightType.Point;
-            light.color = red ? Red : Blue;
-            light.range = 9f;
+            light.color = c;
+            light.range = 10f;
             light.intensity = 0f;
             light.shadows = LightShadows.None;
             light.enabled = false;
-
-            if (red) { _redT = t; _redMat = mat; _redLight = light; }
-            else { _blueT = t; _blueMat = mat; _blueLight = light; }
+            return light;
         }
 
-        private static Shader s_shader;
-        private static bool s_shaderSearched, s_emissionKeyword;
-
-        /// <summary>
-        /// Once: an unlit URP shader if the build has one (always bright, ignores scene lighting), else URP Lit (used by
-        /// hundreds of the game's own materials) with emission on. Null = keep the primitive's material.
-        /// </summary>
-        private static Shader PickShader()
+        /// <summary>Once: the shared materials. Missing shaders leave the primitives' default look (lights still flash).</summary>
+        private static void MakeShared()
         {
-            if (s_shaderSearched) return s_shader;
-            s_shaderSearched = true;
-            foreach (var name in new[] { "Universal Render Pipeline/Unlit", "Universal Render Pipeline/Particles/Unlit", "Universal Render Pipeline/Lit" })
+            if (s_made) return;
+            s_made = true;
+            var sh = Shader.Find("Universal Render Pipeline/Unlit");
+            if (sh == null) sh = Shader.Find("Universal Render Pipeline/Lit");   // Unity null: == only, never ??
+            if (sh != null)
             {
-                var sh = Shader.Find(name);
-                if (sh != null) { s_shader = sh; s_emissionKeyword = name.EndsWith("/Lit"); break; }
+                s_shaderName = sh.name;
+                s_base = Solid(sh, new Color(0.03f, 0.03f, 0.035f));
+                s_redOn = Solid(sh, Red); s_redOff = Solid(sh, RedDim);
+                s_blueOn = Solid(sh, Blue); s_blueOff = Solid(sh, BlueDim);
             }
-            return s_shader;
+            try
+            {
+                s_glow = RogueShared.Fx.GlowTexture(64);
+                s_haloRed = RogueShared.Fx.Transparent("Police.Halo.Red", s_glow, true, out _);
+                s_haloBlue = RogueShared.Fx.Transparent("Police.Halo.Blue", s_glow, true, out bool transparent);
+                if (s_haloRed != null) s_haloRed.SetColor("_BaseColor", new Color(1f, 0.15f, 0.1f, 0.9f));
+                if (s_haloBlue != null) s_haloBlue.SetColor("_BaseColor", new Color(0.2f, 0.4f, 1f, 0.9f));
+                if (!transparent) { RogueShared.Fx.Kill(s_haloRed); RogueShared.Fx.Kill(s_haloBlue); s_haloRed = s_haloBlue = null; }   // an opaque square would look wrong
+            }
+            catch (Exception e) { Plugin.Log.LogWarning($"[Police] lightbar halos off: {e.Message}"); s_haloRed = s_haloBlue = null; }
+            Plugin.Log.LogInfo($"[Police] lightbar materials: shader '{s_shaderName}', halos {(s_haloRed != null ? "on" : "off")}");
         }
 
-        /// <summary>Once: which colour property the shader has. Logged, so a pink / uncoloured cube can be explained.</summary>
-        private static void CheckShader(Material mat)
+        private static Material Solid(Shader sh, Color c)
         {
-            if (s_checked) return;
-            s_checked = true;
-            string shader = "?";
-            try { var sh = mat.shader; if (sh != null) shader = sh.name; } catch { /* name only for the log */ }
-            int baseColor = Shader.PropertyToID("_BaseColor"), color = Shader.PropertyToID("_Color");
-            if (mat.HasProperty(baseColor)) s_colorId = baseColor;
-            else if (mat.HasProperty(color)) s_colorId = color;
-            else s_noColor = true;
-            int emission = Shader.PropertyToID("_EmissionColor");
-            if (mat.HasProperty(emission)) s_emissionId = emission;
-            Plugin.Log.LogInfo($"[Police] lightbar material: shader '{shader}', colour {(s_noColor ? "none (cubes keep the default colour, lights still flash)" : "ok")}" +
-                               $"{(s_emissionId >= 0 ? ", emission property present" : "")}");
+            var m = new Material(sh);
+            m.SetColor("_BaseColor", c);
+            if (sh.name.EndsWith("/Lit")) { m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", c); }
+            return m;
         }
 
-        /// <summary>Moves the cubes and lights onto the roof: top centre of the car, offset sideways by +-0.35 m.</summary>
-        internal void Place(Vector3 roof, Quaternion rotation, Vector3 right)
+        internal static void DestroyShared()
         {
-            if (_redT != null) { _redT.position = roof - right * 0.35f; _redT.rotation = rotation; }
-            if (_blueT != null) { _blueT.position = roof + right * 0.35f; _blueT.rotation = rotation; }
+            foreach (var m in new[] { s_base, s_redOn, s_redOff, s_blueOn, s_blueOff, s_haloRed, s_haloBlue }) RogueShared.Fx.Kill(m);
+            RogueShared.Fx.Kill(s_glow);
+            s_base = s_redOn = s_redOff = s_blueOn = s_blueOff = s_haloRed = s_haloBlue = null; s_glow = null;
+            s_made = false;
         }
 
-        /// <summary>Idle: cubes dim, lights off. Flash: one side bright with its light on. Off: both dark (ESCAPED / released).</summary>
+        /// <summary>Onto the roof: base centred, lenses offset sideways by +-0.25 m; halos face the camera.</summary>
+        internal void Place(Vector3 roof, Quaternion rotation, Vector3 right, Vector3 up, Vector3 camPos)
+        {
+            if (_baseT != null) _baseT.SetPositionAndRotation(roof + up * 0.035f, rotation);
+            Vector3 lensY = up * 0.11f;
+            Vector3 redPos = roof + lensY - right * 0.25f, bluePos = roof + lensY + right * 0.25f;
+            if (_redT != null) _redT.SetPositionAndRotation(redPos, rotation);
+            if (_blueT != null) _blueT.SetPositionAndRotation(bluePos, rotation);
+            if (_redHaloT != null) Face(_redHaloT, redPos, camPos);
+            if (_blueHaloT != null) Face(_blueHaloT, bluePos, camPos);
+        }
+
+        private static void Face(Transform t, Vector3 pos, Vector3 cam)
+        {
+            Vector3 to = pos - cam;
+            if (to.sqrMagnitude < 1e-4f) return;
+            // a little towards the camera so the car body doesn't cut the halo
+            t.SetPositionAndRotation(pos - to.normalized * 0.4f, Quaternion.LookRotation(to));
+        }
+
+        /// <summary>Idle: dim lenses. Flash: one side bright, its halo and light on. Off: both dark (ESCAPED / released).</summary>
         internal void Show(Look look)
         {
-            if (look == _look) return;   // colours and lights change only when the look changes (4x a second while flashing)
+            if (look == _look) return;   // changes only when the look changes (4x a second while flashing)
             _look = look;
             bool red = look == Look.FlashRed, blue = look == Look.FlashBlue;
-            SetColor(_redMat, red ? Red : look == Look.Off ? Color.black : RedDim, red);
-            SetColor(_blueMat, blue ? Blue : look == Look.Off ? Color.black : BlueDim, blue);
+            if (_redR != null && s_redOn != null) _redR.sharedMaterial = red ? s_redOn : s_redOff;
+            if (_blueR != null && s_blueOn != null) _blueR.sharedMaterial = blue ? s_blueOn : s_blueOff;
+            if (_redHaloR != null) _redHaloR.enabled = red;
+            if (_blueHaloR != null) _blueHaloR.enabled = blue;
             SetLight(_redLight, red);
             SetLight(_blueLight, blue);
-        }
-
-        private static void SetColor(Material mat, Color c, bool glow)
-        {
-            if (mat == null || s_noColor || s_colorId < 0) return;
-            mat.SetColor(s_colorId, c);
-            if (s_emissionId >= 0) mat.SetColor(s_emissionId, glow ? c * 2f : Color.black);
         }
 
         private static void SetLight(Light light, bool on)
         {
             if (light == null) return;
-            light.intensity = on ? 6f : 0f;
+            light.intensity = on ? 7f : 0f;
             light.enabled = on;
         }
 
-        /// <summary>Destroys everything this lightbar created. Safe to call twice and after a scene change (already gone).</summary>
+        /// <summary>Destroys this lightbar's objects. Safe to call twice and after a scene change (already gone).</summary>
         internal void Destroy()
         {
-            Kill(_redMat); Kill(_blueMat);
-            Kill(_redGo); Kill(_blueGo);   // takes the lights (components of the cubes) with them
-            _redMat = _blueMat = null; _redGo = _blueGo = null; _redT = _blueT = null; _redLight = _blueLight = null;
-        }
-
-        private static void Kill(UnityEngine.Object o)
-        {
-            try { if (o != null) UnityEngine.Object.Destroy(o); }
-            catch (Exception e) { Plugin.Log.LogWarning($"[Police] lightbar cleanup: {e.Message}"); }
+            RogueShared.Fx.Kill(_baseGo); RogueShared.Fx.Kill(_redGo); RogueShared.Fx.Kill(_blueGo);
+            RogueShared.Fx.Kill(_redHalo); RogueShared.Fx.Kill(_blueHalo);
+            _baseGo = _redGo = _blueGo = _redHalo = _blueHalo = null;
+            _baseT = _redT = _blueT = _redHaloT = _blueHaloT = null;
+            _redR = _blueR = _redHaloR = _blueHaloR = null; _redLight = _blueLight = null;
         }
     }
 }

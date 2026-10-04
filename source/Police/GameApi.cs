@@ -17,6 +17,8 @@ namespace Police
         public float Lane;          // lane offset in metres (PlayerPathFollower.GetLaneOffset)
         public float Speed;         // m/s (VehicleMovement.CurrentSpeed)
         public float TopSpeed;      // m/s (VehicleMovement.OriginalMaxSpeed)
+        public float MaxNow;        // m/s (VehicleMovement.CurrentMaxSpeed = OriginalMaxSpeed x modifiers + flat: cards, boosts), NaN if unknown
+        public bool Drifting;       // VehicleMovement.Drifting
         public bool LevelEnded;     // VehicleManager.LevelWasEnded
         public int Hits;            // the game's own collision count (-1 = unknown)
         public int NearMisses;      // the game's own near-miss count (-1 = unknown)
@@ -47,10 +49,10 @@ namespace Police
                      && Has(asm, "DefaultAISpawner", missing, "activeAiCars")
                      && Has(asm, "AIVehicleController", missing, "PathFollower", "IsActive", "AvoidanceRoadDistance", "AvoidanceForwardVelocity",
                             "AvoidanceLaneOffset", "VehicleCollider")
-                     && Has(asm, "AIPathFollower", missing, "rubberBandingEnabled", "MaxSpeed", "DistanceTravelled", "WasHit");
+                     && Has(asm, "AIPathFollower", missing, "rubberBandingEnabled", "MaxSpeed", "DistanceTravelled", "WasHit", "speedSmoothness", "behindDistanceDespawn", "Speed");
             PlayerOk = Has(asm, "Game.Runtime.Vehicle.VehicleManager", missing, "Instance", "PlayerPathFollower", "VehicleMovement", "LevelWasEnded")
                     && Has(asm, "Game.Runtime.Vehicle.PlayerPathFollower", missing, "GetDistanceTravelled", "GetLaneOffset")
-                    && Has(asm, "Game.Runtime.Vehicle.VehicleMovement", missing, "CurrentSpeed", "OriginalMaxSpeed");
+                    && Has(asm, "Game.Runtime.Vehicle.VehicleMovement", missing, "CurrentSpeed", "OriginalMaxSpeed", "CurrentMaxSpeed", "Drifting");
             ScoreOk = Has(asm, "Game.Runtime.Manager.LevelScoreManager", missing, "scoreProviderList")
                    && Has(asm, "Game.Runtime.Data.CollisionScoreProviderSO", missing, "TotalHits")
                    && Has(asm, "Game.Runtime.Data.NearMissScoreProviderSO", missing, "TotalNearMiss");
@@ -58,10 +60,12 @@ namespace Police
                    && Has(asm, "Game.Runtime.Manager.TimerManager", missing, "raceTimer", "CountdownMode", "IsTimerPlaying", "RemainingTime")
                    && Has(asm, "Game.Runtime.Systems.Timer.RaceTimer", missing, "RemoveCountdownTime");
             ModeOk = Has(asm, "Game.Runtime.GameState", missing, "IsMultiplayerMode");
+            CheckBoss(asm, missing);
+            CheckDaredevil(asm, missing);
 
-            if (missing.Count == 0) Plugin.Log.LogInfo("[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode");
+            if (missing.Count == 0) Plugin.Log.LogInfo("[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode, boss car models, daredevils");
             else Plugin.Log.LogWarning($"[Police] game check: missing {string.Join(", ", missing)}. Patrols {On(TrafficOk && PlayerOk)}, " +
-                                       $"crash notice + lead bar events {On(ScoreOk)}, caught penalty {On(TimerOk)}, game mode {On(ModeOk)} " +
+                                       $"crash notice + lead bar events {On(ScoreOk)}, caught penalty {On(TimerOk)}, game mode {On(ModeOk)}, boss car looks {On(BossOk && SkinOk)}, daredevils {On(DaredevilOk)} " +
                                        "(without it the plugin assumes multiplayer and stays off).");
         }
 
@@ -113,6 +117,9 @@ namespace Police
             p.Lane = follower.GetLaneOffset();
             p.Speed = move.CurrentSpeed;
             p.TopSpeed = move.OriginalMaxSpeed;
+            float maxNow = move.CurrentMaxSpeed;
+            p.MaxNow = maxNow > 1f && !float.IsNaN(maxNow) && !float.IsInfinity(maxNow) ? maxNow : float.NaN;
+            p.Drifting = move.Drifting;
             p.LevelEnded = veh.LevelWasEnded;
             p.Hits = -1; p.NearMisses = -1;
             if (ScoreOk) ReadScoreCounts(ref p);

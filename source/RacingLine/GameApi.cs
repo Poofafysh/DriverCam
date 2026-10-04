@@ -48,7 +48,8 @@ namespace RacingLine
             ScoreOk = Has(asm, "Game.Runtime.Manager.LevelScoreManager", missing, "scoreProviderList")
                    && Has(asm, "Game.Runtime.Data.AScoreProviderSO", missing, "GetId", "SetId", "Initialize", "AddToScore", "IsBeingPerformed",
                           "scoreName", "scoreHudIcon", "statListIcon", "targetCoinReward", "targetActionValueMinCurvature", "targetActionValueMaxCurvature",
-                          "contributeToCombo", "CurrentScore", "CoinReward")
+                          "contributeToCombo", "CurrentScore", "CoinReward",
+                          "OnScoreBegin", "OnScoreActivated", "AddToTemporaryScore", "TransferTempToComboScore", "CancelTemporaryScore", "OnScoreEnd")
                    && Has(asm, "Game.Runtime.Data.TopSpeedScoreProviderSO", missing, "timeThreshold", "targetSpeedFactor", "scoreMultiplier", "cancelOnCollision", "totalTopSpeedTime")
                    && Has(asm, "Game.Runtime.Data.CollisionScoreProviderSO", missing, "TotalHits")
                    && Has(asm, "Game.Runtime.Data.NearMissScoreProviderSO", missing, "TotalNearMiss")

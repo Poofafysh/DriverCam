@@ -10,7 +10,9 @@ namespace RacingLine
         public float StraightnessGain = 1.3f;
         public float WSpeed = 0.45f, WGrip = 0.25f, WPedal = 0.30f;
         public float Base = 0.22f;                                        // points per metre at q = 1 (tidy race ~6-7k, normal ~2k)
-        public float TickInterval = 0.5f, TickMinQ = 0.3f;                // combo ticks
+        public float QualityPower = 1.5f;                                 // live points use q^1.5: clean driving pulls further ahead
+        public float LiveScale = 1.25f;                                   // keeps totals where v2's whole-corner exit bonus had them
+        public float LiveMinQ = 0.3f, LiveGrace = 0.6f;                   // live counting needs this q; below it for LiveGrace s ends the action
         public float DriftFactor = 0.5f;                                  // running points while drifting
         public float TrafficGrace = 1.5f;                                 // seconds the position term is held after a near miss
         public float ExitWeight = 0.5f, CleanBonus = 1.15f, GripBonus = 2f;
@@ -39,8 +41,7 @@ namespace RacingLine
     {
         public int Index;
         public char Type;
-        public double Bonus;        // paid now, at the exit (running ticks were paid along the way)
-        public double Total;        // everything this corner earned, ticks included
+        public double Total;        // everything this corner earned (all paid live, while it was driven)
         public float MeanQ, Exit, SecondsToFullThrottle, CoastAfterApex;
         public bool Clean, Grip;
         public bool TrafficShifted; // traffic moved (or blocked) the line somewhere in this corner
@@ -49,7 +50,13 @@ namespace RacingLine
         public string Label => $"{(Grade ?? "corner")}{(Grip ? " GRIP LINE" : "")} q {MeanQ:0.00}";
     }
 
-    internal struct StepResult { public double Tick; public CornerResult Corner; }
+    /// <summary>
+    /// One frame's outcome. Live = points earned this frame (already multiplied: streak, pace, grip, clean, exit, coasting),
+    /// counted straight into the live total. Open = the live action should be running (inside a corner zone, driven
+    /// well or within LiveGrace of it). Lost = a collision in this corner: its live points are forfeited (the action is
+    /// cancelled, like the game's own categories on a crash). Corner = the zone just ended (grade, coins, streak; no points).
+    /// </summary>
+    internal struct StepResult { public double Live; public bool Open, Lost; public CornerResult Corner; }
 
     /// <summary>
     /// Racing Line v2 rules, plain .NET (tested outside the game). Every frame in a corner zone gets a quality
@@ -57,9 +64,10 @@ namespace RacingLine
     /// Pos = max(line closeness, path straightness); S = speed vs the reference profile; U = grip used;
     /// P = pedals (1 before the apex: brake straight / lift / light throttle are all fine, because braking while turning
     /// starts a drift in this game; after the apex 0.3 + 0.7 x throttle).
-    /// Running points (Base x q per metre, halved while drifting) are paid as combo ticks every 0.5 s; at the zone exit a
-    /// bonus pays the rest: x(1 + 0.5 x exit) x coasting x clean x grip line. A streak and the run's pace scale everything.
-    /// Nothing is pass/fail.
+    /// Points are LIVE, like the game's own categories: every frame with q >= LiveMinQ earns Base x 1.25 x q^1.5 per metre (halved
+    /// while drifting), multiplied by everything that is true right now: streak x pace x Grip line (no drift yet in this
+    /// corner) x Clean (no hit yet) x exit (after the apex: 1 + ExitWeight x throttle x speed ratio) x coasting. Nothing is
+    /// paid at the end of a corner; the zone exit only grades it (coins, streak). A hit forfeits the corner's live points.
     /// With a TrafficLine attached, "the line" is the traffic-aware line e* (routed around NPC cars), and position counts as
     /// perfect where traffic leaves no free side; without one (or before its first snapshot) it is the global line E.
     /// Inside a detour the full-credit band doesn't reach towards the car: the space it occupies scores like being far off.
@@ -78,8 +86,8 @@ namespace RacingLine
         private int _cur = -1, _nextCorner, _doneUpTo = -1, _streak;
         private float _lastDistance = float.NaN, _time, _paceSum, _paceDist;
         // corner state
-        private double _running, _paid, _tickPending;
-        private float _qDist, _dist, _tickQ, _tickT, _coast, _apexTime, _tFull, _lastSpeed, _graceUntil, _posHeld;
+        private double _cornerPts, _banked;   // _banked: this corner's points already handed to the combo (a LiveGrace gap ended an action)
+        private float _qDist, _dist, _lowQ, _coast, _apexTime, _tFull, _lastSpeed, _graceUntil, _posHeld;
         private bool _apexSeen, _drifted, _hit, _trafficShifted;
 
         /// <summary>The traffic-aware line (set by the Runner); null = score against the global line only.</summary>
@@ -101,6 +109,13 @@ namespace RacingLine
         public float LastP { get; private set; }
         public float LastPos { get; private set; }
         public float LastError { get; private set; }
+        /// <summary>Signed distance from the line last frame, metres (+ = you're right of it); NaN outside corners.</summary>
+        public float LastSigned { get; private set; } = float.NaN;
+        /// <summary>Live points earned in the corner being driven (0 between corners).</summary>
+        public double CornerPoints => _cornerPts;
+        public bool InCorner => _cur >= 0;
+        /// <summary>Reference speed at a sample (m/s), NaN until the speed profile is known.</summary>
+        public float RefSpeed(int sample) => _vref == null || sample < 0 || sample >= _vref.Length ? float.NaN : _vref[sample];
         public float Pace => _paceDist > 1f ? _paceSum / _paceDist : 0.75f;
         public float StreakMultiplier => Math.Min(_cfg.StreakMax, 1f + _cfg.StreakStep * _streak);
         public float PaceMultiplier => _cfg.PaceMin + _cfg.PaceRange * Math.Max(0f, Math.Min(1f, Pace));
@@ -161,7 +176,7 @@ namespace RacingLine
                 while (_nextCorner < _corners.Count && _corners[_nextCorner].ZoneEnd < sample) _nextCorner++;   // skipped past
                 if (_nextCorner < _corners.Count && sample >= _corners[_nextCorner].ZoneStart) Begin(_nextCorner);
             }
-            if (_cur < 0) { _stateInCorner = false; return result; }
+            if (_cur < 0) { _stateInCorner = false; LastSigned = float.NaN; return result; }
 
             var c = _corners[_cur];
             if (sample > c.ZoneEnd) { result.Corner = Finish(c); return result; }
@@ -179,6 +194,7 @@ namespace RacingLine
                 if (blocked || Math.Abs(dev) > TrafficShiftCounts) _trafficShifted = true;
             }
             float err = f.Offset - target;
+            LastSigned = err;
             float d = Math.Abs(err);
             // towards the car from e*, the error climbs from LineFull (just clear) to LineZero (the car's centre line),
             // faded in with the detour: the space the car occupies is never "on the line", whatever LineFull is
@@ -206,7 +222,13 @@ namespace RacingLine
             LastQ = q; LastS = S; LastP = P; LastPos = pos;
 
             if (f.Drifting) _drifted = true;
-            if (f.Hit) _hit = true;
+            if (f.Hit && !_hit)
+            {
+                _hit = true;
+                TotalPoints -= _cornerPts - _banked;   // a crash cancels the live action: its points are lost (banked ones stay)
+                _cornerPts = _banked;
+                result.Lost = true;
+            }
             if (afterApex)
             {
                 if (!_apexSeen) { _apexSeen = true; _apexTime = _time; }
@@ -216,24 +238,21 @@ namespace RacingLine
             _lastSpeed = f.Speed;
             if (pos >= 0.75f) TimeOnLine += f.Dt;
 
-            double pts = _cfg.Base * q * travelled * (f.Drifting ? _cfg.DriftFactor : 1f);
-            _running += pts; _tickPending += pts;
             _qDist += q * travelled; _dist += travelled;
-            _tickQ += q * f.Dt; _tickT += f.Dt;
 
-            // ---- combo tick every TickInterval while the corner is driven well
-            if (_tickT >= _cfg.TickInterval)
+            // ---- live points: everything that is true right now multiplies this frame's points
+            if (q >= _cfg.LiveMinQ)
             {
-                float windowQ = _tickQ / _tickT;
-                if (windowQ >= _cfg.TickMinQ && _tickPending > 0)
-                {
-                    double tick = _tickPending * StreakMultiplier * PaceMultiplier;
-                    _paid += _tickPending; _tickPending = 0;
-                    TotalPoints += tick;
-                    result.Tick = tick;
-                }
-                _tickQ = 0f; _tickT = 0f;
+                _lowQ = 0f;
+                float exit = afterApex ? 1f + _cfg.ExitWeight * Clamp01(f.Throttle) * Clamp01(f.Speed / vref) * c.ExitFactor : 1f;
+                float coast = Math.Max(_cfg.CoastFloor, 1f - _cfg.CoastPerSecond * _coast);
+                double mult = StreakMultiplier * PaceMultiplier * (_drifted ? 1f : _cfg.GripBonus) * (_hit ? 1f : _cfg.CleanBonus) * exit * coast;
+                double pts = _cfg.Base * _cfg.LiveScale * Math.Pow(q, _cfg.QualityPower) * travelled * (f.Drifting ? _cfg.DriftFactor : 1f) * mult;
+                if (pts > 0) { _cornerPts += pts; TotalPoints += pts; result.Live = pts; }
             }
+            else _lowQ += f.Dt;
+            result.Open = _lowQ < _cfg.LiveGrace;
+            if (!result.Open) _banked = _cornerPts;   // the Runner ends (banks) the action now
             _stateInCorner = true; _stateCorner = _cur + 1; _stateType = c.Type; _stateDrifted = _drifted; _stateHit = _hit;   // State formats these on demand
             return result;
         }
@@ -241,8 +260,8 @@ namespace RacingLine
         private void Begin(int index)
         {
             _cur = index;
-            _running = 0; _paid = 0; _tickPending = 0;
-            _qDist = 0; _dist = 0; _tickQ = 0; _tickT = 0; _coast = 0; _apexTime = 0; _tFull = float.NaN; _lastSpeed = 0;
+            _cornerPts = 0; _banked = 0;
+            _qDist = 0; _dist = 0; _lowQ = 0; _coast = 0; _apexTime = 0; _tFull = float.NaN; _lastSpeed = 0;
             _apexSeen = false; _drifted = false; _hit = false; _trafficShifted = false;
         }
 
@@ -259,12 +278,7 @@ namespace RacingLine
             r.Grip = !_drifted;
             r.TrafficShifted = _trafficShifted;
             if (_trafficShifted) TrafficCorners++;
-            float coast = Math.Max(_cfg.CoastFloor, 1f - _cfg.CoastPerSecond * _coast);
-            double total = _running * (1f + _cfg.ExitWeight * r.Exit) * coast * (r.Clean ? _cfg.CleanBonus : 1f) * (r.Grip ? _cfg.GripBonus : 1f);
-            double mult = StreakMultiplier * PaceMultiplier;
-            r.Bonus = Math.Round(Math.Max(0, total - _paid) * mult);
-            r.Total = Math.Round(total * mult);
-            TotalPoints += r.Bonus;
+            r.Total = Math.Round(_cornerPts);   // already paid, live
 
             r.Grade = r.MeanQ >= _cfg.Gold ? "GOLD" : r.MeanQ >= _cfg.Silver ? "SILVER" : r.MeanQ >= _cfg.Bronze ? "BRONZE" : null;
             float units = r.Grade == "GOLD" ? 1f : r.Grade == "SILVER" ? 0.6f : r.Grade == "BRONZE" ? 0.3f : 0f;
@@ -286,7 +300,7 @@ namespace RacingLine
             return r;
         }
 
-        private void Abandon() { _cur = -1; _running = 0; _tickPending = 0; }
+        private void Abandon() { _cur = -1; _cornerPts = 0; _banked = 0; }
 
         private void Resync(float distance)
         {

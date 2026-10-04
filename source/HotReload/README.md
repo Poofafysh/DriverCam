@@ -7,7 +7,7 @@ Current version: **0.1.0**. Players don't need it. It's only for developing plug
 | Plugin | Version | GUID | Hotkeys | What it does |
 |---|---|---|---|---|
 | **HotReload** | 0.1.0 | `rogue.hotreload` | F11 (reload all now) | Loads `IHotModule` DLLs from `BepInEx\hot\` from bytes, reloads them when they change, drives their Update/OnGUI |
-| **CurbFeel** (hot build) | 0.4.0 | `rogue.curbfeel` | F8 / F9 / F10 (unchanged) | `dotnet build -c Release -p:Hot=true` in `source/CurbFeel` builds it as a hot module |
+| **CurbFeel** (hot build) | 0.4.1 | `rogue.curbfeel` | F8 / F9 / F10 (unchanged) | `dotnet build -c Release -p:Hot=true` in `source/CurbFeel` builds it as a hot module |
 
 ## How it works
 

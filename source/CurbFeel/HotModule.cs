@@ -23,7 +23,7 @@ namespace CurbFeel
             Settings.Bind(ctx.Config);
 
             _harmony = new Harmony(ctx.HarmonyId);
-            _harmony.PatchAll(typeof(ScrapePatches));
+            ScrapePatches.Install(_harmony);
             Plugin.Log.LogInfo($"[CurbFeel] start: {CurbFeelCore.StateLine()}");
             Plugin.Log.LogInfo($"CurbFeel {Plugin.Version} loaded as a hot module (load #{ctx.Generation}). " +
                                $"{Settings.ReloadKey.Value} = reload config, {Settings.ToggleKey.Value} = toggle on/off, {Settings.OverlayKey.Value} = status panel.");

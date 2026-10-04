@@ -43,6 +43,11 @@
     <Reference Include="Mirror"><HintPath>$(GameDir)\BepInEx\interop\Mirror.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- shared timing helper (each plugin compiles its own copy; data is shared at runtime through AppDomain data) -->
+    <Compile Include="..\Shared\Perf.cs" Link="Perf.cs" />
+  </ItemGroup>
+
   <!--
     Hot-module build: dotnet build -c Release -p:Hot=true
     Defines HOT (no [BepInPlugin] class, no injected MonoBehaviour; HotModule.cs is the entry point), references the

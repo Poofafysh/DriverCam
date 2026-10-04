@@ -18,14 +18,20 @@ namespace CurbFeel
     {
         private static readonly Dictionary<System.IntPtr, float> LastSoftScrape = new();
         private static VehicleBaseParameters[] _params;
+        private static float _nextParamsSearch;
+        private const float EmptyParamsRetry = 3f;          // seconds between searches while none are loaded
 
-        private static VehicleBaseParameters[] Params()
+        internal static VehicleBaseParameters[] Params()
         {
             if (_params == null || _params.Length == 0 || _params[0] == null)
             {
+                // Resources.FindObjectsOfTypeAll walks every loaded object: when it found nothing, don't repeat it on
+                // every collision, only every few seconds.
+                if (_params != null && _params.Length == 0 && Time.unscaledTime < _nextParamsSearch) return _params;
                 var found = Resources.FindObjectsOfTypeAll<VehicleBaseParameters>();
                 _params = new VehicleBaseParameters[found.Length];
                 for (int i = 0; i < found.Length; i++) _params[i] = found[i];
+                if (_params.Length == 0) _nextParamsSearch = Time.unscaledTime + EmptyParamsRetry;
             }
             return _params;
         }
@@ -33,28 +39,86 @@ namespace CurbFeel
         private struct Saved
         {
             public bool Active;
-            public float[] Graze, GrazeSpeed, HeadOnSpeed, WallPerSec, HeadOn;
+            public float[] Graze, GrazeSpeed, HeadOnSpeed, HeadOn;
+        }
+
+        // ---------------------------------------------------------------- patching
+        private static Harmony _harmony;
+        private static bool _continuousPatched;
+
+        /// <summary>
+        /// Plugin load / hot-module load: patch the per-hit handler (walls and traffic) now, and the continuous wall
+        /// damage tick only once the Scrape feature is enabled (see EnsureContinuousPatch).
+        /// </summary>
+        internal static void Install(Harmony harmony)
+        {
+            _harmony = harmony;
+            _continuousPatched = false;
+            harmony.PatchAll(typeof(ScrapePatches));
+            EnsureContinuousPatch();
+        }
+
+        /// <summary>
+        /// CheckWallContinuousDamage runs constantly while a car touches a wall and only matters to the Scrape feature,
+        /// so it is patched the first time Scrape is enabled (at load with default settings) instead of always. It is
+        /// never unpatched at runtime (only by the hot-module unload): switching Scrape off makes the prefix a no-op,
+        /// exactly as before, and avoids repeated patch/unpatch of a native IL2CPP method. Called every frame; cheap.
+        /// </summary>
+        internal static void EnsureContinuousPatch()
+        {
+            if (_continuousPatched || _harmony == null || !Settings.ScrapeEnabled.Value) return;
+            _continuousPatched = true;                      // one attempt: a failure is logged, not retried every frame
+            try { _harmony.PatchAll(typeof(ContinuousPatches)); }
+            catch (System.Exception e) { Plugin.Log.LogError($"[Scrape] patching CheckWallContinuousDamage failed: {e}"); }
         }
 
         private const int VehicleLayer = 10, RacerLayer = 27;
+
+        // GetComponentInParent results per hit object (GameObject instance ID). The layer is still read on every hit;
+        // only the hierarchy walk is cached (a car's colliders keep their parent, pooled cars included).
+        private static readonly Dictionary<int, bool> IsAiCarCache = new(), IsRacerCache = new();
+        private const int MaxCached = 4096;
 
         /// <summary>Is the other collider a traffic car (or an AI racer when IncludeRacers)?</summary>
         private static bool IsTraffic(GameObject other)
         {
             int layer = other.layer;
             if (layer == VehicleLayer)
-                return other.GetComponentInParent<AIVehicleController>(true) != null || other.GetComponentInParent<NetworkAIVehicle>(true) != null;
+            {
+                int id = other.GetInstanceID();
+                if (!IsAiCarCache.TryGetValue(id, out bool ai))
+                {
+                    ai = other.GetComponentInParent<AIVehicleController>(true) != null || other.GetComponentInParent<NetworkAIVehicle>(true) != null;
+                    if (IsAiCarCache.Count >= MaxCached) IsAiCarCache.Clear();
+                    IsAiCarCache[id] = ai;
+                }
+                return ai;
+            }
             if (layer == RacerLayer && Settings.IncludeRacers.Value)
-                return other.GetComponentInParent<RacerVehicleManager>(true) != null;
+            {
+                int id = other.GetInstanceID();
+                if (!IsRacerCache.TryGetValue(id, out bool racer))
+                {
+                    racer = other.GetComponentInParent<RacerVehicleManager>(true) != null;
+                    if (IsRacerCache.Count >= MaxCached) IsRacerCache.Clear();
+                    IsRacerCache[id] = racer;
+                }
+                return racer;
+            }
             return false;
         }
 
-        /// <summary>Hot-module unload only: forget cached game objects and cooldowns.</summary>
+        /// <summary>Hot-module unload only (after the patches were removed): forget cached game objects and cooldowns.</summary>
         internal static void ClearCaches()
         {
             _params = null;
+            _nextParamsSearch = 0f;
             LastSoftScrape.Clear();
             LastSideSwipe.Clear();
+            IsAiCarCache.Clear();
+            IsRacerCache.Clear();
+            _harmony = null;
+            _continuousPatched = false;
         }
 
         private static bool IsWall(VehicleBaseParameters p, int layer) => p != null && (p.guardrailsLayer.value & (1 << layer)) != 0;
@@ -201,7 +265,21 @@ namespace CurbFeel
             }
         }
 
-        // ---------------------------------------------------------------- continuous contact
+    }
+
+    /// <summary>
+    /// C. Continuous wall contact (CheckWallContinuousDamage). Its own class so it can be patched separately, only once
+    /// the Scrape feature is enabled (ScrapePatches.EnsureContinuousPatch).
+    /// </summary>
+    [HarmonyPatch]
+    internal static class ContinuousPatches
+    {
+        private struct Saved
+        {
+            public bool Active;
+            public float[] WallPerSec;
+        }
+
         [HarmonyPatch(typeof(VehicleDamage), nameof(VehicleDamage.CheckWallContinuousDamage))]
         [HarmonyPrefix]
         private static bool ContinuousPrefix(ref Saved __state)
@@ -210,7 +288,7 @@ namespace CurbFeel
             if (!Settings.Enabled.Value || !Settings.ScrapeEnabled.Value) return true;
             float m = Settings.ContinuousDamageMult.Value;
             if (m <= 0f) return false;
-            var ps = Params();
+            var ps = ScrapePatches.Params();
             __state.Active = true;
             __state.WallPerSec = new float[ps.Length];
             for (int i = 0; i < ps.Length; i++)
@@ -227,7 +305,7 @@ namespace CurbFeel
         private static void ContinuousPostfix(Saved __state)
         {
             if (!__state.Active) return;
-            var ps = Params();
+            var ps = ScrapePatches.Params();
             for (int i = 0; i < ps.Length && i < __state.WallPerSec.Length; i++)
                 if (ps[i] != null) ps[i].wallDamagePerSecond = __state.WallPerSec[i];
         }

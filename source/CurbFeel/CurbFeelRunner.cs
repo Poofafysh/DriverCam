@@ -1,4 +1,5 @@
 using System;
+using RogueShared;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -10,6 +11,9 @@ namespace CurbFeel
     public class CurbFeelRunner : MonoBehaviour
     {
         public CurbFeelRunner(IntPtr ptr) : base(ptr) { }
+
+        // The panel only uses GUI.* (no GUILayout), so skip Unity's extra Layout pass of OnGUI.
+        private void Awake() => useGUILayout = false;
 
         private void Update() => CurbFeelCore.Update();
 
@@ -23,7 +27,16 @@ namespace CurbFeel
         private static readonly HullTrimmer Hull = new();
         private static readonly WallShifter Walls = new();
         private static readonly TrafficTuner Traffic = new();
-        private static float _nextHull, _nextWalls, _nextTraffic;
+        // -10 = "never ran": makes Due() phase the first ticks even if the game is less than a second old
+        private static float _nextHull = -10f, _nextWalls = -10f, _nextTraffic = -10f;
+
+        // Periods and phase offsets of the periodic ticks: staggered so walls / hull / traffic never run on the same frame.
+        private const float WallsPeriod = 0.25f, HullPeriod = 0.5f, TrafficPeriod = 0.5f;
+        private const float WallsPhase = 0f, HullPhase = 0.17f, TrafficPhase = 0.33f;
+
+        private static readonly KeyBinding ReloadBinding = new(Key.F9);
+        private static readonly KeyBinding ToggleBinding = new(Key.F10);
+        private static readonly KeyBinding OverlayBinding = new(Key.F8);
 
         public static void Update()
         {
@@ -32,29 +45,48 @@ namespace CurbFeel
                 var kb = Keyboard.current;
                 if (kb != null)
                 {
-                    if (Pressed(kb, Settings.ReloadKey.Value, Key.F9)) Reload();
-                    if (Pressed(kb, Settings.ToggleKey.Value, Key.F10)) Toggle();
-                    if (Pressed(kb, Settings.OverlayKey.Value, Key.F8)) Overlay.Cycle();
+                    if (ReloadBinding.Pressed(kb, Settings.ReloadKey.Value)) Reload();
+                    if (ToggleBinding.Pressed(kb, Settings.ToggleKey.Value)) Toggle();
+                    if (OverlayBinding.Pressed(kb, Settings.OverlayKey.Value)) Overlay.Cycle();
                 }
+
+                ScrapePatches.EnsureContinuousPatch();
 
                 if (!Settings.Enabled.Value) return;
                 float now = Time.unscaledTime;
-                if (now >= _nextHull) { _nextHull = now + 0.5f; Hull.Tick(); }
-                if (now >= _nextWalls) { _nextWalls = now + 0.25f; Walls.Tick(); }
-                if (now >= _nextTraffic) { _nextTraffic = now + 0.5f; Traffic.Tick(); }
+                if (Due(ref _nextWalls, WallsPeriod, WallsPhase, now)) using (Perf.Scope("CurbFeel.Walls")) Walls.Tick();
+                if (Due(ref _nextHull, HullPeriod, HullPhase, now)) using (Perf.Scope("CurbFeel.Hull")) Hull.Tick();
+                if (Due(ref _nextTraffic, TrafficPeriod, TrafficPhase, now)) using (Perf.Scope("CurbFeel.Traffic")) Traffic.Tick();
             }
             catch (Exception e)
             {
                 Plugin.Log.LogError(e);
-                _nextHull = _nextWalls = _nextTraffic = Time.unscaledTime + 5f;   // back off instead of spamming
+                float t = Time.unscaledTime + 5f;   // back off instead of spamming, keeping the stagger
+                _nextWalls = t + WallsPhase; _nextHull = t + HullPhase; _nextTraffic = t + TrafficPhase;
             }
+        }
+
+        /// <summary>
+        /// Fixed-rate timer with a phase offset. The first call, or one after a gap of over a second (master switch off,
+        /// a loading hitch), re-phases to now + phase so the ticks stay staggered. Steps by the period instead of
+        /// now + period so frame-time jitter doesn't slowly drift the ticks onto the same frame.
+        /// </summary>
+        private static bool Due(ref float next, float period, float phase, float now)
+        {
+            if (now - next > 1f) next = now + phase;
+            if (now < next) return false;
+            next += period;
+            if (next <= now) next = now + period;
+            return true;
         }
 
         public static void OnGUI()
         {
             try
             {
-                if (Overlay.Draw()) Reapply("panel click");
+                bool clicked;
+                using (Perf.Scope("CurbFeel.Overlay")) clicked = Overlay.Draw();
+                if (clicked) Reapply("panel click");
             }
             catch (Exception e)
             {
@@ -63,11 +95,25 @@ namespace CurbFeel
             }
         }
 
-        private static bool Pressed(Keyboard kb, string name, Key fallback)
+        /// <summary>A configured key name, parsed only when the setting's text changes (not every frame).</summary>
+        private sealed class KeyBinding
         {
-            if (!Enum.TryParse(name, true, out Key key) || key == Key.None) key = fallback;
-            var control = kb[key];
-            return control != null && control.wasPressedThisFrame;
+            private readonly Key _fallback;
+            private string _name;
+            private Key _key;
+
+            public KeyBinding(Key fallback) { _fallback = fallback; _key = fallback; }
+
+            public bool Pressed(Keyboard kb, string name)
+            {
+                if (!string.Equals(name, _name, StringComparison.Ordinal))
+                {
+                    _name = name;
+                    if (!Enum.TryParse(name, true, out _key) || _key == Key.None) _key = _fallback;
+                }
+                var control = kb[_key];
+                return control != null && control.wasPressedThisFrame;
+            }
         }
 
         /// <summary>Undo every change CurbFeel made in the game (hull, walls, ramps, traffic boxes, near-miss range).</summary>

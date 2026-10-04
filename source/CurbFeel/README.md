@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue** that changes how the car meets road edges and traffic. You can ride up onto the curb and onto the sidewalk instead of bouncing off an invisible wall about a metre before it, and you can lane split. It applies to every car body (and AI racers) on every road tile.
 
-Current version: **0.4.0**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
+Current version: **0.4.1**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
 
 ## What it changes
 
@@ -67,6 +67,29 @@ dotnet build -c Release -p:Hot=true
 ```
 
 This build has no BepInEx plugin class and no injected MonoBehaviour (`HotModule.cs` is its entry point, compiled only with `HOT`). It goes to `BepInEx\hot\CurbFeel.dll` instead of `BepInEx\plugins\`. The host reloads it within a second of the build finishing: the old build's `Unload` reverts every change (hull, walls, ramps, traffic boxes, near-miss range) and removes its Harmony patches, then the new build starts with the same `rogue.curbfeel.cfg`. To switch to hot mode, delete `BepInEx\plugins\CurbFeel.dll` once and restart. If both are installed, the host refuses the hot module and logs why. Players always use the normal build. Its behaviour doesn't change.
+
+## Performance
+
+0.4.1 changes no gameplay values or settings. It does the same work less often and with fewer allocations:
+
+| Area | Before | Now |
+|---|---|---|
+| Finding road walls | searched every MeshCollider in the game 4 times a second | walks only a road tile's own scene, from its root objects, when the tile finishes loading, plus 2 re-checks (1 s and 4 s later). While no wall pair exists at all, every loaded scene is rescanned every 5 s. At most 2 scenes are walked per tick. Each mesh's first vertex is read once and cached, not copied out with `.vertices` for every comparison |
+| Applying walls | 2 wall pairs per tick | 1 wall pair per tick, so loading a tile causes smaller hitches. A tile with many walls takes a little longer to finish |
+| Sidewalk map | searched every MeshRenderer in the game for each tile | walks only that tile's root objects. The whole-game search is kept as a fallback. A tile's map is dropped when the tile unloads |
+| Wall probes / ramps | new HashSet, List, Dictionary and iterator objects for every probe and triangle | the same buffers are reused each time |
+| Ticks | walls, hull and traffic could all run on the same frame | staggered: walls at 0 s, hull at +0.17 s, traffic at +0.33 s |
+| Car hull | searched all CapsuleColliders twice a second | does a full scan every tick for 10 s after the player car or the set of loaded scenes changes, and otherwise every 3 s as a safety check. Already-handled capsules are skipped by instance ID before any other Unity call |
+| Traffic boxes | searched all AIVehicleControllers twice a second | reads the spawner's own list (`DefaultAISpawner.activeAiCars`) and also searches the whole game every 5 s for any car not on it. Without a single-player spawner it searches every tick, as before. The near-miss handler lookup is cached for each player car |
+| Wall-contact patches | `CheckWallContinuousDamage` was always patched | patched the first time C.Scrape is enabled, which is at startup with the default settings. It is never unpatched at runtime; with Scrape off the prefix does nothing, as before. Traffic checks cache their `GetComponentInParent` result per collider. The `VehicleBaseParameters` search is throttled to once every 3 s while none are loaded |
+| Keys / panel | key names parsed every frame; panel text rebuilt on every OnGUI call | key names are parsed only when the setting changes. The panel only works on Repaint and mouse events, its text is rebuilt at most 5 times a second (immediately after a click or event), and the plugin build has no GUILayout pass |
+
+Optional timing: CurbFeel opens `CurbFeel.Walls` / `.Hull` / `.Traffic` / `.Overlay` scopes in the shared perf helper (`source/Shared/Perf.cs`). TrafficDensity shows them in its perf overlay when its `[Perf]` setting is on. When timing is off, a scope costs one bool check.
+
+### Future work
+
+- Tile-load hitches: mesh reads and ramp builds still run on the main thread, one wall pair per tick. Candidates: `AsyncGPUReadback` for the sidewalk meshes (now read synchronously with `GraphicsBuffer.GetData`), and `Physics.BakeMesh` in a job for the new wall and ramp colliders. Both are left out of this pass on purpose: they need in-game checks that the APIs survive IL2CPP stripping.
+- Settle the safety-scan intervals (walls 5 s while unpaired, hull 3 s, traffic 5 s) from in-game timings.
 
 ## Notes
 

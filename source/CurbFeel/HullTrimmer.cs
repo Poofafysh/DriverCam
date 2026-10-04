@@ -24,17 +24,49 @@ namespace CurbFeel
         private readonly Dictionary<int, float> _bodyHalfWidth = new();
         private readonly Dictionary<int, (VehicleMovement move, float value)> _bounce = new();
 
+        // Rescan policy: a full capsule scan is only worth doing when vehicles may have appeared. After a change (player
+        // car instance, loaded-scene count, revert) scan every tick for FastWindow seconds while cars spawn; otherwise
+        // a safety scan every SafetyPeriod seconds catches anything else (AI racers spawning mid-race, a new body).
+        private const float FastWindow = 10f, SafetyPeriod = 3f;
+        private IntPtr _lastPlayer = (IntPtr)(-1);
+        private int _lastSceneCount = -1;
+        private float _fastUntil, _nextSafety;
+        private readonly HashSet<int> _notBarrier = new();   // capsule IDs seen on another layer (cleared on full scans)
+
         public void Tick()
         {
+            float now = Time.unscaledTime;
+            var vmi = VehicleManager.Instance;
+            IntPtr playerPtr = vmi != null ? vmi.Pointer : IntPtr.Zero;
+            int sceneCount = UnityEngine.SceneManagement.SceneManager.sceneCount;
+            if (playerPtr != _lastPlayer || sceneCount != _lastSceneCount)
+            {
+                _lastPlayer = playerPtr;
+                _lastSceneCount = sceneCount;
+                _fastUntil = now + FastWindow;
+            }
+
+            bool full = now >= _nextSafety;
+            if (!full && now >= _fastUntil) return;
+            if (full)
+            {
+                _nextSafety = now + SafetyPeriod;
+                _notBarrier.Clear();                         // a full scan re-checks every capsule's layer
+            }
+            Scan(vmi != null ? vmi.transform : null);
+        }
+
+        private void Scan(Transform player)
+        {
             var caps = UnityEngine.Object.FindObjectsByType<CapsuleCollider>(FindObjectsSortMode.None);
-            Transform player = VehicleManager.Instance != null ? VehicleManager.Instance.transform : null;
 
             for (int i = 0; i < caps.Length; i++)
             {
                 var cap = caps[i];
-                if (cap == null || cap.gameObject.layer != BarrierLayer) continue;
-                int id = cap.GetInstanceID();
-                if (_original.ContainsKey(id)) continue;
+                if (cap == null) continue;
+                int id = cap.GetInstanceID();                // cheap checks first: already handled / known non-barrier
+                if (_original.ContainsKey(id) || _notBarrier.Contains(id)) continue;
+                if (cap.gameObject.layer != BarrierLayer) { _notBarrier.Add(id); continue; }
 
                 Transform root = ResolveVehicleRoot(cap);
                 if (root == null) continue;
@@ -67,6 +99,9 @@ namespace CurbFeel
             _bodyHalfWidth.Clear();
             _bounce.Clear();
             _roots.Clear();
+            _notBarrier.Clear();
+            _lastPlayer = (IntPtr)(-1);                      // force a fast rescan so the next ticks re-apply
+            _nextSafety = 0f;
         }
 
         private static Transform ResolveVehicleRoot(Component c)

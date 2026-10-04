@@ -4,7 +4,7 @@ namespace RacingLine
 
     /// <summary>
     /// Who owns the game state (design doc, Safety rule 11). As a client, the host owns traffic, scores and race state
-    /// and syncs them to everyone, so the plugin may only read and draw. If the role can't be read, assume Client.
+    /// and syncs them to everyone, so the plugin may only read and draw them (each player's own score categories are local: the game sends its score totals itself). If the role can't be read, assume Client.
     /// </summary>
     internal static class Net
     {

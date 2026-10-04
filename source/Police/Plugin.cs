@@ -13,7 +13,9 @@ namespace Police
     /// what the player does, never random escalation; no heat levels, nothing carries over between races.
     ///
     /// 0.0.1 = doc phases 1-3 in "pursuit lite" form: patrols (traffic cars with a lightbar), noticing, and a chase by the
-    /// traffic AI itself with a lead bar (ESCAPED / CAUGHT). Single-player only. No Harmony patches.
+    /// traffic AI itself with a lead bar (ESCAPED / CAUGHT). No Harmony patches.
+    /// 0.8.0: multiplayer (Multiplayer.Enabled): the host drives police, chases and daredevils for every player; guests
+    /// draw them and score / penalise themselves from the host's events over a private Steam channel (SteamNet, NetLink).
     /// PURSUIT score category (PursuitScore, GameApi.Score): live points during a chase, an escape bonus, coins, and
     /// its own rows on the results and Victory screens (shared RogueShared.ModScoreRows).
     /// </summary>
@@ -21,7 +23,7 @@ namespace Police
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.police";
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, LogEvents, Markers, NoticeNearMiss, NoticeDrift;
@@ -32,7 +34,7 @@ namespace Police
         internal static ConfigEntry<bool> DareEnabled, DareBossLooks, DareRaceLine, DareDefend, DareSlipstream;
         internal static ConfigEntry<string> DareDriftCars;
         internal static ConfigEntry<float> DareSpeedFactor, DareSkillMin, DareSkillMax, DareDriftCornerFactor, DareMaxSlip;
-        internal static ConfigEntry<bool> PursuitEnabled, ChaseDrive;
+        internal static ConfigEntry<bool> PursuitEnabled, ChaseDrive, MpEnabled;
         internal static ConfigEntry<float> PursuitPointsScale;
         internal static ConfigEntry<int> PursuitCoinReward;
         internal static ConfigEntry<double> PursuitBestRunTotal;
@@ -98,6 +100,11 @@ namespace Police
             PursuitCoinReward = Config.Bind("Pursuit", "CoinReward", 100,
                 new ConfigDescription("Coins at full target: 2 escapes in a race (the game's own categories use 130) (0-1000).", new AcceptableValueRange<int>(0, 1000)));
             PursuitBestRunTotal = Config.Bind("Records", "BestRunTotal", 0.0, "Best PURSUIT run total so far (the Victory screen shows NEW RECORD when a run beats it). Written by the plugin.");
+            MpEnabled = Config.Bind("Multiplayer", "Enabled", true,
+                "Police and daredevils in multiplayer (every player should run the same Police build). The host drives every patrol, chase and daredevil, for every player " +
+                "(its Patrols / Notice / Chase settings apply to everyone); each guest draws them, shows its own pursuit panel and scores its own PURSUIT. " +
+                "No caught time penalty in multiplayer (the race countdown is shared by the game's networking). Players talk " +
+                "to the host over a private Steam channel. Off = Police does nothing in multiplayer.");
             LogEvents = Config.Bind("Debug", "LogEvents", true, "Log patrols picked and released, notices, chases and their outcome (for /game-log).");
             ConfigVersion = Config.Bind("Debug", "ConfigVersion", 0, "Written by the plugin (settings migration). Don't edit.");
             Migrate();
@@ -109,7 +116,7 @@ namespace Police
             AddComponent<Runner>();
             ClassInjector.RegisterTypeInIl2Cpp<Daredevils>();
             AddComponent<Daredevils>();
-            Log.LogInfo($"Police {Version} loaded (police-car patrols that only engage on a reckless pass, backup units, chases that match your car; daredevils as boss cars racing the racing line; PURSUIT score category {(PursuitEnabled.Value ? "on" : "off")}; single-player only). F3 turns patrols off / on.");
+            Log.LogInfo($"Police {Version} loaded (police-car patrols that only engage on a reckless pass, backup units, chases that match your car; daredevils as boss cars racing the racing line; PURSUIT score category {(PursuitEnabled.Value ? "on" : "off")}; multiplayer {(MpEnabled.Value ? "on (host drives, guests draw)" : "off")}). F3 turns patrols off / on.");
         }
 
         /// <summary>

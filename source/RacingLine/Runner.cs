@@ -13,7 +13,7 @@ namespace RacingLine
     /// - Every 0.5 s: has the run's path changed (new object) or grown (same object, longer)? Either one logs and rebuilds.
     /// - Each frame while building: LineBuilder.Step within Line.FrameBudgetMs. When the line is ready: find its corners.
     /// - Each frame with a line: read the player, step the LineScorer; a finished corner pays out through the native
-    ///   category (single-player) or is shown as display-only (multiplayer / fallback).
+    ///   category (single-player; multiplayer with Scoring.InMultiplayer) or is shown as display-only (fallback).
     /// - Every 0.1 s (game time) with a line: snapshot the NPC traffic near the player and rebuild the traffic-aware line
     ///   (TrafficLine), which the scorer and the preview use instead of the plain line.
     /// - Each frame: the results screen and the end-of-run Victory screen get a RACING LINE row while they are open
@@ -101,11 +101,12 @@ namespace RacingLine
         {
             // our results row is only ever removed once the results screen has closed (removing it mid-animation would
             // leave the player without a Continue button), and that cleanup keeps running when we're off or broken
-            if (_broken || !Plugin.Enabled.Value) { CloseLive(true); CleanupRowsQuietly(); LineShare.Sync(null, null); return; }
+            if (_broken || !Plugin.Enabled.Value) { CloseLive(true); if (GameApi.BoostOk) ExitBoost.Remove(); CleanupRowsQuietly(); LineShare.Sync(null, null); return; }
             using var perf = RogueShared.Perf.Scope("RacingLine.Update");   // shared timing overlay (TrafficDensity [Perf]); free when off
             try
             {
                 if (!_iconsLoaded) LoadIcons();
+                if (GameApi.BoostOk && !_boostOff) Guard(ref _boostOff, "exit boost", _boostTick);   // run flag and clean-up (race end, switched off)
                 var kb = Keyboard.current;
                 if (kb != null && kb.f5Key.wasPressedThisFrame) Plugin.ShowLine.Value = !Plugin.ShowLine.Value;
 
@@ -129,7 +130,7 @@ namespace RacingLine
                 {
                     _nextTraffic = Time.time + 0.1f;   // game time: no snapshots while paused
                     // a multiplayer client's traffic copies are driven by the host: their path data is unverified, so the
-                    // plain line (multiplayer is display mode anyway)
+                    // plain line
                     if (Net.Role() == NetRole.Client) _traffic.Clear();
                     else Guard(ref _trafficOff, "traffic line", _trafficTick);
                 }
@@ -155,6 +156,7 @@ namespace RacingLine
             _trafficTick = TrafficTick;
             _ensureNative = EnsureNative;
             _liveStep = LiveStep;
+            _boostCornerAction = () => ExitBoost.OnCorner(_boostCorner);
             string folder = Path.Combine(Path.GetDirectoryName(typeof(Plugin).Assembly.Location) ?? ".", "RacingLine");
             Icons.Load(folder);
             Plugin.Log.LogInfo($"[RacingLine] icons: {Icons.Source} ({folder})");
@@ -279,6 +281,7 @@ namespace RacingLine
             else CloseLive(true);   // native scoring went away mid-action: never leave the game's action open
             var c = r.Corner;
             if (c == null) return;
+            if (GameApi.BoostOk && !_boostOff) { _boostCorner = c; Guard(ref _boostOff, "exit boost", _boostCornerAction); _boostCorner = null; }   // clean grip corner: a short boost on the exit (0.7.0)
             _lastResult = $"corner {c.Index + 1}{c.Type}: {c.Label} +{c.Total:0}{(native ? "" : " (display only)")}";
             _lastResultUntil = Time.unscaledTime + 4f;
             _hudGrade = c.Grade; _hudGrip = c.Grip; _hudGradeUntil = Time.unscaledTime + 4f;
@@ -686,6 +689,12 @@ namespace RacingLine
         private static float Sq(Line l, int i, Vector3 p) { float dx = l.Px[i] - p.x, dz = l.Pz[i] - p.z; return dx * dx + dz * dz; }
 
         /// <summary>Runs one feature; an exception switches just that feature off (logged once) and counts toward the plugin breaker.</summary>
+        // the clean-exit boost (0.7.0): its own breaker, so a failure switches off only the boost
+        private bool _boostOff;
+        private CornerResult _boostCorner;
+        private static readonly Action _boostTick = ExitBoost.Tick;
+        private Action _boostCornerAction;
+
         private void Guard(ref bool off, string feature, Action body)
         {
             try { body(); }
@@ -694,6 +703,7 @@ namespace RacingLine
                 off = true;
                 Plugin.Log.LogWarning($"[RacingLine] {feature} switched off for this session after an error: {e.Message}");
                 if (off && (feature == "native category" || feature == "scoring")) CloseLive(true);   // never leave the game's live action open
+                if (feature == "exit boost") { try { ExitBoost.Remove(); } catch { /* best effort */ } }
                 Fault(e);
             }
         }
@@ -724,6 +734,7 @@ namespace RacingLine
         private void OnDestroy()
         {
             CloseLive(true);
+            try { if (GameApi.BoostOk) ExitBoost.Remove(); } catch { /* shutting down */ }
             try { LineShare.Sync(null, null); } catch { /* shutting down */ }
             try { if (_rows != null) _rows.DestroyAll(GameApi.ResultsOk, GameApi.VictoryOk); } catch { /* shutting down */ }
             try { Icons.Destroy(); } catch { /* shutting down */ }

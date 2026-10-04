@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue** that changes how the car meets road edges and traffic. You can ride up onto the curb and onto the sidewalk instead of bouncing off an invisible wall about a metre before it, and you can lane split. It applies to every car body (and AI racers) on every road tile.
 
-Current version: **0.7.0**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
+Current version: **0.8.0**. Background research (collision layers, offsets, decompiled damage formulas): [`RESEARCH.md`](RESEARCH.md).
 
 ## In Rogue Hub (0.6.0)
 
@@ -37,6 +37,7 @@ them as an AUTO / GAME switch next to a 0.1-0.6 m and 0-1 slider.
 | **B. Invisible walls** | Walls sit wherever the tile put them: on city streets the stock wall is ~1 m *behind* the visible curb, on park / industrial roads ~1 m *before* it, and nothing stops you at visible railings | Moved up to **3 m past the curb** (about half a car length), the curb measured on each tile's own sidewalk mesh at every point, and stopping 0.15 m short of the first visible guardrail, rail, fence, rock wall, barricade, wood bar, bollard, planter, tree trunk, bus stop, building, cliff or tunnel wall. Where such a railing stands right at the curb, the wall can sit up to 1 m *closer to the road than stock* (a gameplay change: you now hit the railing you see); nowhere else does a wall move inward |
 | **C. Wall damage** | Every touch: ~2.8 HP × speed curve + 8 % speed (25 % if > 20°), + 0.18 HP / 0.5 s while pressed | Contacts ≤ 5° are soft scrapes: no damage, 2 % speed. Steeper hits unchanged. Pressed-against-wall damage × 0.25 |
 | **D. Curb** | No collision at all (flat road physics) | Invisible bevelled curb + sidewalk collider (Street layer): bevel 0.35 m before to 0.35 m after the curb face, height matched to the sidewalk (~0.24-0.41 m, fallback 0.32) |
+| **F. Drift** (0.8.0) | Drifting has no start cost | The moment a drift starts you lose 5 % of your speed (`F.Drift.StartSpeedLoss`), unless a card negates drift speed loss (the game's drift speed-loss multiplier is 0). Your own car only, also in multiplayer |
 | **E. Traffic (lane splitting)** | Every touch with a traffic car is a crash: damage, 10-20 % speed, **drift reset**, camera shake | Contacts ≤ 5° are side-swipes: 3 % speed, no damage, drift kept. Traffic hit boxes × 0.92 width. Near-miss range widened by the same amount |
 
 Lanes are 5 m apart (traffic sits at ±2.5 / ±7.5 m), so two cars side by side leave ~2.5-2.8 m for your ~2.2 m traffic hit box.
@@ -93,6 +94,7 @@ All keys are configurable. F6/F7 are left free for DriverCam.
 | E.Traffic | `WidthScale` / `LengthScale` | 0.92 / 1.0 | |
 | E.Traffic | `SideSwipeAngle`, `SideSwipeSpeedLoss`, `SideSwipeDamageMult`, `SideSwipeCooldown`, `HardHitDamageMult` | 5, 0.03, 0, 0.3, 1 | |
 | E.Traffic | `NearMissExtraRange` / `IncludeRacers` / `LogLanes` | -1 (auto) / false / true | |
+| F.Drift | `Enabled` / `StartSpeedLoss` / `KeepOffLeaderboards` | true / 0.05 / false | speed lost the moment a drift starts (skipped when a card negates drift speed loss); `KeepOffLeaderboards` = don't upload a run in which a drift start cost speed (a prefix on `LeaderboardsManager.PublishEntry`, combines with PitStop's and Sandbox's) |
 
 ## Build
 
@@ -146,14 +148,15 @@ Optional timing: CurbFeel opens `CurbFeel.Walls` / `.Hull` / `.Traffic` / `.Over
 
 ## What to check in the log (`/game-log CurbFeel`)
 
-- `CurbFeel 0.7.0 loaded. F9 = reload config, F10 = toggle on/off, F8 = status panel.` and, just before it, `[CurbFeel] start: master=ON hull=ON walls=ON ramp=ON scrape=ON traffic=ON overCurb=3 ...` (the state of every switch).
+- `[Drift] first drift: the game's drift speed-loss multiplier is N (0 = a card negates it)` (once per session); with `VerboseLog`, `[Drift] drift started: -5% speed (multiplier N)` per drift; `[Drift] leaderboard upload skipped: this run used the drift start speed loss` with `KeepOffLeaderboards`.
+- `CurbFeel 0.8.0 loaded. F9 = reload config, F10 = toggle on/off, F8 = status panel.` and, just before it, `[CurbFeel] start: master=ON hull=ON walls=ON ramp=ON scrape=ON traffic=ON overCurb=3 ...` (the state of every switch).
 - `[CurbFeel] config reloaded: <state>` after F9, and `[CurbFeel] <why>: <state>` when you toggle it.
 - `[Sidewalk] <tile>: 314 obstacle boxes, 0 obstacle triangles, 2882 sidewalk triangles (city style), 0 meshes unreadable, 96 ms over 8 frame(s)` once per tile when its sidewalks and obstacles have been read (`park style` for park tiles; the ms and frames show what `MapBudgetMs` costs).
 - `[Walls] <tile>: no sidewalk on this tile (bridge / river edge): stock walls kept` for tiles where the walls are left alone.
 - `[Walls] <name>: mesh not readable, skipped` and `[Walls] DIAG: driving but no wall pairs. ...` are warnings: the walls of that mesh or tile weren't changed.
 - `[Hull] <name>: body measurement implausible (...), using 1.25 m` (warning): the car's size couldn't be measured.
 - `[Traffic] lane offsets in use: ...` when the traffic side-swipe lanes are applied.
-- In the hot-module build: `CurbFeel 0.7.0 loaded as a hot module (load #N). ...` and `[CurbFeel] hot module unloaded, game back to stock.`
+- In the hot-module build: `CurbFeel 0.8.0 loaded as a hot module (load #N). ...` and `[CurbFeel] hot module unloaded, game back to stock.`
 
 ## Notes
 

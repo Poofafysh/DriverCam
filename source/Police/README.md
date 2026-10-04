@@ -5,11 +5,13 @@ faster than they're going, cutting close, or crashing, near-missing or drifting 
 you're already being chased and it joins in as backup. Get away and you've escaped. Get busted and you lose a few
 seconds off the race timer. Chases score in their own category, **PURSUIT**.
 
-Current version: **0.7.0** (preview)
+Current version: **0.8.0** (preview)
 
 Design doc (claude.ai): "Police Pursuit - v1 Concept" (revised). The police only react to what you do. Nothing
-escalates at random, there are no heat levels, and nothing carries over from one race to the next. **Single-player
-only:** in multiplayer, or if the game mode can't be read, the plugin does nothing.
+escalates at random, there are no heat levels, and nothing carries over from one race to the next. **Multiplayer
+(0.8.0):** the host drives every patrol, chase and daredevil for every player, and each guest's Police draws them
+and scores its own chases (see [Multiplayer](#multiplayer)); everyone in the session should run the same build. If
+the game mode can't be read, the plugin does nothing.
 
 ## What it does
 
@@ -87,7 +89,8 @@ only:** in multiplayer, or if the game mode can't be read, the plugin does nothi
 
    Banners pop in under the panel: POLICE PURSUIT, BACKUP JOINED, UNIT LOST, ESCAPED (with the chase's PURSUIT points,
    `ESCAPED +1,240`), BUSTED.
-4. **PURSUIT score category.** In single-player, chases score in a real score category of their own, made like
+4. **PURSUIT score category.** Chases score in a real score category of their own (in multiplayer each player's
+   own, with `Multiplayer.Enabled`), made like
    RacingLine's Racing Line category: an inert copy of the game's Top Speed category with the id `rogue.police`, the
    name PURSUIT and a siren icon drawn in code, appended once to the level's score list (an existing copy is reused,
    old ones are never destroyed). It counts toward TOTAL, the grade, XP and coins like the game's own categories, and
@@ -106,6 +109,8 @@ only:** in multiplayer, or if the game mode can't be read, the plugin does nothi
    points start a new live action. Coins: `CoinReward` (100) for 2 escapes in a race. Example: a 20 s escape from one
    unit, at speed all the way, with the lead dipping to 40% and then climbing to 100%: 480 (60% gained) + 200 (20 s
    at speed) live, + 810 escape bonus (250 + 500 + 0 + 60) = 1,490.
+   - In multiplayer a new car alone starts a new race for the counters (0.7.1: a stale `0/1` row used to carry
+     over from the last single-player race).
    - **Results screen** (after each race): a PURSUIT row (a copy of the Top Speed row, after Near Miss and after
      RacingLine's RACING LINE row) with escapes / chases, the race's PURSUIT points and coins.
    - **Victory screen** (end of the run): a PURSUIT row (a copy of the Near Miss row, after RACING LINE) with the run's
@@ -175,6 +180,9 @@ daredevil is never picked as a patrol. Design doc: "Daredevil Rival AI" (claude.
     - **No cutting in.** They only swing back in front of you once they're 12 m + 1.5 s × your extra speed ahead.
     - **Room to traffic (0.7.0).** The side margin to a traffic car grows with the closing speed (0.9 m, +0.02 m per
       m/s faster, at most +1 m), and a car coming up from behind within 1.5 s (40 m) is never moved in front of.
+      Already inside the band of a car beside them (it moved over, or they were squeezed), they only move out of
+      it, never deeper toward its middle (0.7.1: the crash forensics showed rivals and chasers swinging into the car
+      beside them). Chasers use the same planner.
     - **Braking.** Whatever is in line with them ahead (you or traffic) caps their speed so they can always brake to
       its real speed along the road (yours counts your slides and drifts) before a safe gap: 8 m + 0.35 s behind you,
       5 m + 0.2 s behind traffic (at their speed). The cap allows for the game's speed smoothing on the closing speed,
@@ -211,8 +219,90 @@ daredevil is never picked as a patrol. Design doc: "Daredevil Rival AI" (claude.
 The game's `TimerManager.AddTimerSeconds(-5)` can't take time away: in single-player it passes the negative value to
 `RaceTimer.RemoveCountdownTime`, which clamps it to 0, so nothing happens. Police instead calls
 `RaceTimer.RemoveCountdownTime(5)`, the game's own way of taking time off, directly. It only does this while a
-countdown timer is running, and it always leaves at least 3 s on the clock: a police catch never ends your race by
+countdown timer is running, only in single-player (in multiplayer the countdown is game-networked: no penalty), and
+it always leaves at least 3 s on the clock: a police catch never ends your race by
 itself. If no time can be taken, the banner just says `BUSTED` and the log says why.
+
+## Multiplayer
+
+0.8.0, `Multiplayer.Enabled` (on by default). Everyone in the session should run the same Police build. **The host is
+the authority for everything traffic-based**: police, chases and daredevils.
+
+- **Host:** drives every patrol, chase and daredevil, as in single-player, for **every player**. Each player has their
+  own chase (lead bar, units, time, cooldown, outcome) under the same rules: police react only to what that player
+  does, busted = caught slow or boxed in, no heat levels. The host reads every player's road distance, lane and speed
+  from the values the game itself syncs (`NetworkPlayer`), and their collisions, near misses, drifting and top speed
+  from the report their own Police sends. New patrols follow the leading player and are picked ahead of each player in
+  turn; a patrol is let go only when it is 150 m behind every player. Chasers and daredevils treat **every player** as
+  a never-hit obstacle (the same rules as for you, with latency margins below). Daredevils' pace, defending and
+  pick-up stay relative to the host's own car.
+- **Guest:** never drives or picks anything. It draws the host's patrols (police car, lightbar, marker; by its own
+  `Look` settings) and daredevils (the same boss car) on its own copies of those cars, shows its own pursuit panel and
+  banners and scores its own PURSUIT from the host's chase events (its own `Pursuit` settings). Its own race end
+  escapes / banks its chase at once.
+- **No time penalty in multiplayer:** the race countdown is shared by the game's networking
+  (`NetworkGameManager.AddTimerSeconds` goes through a Command / RPC, the elapsed time is synced), so a local cut could
+  shorten everyone's race or end one player's race early. A catch in multiplayer is BUSTED (that chase's PURSUIT points
+  lost) with no time taken; the log says `no time penalty (multiplayer: shared race timer)`.
+- **Whose settings:** the host's `Patrols`, `Notice`, `Chase` and `Daredevils` driving settings apply to everyone, and
+  the host's F3 / `Mode` turn police off for everyone. A guest's `Mode = Off`, F3 or `Enabled = false` turns police
+  off for that guest only (the host stops chasing them, no looks drawn); a guest's `Mode = Chill` means it is never
+  noticed. A guest's `Look`, `Pursuit` and `Daredevils.BossLooks` / `Enabled` (drawing) are its own. `CaughtPenaltySeconds`
+  does nothing in multiplayer (see above).
+- **Latency, honestly:** on the host a guest's synced position is about half a round trip old, and the guest sees the
+  host's cars about half a round trip plus the interpolation buffer late. The round trip is measured on the Police
+  channel (hellos); the buffer is assumed at 0.15 s (the game's traffic interpolation isn't known). For a remote player
+  the planner moves their position on by their speed for that time, places them further ahead by the car's own speed
+  times the view delay, widens their band by 0.4-1.5 m (more when they're changing lanes) and lengthens every gap to
+  them by 2 m. A player with no Police link is still a never-hit obstacle, but never chased.
+- **Exit paths:** a player leaving (their chase cancelled, chasers given back), the host leaving or the link going quiet
+  for 3 s (guest: chase cancelled, looks removed), race end, new race, quit, role change, `Multiplayer.Enabled` /
+  `Enabled` / F3 off, the breakers and unloading all end chases, remove looks and close the Steam session.
+
+**The Steam channel.** Steamworks `SteamNetworkingMessages` on private channel **7741**, called through the flat C
+exports of the game's own `steam_api64.dll` (nothing in the game's own networking is used or changed). A guest finds
+the host's SteamID from the address it connected to (FizzySteamworks: the host's SteamID) or the lobby owner, and says
+hello every second; the host invites every remote player (the SteamID of its connection) and every lobby member with a
+hello every 2 s until they link (Steam only delivers a peer's messages once we have sent to it); the host accepts a hello only from a remote player in the session (its connection must give a SteamID
+and it must be the sender's; a player without one is never linked, so never chased, but stays a never-hit obstacle). Messages: magic `RPOL`, protocol 1, type, then:
+
+| Type | Direction | Body |
+|---|---|---|
+| Hello (1, reliable, 1 s) | both | Police version, sender's player netId, time stamp, echo of the other's last stamp + hold time (round trip) |
+| State (2, unreliable, every 0.15 s) | host to guest | the guest's netId; patrols (netId, look cursor, chasing / chasing you); rivals (netId, boss rank); the guest's chase: on, chase id, lead %, units, seconds left |
+| Event (3, reliable) | host to guest | the guest's netId, chase id, kind: Start (units), Step (lead before / after, dt, at speed, units), End (PURSUIT end kind, outcome, seconds, duration, lead, units, reason), Toast (text, colour) |
+| Report (4, unreliable, every 0.15 s) | guest to host | the guest's netId, its collision and near-miss counts, drifting (now / since the last report), race over, wants police, notices (Mode Normal), top speed, current top speed |
+| Bye (5, reliable) | both | why the link stopped |
+
+Cars are matched by their Mirror netId (`NetworkAIVehicle`). Every count and value read from a message is bounded;
+anything malformed or from another SteamID is dropped.
+
+**What to check in the log (multiplayer):**
+- `[Police] multiplayer host (was single-player): police and daredevils for every player, shared over the Steam
+  channel` (or `multiplayer guest (...)`), and `multiplayer: Steam link ready (private channel 7741, ...)` (or `Steam
+  link unavailable (<why>); retrying every 10 s`).
+- Host: `multiplayer: player N in the session (...)`, `multiplayer: inviting N player(s) to the Police link (channel 7741)`
+  (once), `multiplayer: linked to player N (Police x.y.z)` (`NOT this
+  build` when the versions differ), `police for player N: on (top speed N km/h, notices)` / `off (<why>)` /
+  `removed (<why>)`, `multiplayer: link to player N lost (nothing for 3 s)`, `multiplayer: player N stopped its Police
+  link (<why>)`, `multiplayer: player N left the session`, `multiplayer: host link closed (<why>)`, and with
+  `LogEvents` the usual lines with ` (player N)` after them: `noticed (player N): ...`, `backup joined (player N)`,
+  `chase over (player N): CAUGHT ..., no time penalty (multiplayer: shared race timer)`, `race over (player N): no more police for them this race`;
+  `patrol picked: ... netId N`, `daredevil ...: ..., netId N`; `hello from ... ignored (...)` for a stranger;
+  `daredevils: active (racing the line), multiplayer host: every player is kept clear of`; `daredevils: remote players can't be read: rivals get the game's driving until they can (never-hit rule)` and `daredevils: every player readable again: rivals race the line`.
+- Guest:
+  - `multiplayer guest: host found (connect address)` (or `lobby owner`), then `multiplayer guest: linked to the host (Police x.y.z)`
+    (`the host runs Police x.y.z, this game y.y.y: run the same build` when they differ)
+  - state lines: `multiplayer guest: idle (<why>)`, `waiting for the Steam link`, `looking for the host's SteamID`,
+    `waiting for the host's Police`, `linked (police and daredevils from the host)`
+  - `multiplayer guest: first patrol from the host drawn (<look>)` (or `first daredevil`)
+  - `multiplayer guest: chase on (from the host, N unit(s))`
+  - `multiplayer guest: chase over: ESCAPED / CAUGHT / cancelled (<why>) after N s, lead N%, N unit(s)`, CAUGHT with `, no time penalty (multiplayer: shared race timer)`
+  - `multiplayer guest: chase over: ESCAPED (ahead at the finish at N%)` or `multiplayer guest: chase over: banked (race over)` (its own race end)
+  - `multiplayer guest: link to the host lost (nothing for 3 s)`, `multiplayer guest: the host stopped its Police link (<why>)`, `multiplayer guest: link closed (<why>)`
+  - `daredevils: idle: multiplayer guest: ...`, and the usual `pursuit: +N pts (...)` lines from its own PURSUIT
+- `multiplayer link switched off for this session after an error` (everything multiplayer stops, patrols too in
+  multiplayer; single-player is unaffected).
 
 ## Settings (`BepInEx/config/rogue.police.cfg`)
 
@@ -234,13 +324,13 @@ itself. If no time can be taken, the banner just says `BUSTED` and the log says 
 | `Chase.MaxChasers` | 3 | most police cars chasing at once (1-4) |
 | `Chase.BackupPenalty` | 5 | lead (%) lost per backup unit joining (0-50) |
 | `Chase.Duration` | 45 | longest chase in seconds; then the meter decides (10-300) |
-| `Chase.CaughtPenaltySeconds` | 5 | seconds off the race timer when busted (0-30, 0 = none; always leaves 3 s) |
+| `Chase.CaughtPenaltySeconds` | 5 | seconds off the race timer when busted (0-30, 0 = none; always leaves 3 s; single-player only: none in multiplayer) |
 | `Chase.Cooldown` | 8 | seconds after a chase before any patrol can notice you again (0-300) |
 | `Chase.SpeedFactor` | 1.0 | chasers' top speed as a fraction of your car's current top speed (0.5-1.1) |
 | `Chase.Acceleration` | 0.8 | chasers' speed smoothing time in seconds (0.2-5, lower = quicker) |
 | `Chase.CatchUp` | 0.15 | extra top speed for a chaser more than 60 m behind you, in full at 200 m (0-0.5, 0 = off) |
 | `Chase.Drive` | true | chasers drive like the daredevils: pass traffic round the gaps, full speed in corners, never into you (off = the game's traffic driving) |
-| `Daredevils.Enabled` | true | daredevils become boss-car rivals racing the line (independent of patrols; single-player only) |
+| `Daredevils.Enabled` | true | daredevils become boss-car rivals racing the line (independent of patrols; in multiplayer the host drives them, a guest with it off doesn't draw their boss cars) |
 | `Daredevils.BossLooks` | true | draw daredevils as boss cars (off = the game's red traffic car) |
 | `Daredevils.RaceLine` | true | drive the racing line (needs the RacingLine plugin; else the game's driving) |
 | `Daredevils.DriftCars` | Rotary, Delivery, Centipede, Centaur | boss cars that drift through corners; every other car holds the line with grip |
@@ -251,10 +341,11 @@ itself. If no time can be taken, the banner just says `BUSTED` and the log says 
 | `Daredevils.Defend` | true | rivals cover the inside before corners when you close in (never across you) |
 | `Daredevils.Slipstream` | true | rivals tow behind other cars: +6% top speed |
 | `Daredevils.MaxSlipAngle` | 30 | how far drift cars slide in a hard corner, degrees (0-50) |
-| `Pursuit.Enabled` | true | PURSUIT score category (single-player); off = chases score nothing (at once: a running chase's live points are dropped) |
+| `Pursuit.Enabled` | true | PURSUIT score category (in multiplayer each player's own); off = chases score nothing (at once: a running chase's live points are dropped) |
 | `Pursuit.PointsScale` | 1.0 | multiplies every PURSUIT point, live and escape bonus (0-3) |
 | `Pursuit.CoinReward` | 100 | coins at full target (2 escapes in a race) (0-1000) |
 | `Records.BestRunTotal` | (written) | best PURSUIT run total so far, for the Victory screen's NEW RECORD |
+| `Multiplayer.Enabled` | true | police and daredevils in multiplayer: the host drives them for every player, guests draw them and score / penalise themselves (off = nothing in multiplayer; see [Multiplayer](#multiplayer)) |
 | `Debug.LogEvents` | true | log patrols, notices, chase results and daredevils |
 | `Debug.ConfigVersion` | (written) | settings migration marker, don't edit |
 
@@ -266,7 +357,7 @@ pass); they may stay in an old config file harmlessly. **0.3.0:** `Look.BossCars
 `BossCars = false` becomes `Traffic`; otherwise you get the new police cars) and the old entry is removed. **0.5.0:**
 `Daredevils.GripCornering` and `DriftCornering` are removed (rival cornering now follows your car × skill).
 **0.6.0:** new `[Pursuit]` and `[Records]` sections and `Chase.CatchUp` (no migration needed). **0.7.0:** new
-`Chase.Drive` (no migration needed).
+`Chase.Drive` (no migration needed). **0.8.0:** new `[Multiplayer]` section (no migration needed).
 
 Edits to the `.cfg` file apply at the next game start. The plugin reads every value live, so an in-game config
 manager can change them while you play.
@@ -291,8 +382,8 @@ manager can change them while you play.
     reused only gets its speed smoothing and despawn distances back.
   - A crashed one is left to the game's physics. Nothing is written while the game is paused. Daredevils more than
     1 km ahead of you are left to the game's driving.
-- Getting busted can take seconds off your race timer.
-- **PURSUIT points count.** They are part of TOTAL and of the single-player run total the game uploads to its Steam
+- Getting busted can take seconds off your race timer (single-player only; never in multiplayer).
+- **PURSUIT points count** (in multiplayer too, each player's own, with `Multiplayer.Enabled`). They are part of TOTAL and of the single-player run total the game uploads to its Steam
   leaderboard (set `Pursuit.Enabled = false` to keep chases out of the score). The category is a copy of Top Speed, so
   Top Speed cards and multipliers also affect it, and a chase's live action keeps the game's combo going while it
   runs. Saves stay compatible both ways: the id is unique, and the game skips ids it doesn't know.
@@ -302,12 +393,15 @@ manager can change them while you play.
   every frame, so a car the game recycles never carries them along. The traffic car's own model is only switched off
   (its renderers) and switched back on when the patrol is let go. Everything Police creates is destroyed when the
   patrol is let go, when the scene changes, or when the plugin switches off.
-- Single-player only. Nothing is ever sent to other players; Police reads `GameState.IsMultiplayerMode` and stays off
-  in multiplayer.
+- Multiplayer (0.8.0): only the host writes to traffic cars (it owns them; the game itself syncs their positions to
+  everyone). Police never writes a Mirror SyncVar or calls the game's Commands / RPCs. Mod state goes over a private
+  Steam channel between the players' Police instances (see [Multiplayer](#multiplayer)). A guest only changes its own
+  game: the looks on its local copies of the cars (renderers of its copy switched off and back on, never synced) and
+  its own PURSUIT score. Nobody's race timer is touched in multiplayer (no caught penalty: the countdown is shared).
 
 ## What to check in the log (`/game-log Police`)
 
-- `Police x.y.z loaded` (the version you installed) and `[Police] game check OK: ..., boss car models, daredevils, pursuit score, results/victory rows`. A
+- `Police x.y.z loaded` (the version you installed) and `[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode, boss car models, daredevils, pursuit score, results/victory rows, multiplayer host + guest`. A
   `game check: missing ...` line lists what a game update removed and which features are off (without the boss data,
   patrols keep their traffic look with a lightbar).
 - `[Police] daredevils: active (racing the line)` (or `active (no racing line: game driving)` without RacingLine),
@@ -335,7 +429,9 @@ manager can change them while you play.
   vertices), 4 wheels, size` (also for each daredevil's boss car). `no police car models folder` means the
   `plugins\Police\*.pcm` files weren't installed (boss cars are used instead).
 - `[Police] lightbar materials: shader '...', halos on/off` (once).
-- `[Police] active`, `idle: ...` (why it's off: config, F3, multiplayer) and `waiting for a race`.
+- `[Police] active`, `idle: ...` (why it's off: config, F3, `multiplayer (Multiplayer.Enabled = false)`, `multiplayer guest: the
+  host runs the police`, `multiplayer: role unknown`) and `waiting for a race`. Multiplayer: see the list in
+  [Multiplayer](#multiplayer).
 - With `LogEvents`:
   - `patrol picked: N m ahead ..., <car> (<boss>)` and `patrol released: <why>`
   - `noticed: <passed it N km/h faster / cut past it N m away / crashed, near miss or drifted while passing it> ...`,
@@ -427,6 +523,13 @@ not in the game's URP Lit forward pass).
   their slide is a turn of the look. They don't follow the traffic-aware line RacingLine shows you, and instead pass
   traffic by themselves.
 - No siren sound yet. Speed traps (more PURSUIT points) aren't in yet.
+- Multiplayer: no caught penalty (the race countdown is shared). Daredevils get the game's driving while any remote
+  player can't be read (log: `daredevils: remote players can't be read: ...`). A player whose connection gives no
+  SteamID is never linked or chased (still kept clear of). Steam transport only (on LAN / KCP a guest can't find the host's SteamID, so only the host gets police);
+  at most 3 remote players are chased; AI racers are ignored. On a guest the daredevils' drift slide and front-wheel
+  steer aren't shown (only the boss car), and the patrol look's pointing into a lane change isn't sent either. The
+  latency margins use an assumed 0.15 s interpolation buffer. Whether the game's multiplayer score sync carries a
+  guest's PURSUIT points into the shared totals (the copy reports type Top Speed, as RacingLine's does) is not verified.
 - The PURSUIT run total for the Victory screen lives in this game session only: a run continued from a save after a
   restart shows only the races played since launch.
 - The pursuit panel and banners sit at y = 112-262 px (at 1080p), which overlaps HotReload's toast (dev only) when

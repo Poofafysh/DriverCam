@@ -26,6 +26,7 @@ namespace CurbFeel
         public static int TrafficCars;
         public static int TrafficResized;
         public static int SideSwipes;
+        public static int DriftTaxes;   // F. Drift: drift starts that cost speed
         public static int TrafficHits;
         public static string Lanes = "";
         public static float NearMissRange = -1f;

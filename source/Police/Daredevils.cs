@@ -8,7 +8,11 @@ namespace Police
     /// Daredevils: the game's red "devil" traffic cars (they come up behind you fast, the devil icon shows while one is
     /// within 100 m behind) become rivals: drawn as the game's boss cars (their own paint and body kit; the traffic model
     /// is never drawn meanwhile, as for patrols) and racing the optimal racing line published by the RacingLine plugin
-    /// (AppDomain "rogue.racingline", see RacingLine/LineShare.cs). Single-player only; independent of patrols (Mode, F3).
+    /// (AppDomain "rogue.racingline", see RacingLine/LineShare.cs). Independent of patrols (Mode, F3).
+    /// Multiplayer (0.8.0, Multiplayer.Enabled): only the host drives rivals (it owns the traffic; the game syncs the cars
+    /// to everyone); pace, defending and pick-up stay relative to the host's own player, but every remote player is a
+    /// never-hit obstacle in the gap planner, with latency margins (Players.FillOthers). Each rival's netId and boss rank
+    /// go to the guests (NetIds / NetRanks, sent by Runner), whose Police draws the same boss car. A guest never drives one.
     /// Design doc: "Daredevil Rival AI" (claude.ai artifact YW9wyNs6gWWz1w9kte5GjT).
     ///
     /// Pace (0.5.0): rivals drive YOUR car's numbers scaled by their skill, so the fight is fair and some are quicker than
@@ -81,6 +85,8 @@ namespace Police
             public GameObject Skin;
             public bool Drift;
             public string Name = "daredevil";
+            public uint NetId;                    // multiplayer host: its NetworkAIVehicle netId (guests draw its boss car by this)
+            public int Rank = -1;                 // the boss's rank in the game's list (-1 = no boss look)
             public CarState S;
             public float LastTravelled = float.NaN;
             public float SavedMax = float.NaN, SavedSmooth = float.NaN, SavedBehind = float.NaN, SavedAhead = float.NaN;
@@ -153,6 +159,15 @@ namespace Police
         /// <summary>Daredevils we drive (Police never picks these as patrols).</summary>
         internal static readonly HashSet<IntPtr> Owned = new HashSet<IntPtr>();
 
+        /// <summary>Multiplayer host: the rivals' netIds and boss ranks (Runner sends them to the guests). Empty otherwise.</summary>
+        internal static readonly List<uint> NetIds = new List<uint>();
+        internal static readonly List<int> NetRanks = new List<int>();
+
+        private bool _host;                       // this tick: we are the multiplayer host (remote players are obstacles)
+        private readonly PlanOther[] _others = new PlanOther[6];
+        private int _othersN;
+        private bool _blind;                      // multiplayer host: not every remote player readable: no steering (game driving)
+
         // ------------------------------------------------------------------ Unity entry points
 
         private void Update()
@@ -185,10 +200,19 @@ namespace Police
 
         private string WhyOff()
         {
+            _host = false;
             if (!Plugin.Enabled.Value) return "disabled in config (General.Enabled)";
             if (!Plugin.DareEnabled.Value) return "disabled in config";
             if (!GameApi.DaredevilOk || !GameApi.PlayerOk) return "game check failed (see log)";
-            if (GameApi.IsMultiplayer()) return "multiplayer (single-player only)";
+            if (GameApi.IsMultiplayer())
+            {
+                if (!Plugin.MpEnabled.Value) return "multiplayer (Multiplayer.Enabled = false)";
+                var mode = GameApi.Mode();
+                if (mode == NetMode.Guest) return "multiplayer guest: the host drives the daredevils (their boss cars are drawn here)";
+                if (mode != NetMode.Host) return "multiplayer: role unknown or game check failed (see log)";
+                _host = true;
+                Players.Refresh();   // the player list is kept here too, not only by Runner (its breakers clear it)
+            }
             return null;
         }
 
@@ -202,7 +226,7 @@ namespace Police
         private void Tick()
         {
             string off = WhyOff();
-            if (off != null) { if (_rivals.Count > 0) ReleaseAll(off); SetState("idle: " + off); return; }
+            if (off != null) { if (_rivals.Count > 0) ReleaseAll(off); NetIds.Clear(); NetRanks.Clear(); SetState("idle: " + off); return; }
             if (!GameApi.ReadPlayer(ref _player) || GameApi.Spawner() == IntPtr.Zero)   // with the collision count (contacts), 4x a second
             {
                 if (_rivals.Count > 0) ReleaseAll("no race");
@@ -230,7 +254,9 @@ namespace Police
                 return;
             }
             ReadLine();
-            SetState(_e != null && Plugin.DareRaceLine.Value ? "active (racing the line)" : "active (no racing line: game driving)");
+            bool racing = _e != null && Plugin.DareRaceLine.Value;
+            SetState(_host ? (racing ? "active (racing the line), multiplayer host: every player is kept clear of" : "active (no racing line: game driving), multiplayer host")
+                           : (racing ? "active (racing the line)" : "active (no racing line: game driving)"));
 
             // check the ones we have
             for (int i = _rivals.Count - 1; i >= 0; i--)
@@ -265,6 +291,15 @@ namespace Police
                 foreach (var r in _rivals) if (!r.Crashed && Mathf.Abs(r.S.Road - _player.Distance) <= NearAdopt) { nearOne = true; break; }
                 for (int i = 0; i < _found.Count && _rivals.Count < MaxRivals; i++) Adopt(_found[i], !nearOne && _rivals.Count < 2);
             }
+            PublishNet();
+        }
+
+        /// <summary>Multiplayer host: the rivals' netIds and boss ranks for the guests (Runner sends them).</summary>
+        private void PublishNet()
+        {
+            NetIds.Clear(); NetRanks.Clear();
+            if (!_host) return;
+            foreach (var r in _rivals) if (r.NetId != 0) { NetIds.Add(r.NetId); NetRanks.Add(r.Look != null ? r.Rank : -1); }
         }
 
         private void Adopt(MonoBehaviour car, bool allowFar)
@@ -283,6 +318,8 @@ namespace Police
             r.HomeLane = GameApi.ReadHomeLane(r.Lane);
             r.Saved = true;
             int rank = MakeLook(r);
+            r.Rank = rank;
+            if (_host) r.NetId = GameApi.NetIdOf(car);
             r.Skill = SkillFor(rank);
             r.RelSign = Math.Sign(r.S.Road - _player.Distance);
             GameApi.WriteDespawn(r.Pf, Mathf.Max(r.SavedBehind, RaceBehindDespawn), Mathf.Max(r.SavedAhead, RaceAheadDespawn));   // stays in the race
@@ -292,7 +329,7 @@ namespace Police
             Owned.Add(r.Ptr);
             if (Plugin.LogEvents.Value)
                 Plugin.Log.LogInfo($"[Police] daredevil {r.Name}: {r.S.Road - _player.Distance:+0;-0} m from you, skill {r.Skill:0.00}, top {r.Top * 3.6f:0} km/h, " +
-                                   $"cornering {r.Corner:0} m/s^2, {(r.Drift ? "drift" : "grip")} style ({_rivals.Count} driving)");
+                                   $"cornering {r.Corner:0} m/s^2, {(r.Drift ? "drift" : "grip")} style ({_rivals.Count} driving){(_host ? $", netId {r.NetId}" : "")})");
         }
 
         /// <summary>Skill for a boss's rank in the game's list (spread SkillMin..SkillMax); a random one without a boss look.</summary>
@@ -514,6 +551,23 @@ namespace Police
                     _roadN = GameApi.ReadRoad(_player.Distance, -lo, hi, _road); TrafficTracker.Update(_road, _roadN, now); NoteSnapshot();   // lane bands, crash context
                     _snapTime = now;
                 }
+                // multiplayer host: every remote player is a never-hit obstacle too (0.8.0), read once per frame. Refreshed
+                // whenever we host (also after the Runner's link breaker cleared the list: it rescans at once); while not
+                // every player can be read, rivals can't keep clear of them all and get the game's driving (audit)
+                _othersN = 0;
+                bool blind = false;
+                if (_host)
+                {
+                    Players.Refresh();
+                    blind = !Players.Readable;
+                    if (!blind) _othersN = Players.FillOthers(_others, 0, null, now);
+                }
+                if (blind != _blind)
+                {
+                    _blind = blind;
+                    Plugin.Log.LogInfo(blind ? "[Police] daredevils: remote players can't be read: rivals get the game's driving until they can (never-hit rule)"
+                                             : "[Police] daredevils: every player readable again: rivals race the line");
+                }
             }
             for (int i = 0; i < _rivals.Count; i++)
             {
@@ -524,7 +578,7 @@ namespace Police
                 if (moved < -5f || moved > 80f) continue;                                // reused by the pool: the tick lets it go
                 float ahead = r.S.Road - _player.Distance;
                 r.Far = r.Far ? ahead > SteerAhead : ahead > SteerAheadOff;
-                bool steer = line && !r.S.WasHit && !r.Crashed && !r.Far && r.S.Road >= 0f && r.S.Road < (_n - 2) * _step;
+                bool steer = line && !(_host && _blind) && !r.S.WasHit && !r.Crashed && !r.Far && r.S.Road >= 0f && r.S.Road < (_n - 2) * _step;
                 if (paused) { if (r.Look != null) r.Look.Place(r.T, r.BoxC, r.BoxS, 0f, 0f, r.Yaw, r.Steer); continue; }
                 if (steer) { UpdatePace(r); Steer(r, now, dt); Report(r, dt); }
                 else
@@ -598,6 +652,7 @@ namespace Police
                 Limit = _limit, Rate = r.Drift ? 5.5f : 4.5f, Vmax = pace, SinceSnap = now - _snapTime,
                 YouValid = true, YouRoad = _player.Distance + youV * (now - _playerTime), YouLane = _player.Lane,
                 YouLo = Mathf.Min(_player.Lane, soon), YouHi = Mathf.Max(_player.Lane, soon), YouSpeed = youV,
+                Others = _othersN > 0 ? _others : null, OthersN = _othersN,
             }, _road, _roadN);
             target = plan.Target;
             r.PlanTarget = plan.Target;
@@ -801,6 +856,7 @@ namespace Police
                 }
             }
             _rivals.Clear(); _ptrs.Clear(); Owned.Clear();
+            NetIds.Clear(); NetRanks.Clear();
         }
 
         // ------------------------------------------------------------------ breakers

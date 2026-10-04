@@ -56,6 +56,7 @@ namespace CurbFeel
             _continuousPatched = false;
             harmony.PatchAll(typeof(ScrapePatches));
             EnsureContinuousPatch();
+            DriftLeaderboardGuard.Install(harmony);   // F. Drift's optional leaderboard guard (same Harmony instance: a hot unload unpatches it too)
         }
 
         /// <summary>

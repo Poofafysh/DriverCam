@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a new score category, **Racing Line**, that rewards driving corners well on grip: the right line, good speed, braking straight, lifting in and powering out.
 
-Current version: **0.5.0** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
+Current version: **0.7.0** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
 
 Design docs (claude.ai artifacts):
 - "Racing Line Mechanic - Design & Build Plan" (`799a19cf-48f1-4019-9d37-925b9838d47f`): the category itself and the Safety rules that apply to every change here.
@@ -57,7 +57,7 @@ If an NPC car is sitting where the racing line goes, that can't be the perfect l
 - **No way past** (for example both lanes of a narrow road taken side by side): that stretch counts as perfect position wherever you drive, so you're never punished for a line that can't be driven.
 - **Scoring:** position is measured from this line, not from the plain one. Inside a detour, the space the car takes up never counts as "on the line". Driving the plain line straight through a car scores like being far off it, and the "path as straight as the line" credit doesn't apply there either.
 - **Cost:** at most 48 cars at 10 Hz, with no per-frame work beyond the scoring itself.
-- **Multiplayer clients** use the plain line. The host drives the traffic, and the clients' copies of the cars haven't been checked; multiplayer is display mode anyway.
+- **Multiplayer clients** use the plain line. The host drives the traffic, and the clients' copies of the cars haven't been checked.
 - **Turning it off:** `Enabled` = false goes back to the plain line everywhere. Missing game members switch only this feature off; the startup check names them.
 
 With F5 the line on the road is this line: orange where it goes around a car, faint where there's no way past.
@@ -77,7 +77,7 @@ Simulated on the same 3 km test road with a car parked on the line's apex in eve
 
 ## Native category
 
-**Single-player:** Racing Line is a real score category. It's an **inert copy of the game's Top Speed category**:
+**Single-player and multiplayer** (multiplayer with `Scoring.InMultiplayer`, on by default; your own score): Racing Line is a real score category. It's an **inert copy of the game's Top Speed category**:
 - its own logic can never start (`timeThreshold` 1e9, `targetSpeedFactor` 2, `scoreMultiplier` 0)
 - it has id `rogue.racingline`, our name and icons, and `contributeToCombo` on
 - it's appended once to the level's score list
@@ -93,9 +93,17 @@ The game's score screens have one fixed row per built-in category, so RacingLine
 
 Accepted side effects:
 - **Top Speed cards also affect Racing Line**, because the copy reports type Top Speed.
-- Racing Line points are part of the single-player run total the game uploads to its Steam leaderboard.
+- Racing Line points are part of the run total the game uploads to its Steam leaderboard.
 
-**Display mode** (any multiplayer session, or if native setup fails): corners are scored and shown on the HUD card only, and nothing is added to the game.
+**Clean-exit boost (0.7.0, `[ExitBoost]`).** A corner taken on grip pays off on the exit: when a corner zone ends with
+a grade (BRONZE or better), no drift and no collision, your car gets a short boost: up to +5% top speed and +25%
+acceleration for 1.5 s at GOLD (SILVER 0.6x, BRONZE 0.3x). It uses the game's own temporary speed-boost mechanism
+(`VehicleManager.SpeedModifierHandler.RegisterTemporaryModifier`, the same one as the game's drift-end boost), so it fades
+in and out, removes itself and stacks with cards like any other boost. A new boost replaces the old one; switching it off,
+the race ending or the plugin unloading takes it away. Your own car only, also in multiplayer.
+`ExitBoost.KeepOffLeaderboards` (on by default, because the boost is a speed advantage) keeps a run in which a boost fired off the Steam leaderboards; the mark is saved in the config (`ExitBoost.UsedThisRun`), so a quit and continue keeps it.
+
+**Display mode** (multiplayer with `Scoring.InMultiplayer` off, or if native setup fails; 0.6.0: multiplayer counts by default): corners are scored and shown on the HUD card only, and nothing is added to the game.
 
 ## The line on the road (F5)
 
@@ -158,6 +166,10 @@ players.
 | `live scoring: 18 live actions, 2140 pts counted live (game total 2310, includes card multipliers); 24 corners: gold 9, ...` | per race: confirms points were counted live through the game's action path |
 | `victory screen found: score controller on '.../Victory Screen Panel/[CONTROLLERS]' (active True), results window active False` | once per session: the Victory screen was found (where its score controller sits) |
 | `victory row added: 12,345 (new record)` | the end-of-run Victory screen got its row (`victory row refreshed: ...` if it was still there) |
+| `exit boost: the game's drift-end boost is ...` | once per session: the game's own drift-end boost values (our boost copies its neutral fields) |
+| `exit boost: corner 3L GOLD grip -> top speed +5%, acceleration +25% for 1.5 s` | each boost, with `LogCorners` |
+| `leaderboard upload skipped: this run used the clean-exit boost` | with `ExitBoost.KeepOffLeaderboards` |
+| `exit boost stays off: the leaderboard guard isn't installed and KeepOffLeaderboards is on` | once: the guard couldn't be installed, so no boost while `KeepOffLeaderboards` is on |
 | `victory row skipped: <why>` | once per Victory screen with no row: display mode, run total 0, or the Near Miss row couldn't be copied |
 | `victory screen already open when first watched: no row this time` | the Victory screen was already up when the plugin found it (or started ticking again): no row and nothing counted, so a stale screen never counts the current race |
 | `new run: run total reset (previous run 12345)` | the first race of a new run: the Victory screen's run total starts again from 0 |
@@ -176,7 +188,8 @@ players.
 | General | `Enabled` (true) |
 | Preview | `ShowLine` (false), `DrawAhead` (150), `LineWidth` (1), `DebugText` (false) |
 | Line | `Margin` (1.5), `SampleStep` (2.5), `FrameBudgetMs` (1) |
-| Scoring | `NativeCategory` (true), `CoinReward` (130), `CoinTargetPerCorner` (0.6), `CornerMinRadius` (300), `LogCorners` (false) |
+| Scoring | `NativeCategory` (true), `InMultiplayer` (true: points count in multiplayer too, your own score), `CoinReward` (130), `CoinTargetPerCorner` (0.6), `CornerMinRadius` (300), `LogCorners` (false) |
+| ExitBoost | `Enabled` (true), `TopSpeed` (0.05), `Acceleration` (0.25), `Seconds` (1.5), `KeepOffLeaderboards` (true), `UsedThisRun` (written by the plugin) |
 | Quality | `LineFull` (2.5), `LineZero` (8), `LineFloor` (0.25), `WeightSpeed` (0.45), `WeightGrip` (0.25), `WeightPedals` (0.30), `PointsPerMetre` (0.22), `TickMinQ` (0.3), `LiveGrace` (0.6), `DriftFactor` (0.5), `TrafficGrace` (1.5) |
 | Bonuses | `ExitWeight` (0.5), `Clean` (1.15), `GripLine` (2), `CoastPerSecond` (0.15), `CoastFloor` (0.6), `Gold` / `Silver` / `Bronze` (0.8 / 0.6 / 0.4), `StreakStep` (0.15), `StreakMax` (2) |
 | Car | `GripStart` (9 m/s²), `BrakeDecel` (10), `AccelRate` (5) |

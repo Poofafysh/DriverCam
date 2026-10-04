@@ -33,6 +33,13 @@ namespace Police
     /// - Fairness (0.7.0): a wrecked unit leaves the chase at once and can't start one; a collision only costs lead when
     ///   a unit is near enough to see it, and the bar only empties (BUSTED) with a unit on you. At 80%+ of your top
     ///   speed a unit on your tail no longer drains the bar: busted means caught slow or boxed in.
+    /// - Multiplayer (0.8.0, Multiplayer.Enabled): the host is the authority for everything traffic-based. Every chase
+    ///   belongs to one player (a Suspect: you, or a remote player read from their synced NetworkPlayer values plus the
+    ///   notice report their own Police sends over the Steam channel), with its own lead bar, units, cooldown and outcome;
+    ///   the same rules for everyone. Patrols are picked for every player, chasers and daredevils keep clear of every
+    ///   player. A guest's Police (Runner.Net.cs) never drives anything: it draws the patrols and rivals the host names
+    ///   (GuestView), shows its own pursuit panel, scores its own PURSUIT from the host's events and takes its own caught
+    ///   penalty. Single-player is unchanged: one Suspect (you), no other players.
     /// - Looks (LateUpdate): each patrol is drawn as one of the plugin's own police car models (PoliceModels, cycled), or
     ///   a boss's car in a police livery (Look.CarModels); the traffic car's own model is never drawn meanwhile
     ///   (PoliceCar). Plus a lightbar (Lightbar) and a 3D marker (Marker); none of them parented to the pooled car.
@@ -42,7 +49,7 @@ namespace Police
     /// - Circuit breakers: patrols, visuals, HUD and the caught penalty each switch themselves off after an error;
     ///   5 errors in 10 s switch the whole plugin off for the session (everything restored and destroyed first).
     /// </summary>
-    public class Runner : MonoBehaviour
+    public partial class Runner : MonoBehaviour
     {
         public Runner(IntPtr ptr) : base(ptr) { }
 
@@ -68,6 +75,7 @@ namespace Police
         private const float PenaltyKeepSeconds = 3f;
         // chase driving (0.7.0)
         private const float DriveSnapSeconds = 0.1f, DriveLimit = 7.5f, DriveRate = 4.5f, DriveLookAhead = 260f;
+        private const int MaxSuspects = 4;   // you + up to 3 remote players (0.8.0)
 
         private enum Outcome { None, Escaped, Caught }
         private const string RaceOver = "race over";   // the one cancel reason that banks a chase's pending points
@@ -84,18 +92,23 @@ namespace Police
             public GameObject Skin;            // the traffic model we hid (Look != null)
             public Marker Mark;
             public CarState S;
-            public float LastRel = float.NaN;  // player distance - car distance at the last tick (+ = player ahead)
+            // per player (Suspect.Slot), 0.8.0: player distance - car distance at the last tick (+ = player ahead),
+            // game time of that player's last pass of this patrol, and whether that pass already started (or joined) a chase
+            public readonly float[] LastRel = { float.NaN, float.NaN, float.NaN, float.NaN };
+            public readonly float[] PassedAt = { -100f, -100f, -100f, -100f };
+            public readonly bool[] PassJudged = new bool[MaxSuspects];
             public float LastTravelled = float.NaN;
-            public bool InZone;
-            public float PassedAt = -100f;     // game time of the last pass of this patrol
-            public bool PassJudged;            // that pass already started (or joined) a chase
+            public bool InZone;                // you (the local player) are inside its notice range (marker)
             public float RoofHeight = 1.6f, NextHeight;
             public Vector3 Roof;
             public bool HasRoof;
             public float CamDist2;             // squared distance roof - camera this frame (which chasers get a real light)
             public bool Lit;                   // its lightbar's real light is allowed (near the camera, hysteresis)
+            public uint NetId;                 // multiplayer host: its NetworkAIVehicle netId (guests draw it by this), 0 otherwise
+            public int LookHint;               // the police model cursor it was built with (guests use the same)
             // chase
             public bool Chasing;
+            public Suspect Target;             // who it chases (set with Chasing)
             public bool SavedRubber;
             public float SavedMax = float.NaN, Written = float.NaN, Offset, SavedSmooth = float.NaN, SavedDespawn = float.NaN;
             public float ChaseTop = float.NaN;  // the chase top speed of the last tick (before the planner's cap)
@@ -107,28 +120,56 @@ namespace Police
             public bool Reverse;               // on the oncoming path: never driven by us
         }
 
+        /// <summary>
+        /// One player the police can chase (0.8.0): you (Local), or on a multiplayer host a remote player. Everything a
+        /// chase needs per player lives here, so each player has their own chase, lead bar, cooldown and notice inputs.
+        /// </summary>
+        private sealed class Suspect
+        {
+            public readonly int Slot;
+            public readonly bool Local;
+            public uint NetId;                 // remote: its NetworkPlayer netId
+            public Players.Remote Remote;      // remote: its synced position
+            public HostNet.Peer Peer;          // remote: its Police link (null when not linked)
+            public string Who;                 // for the log: "" (you) or " (player N)"
+            public PlayerState P;
+            public bool Valid;                 // read this tick and chaseable (remote: linked, alive, wants police)
+            public bool CanNotice = true;      // remote: its own Mode is Normal
+            public bool Ended;                 // its race is over (it no longer gets new patrols or notices)
+            public readonly List<Patrol> Chasers = new List<Patrol>();
+            public bool Live;                  // a chase is running (set by StartChase, cleared by EndChase)
+            public uint ChaseId;               // remote: which chase its events belong to
+            public float Bar, ChaseTime;
+            public float MaxGap, CatchUpTime;  // this chase: farthest any unit fell behind, seconds a unit drove with catch-up (log)
+            public float FarTime;              // this chase: seconds every unit has been more than EscapeBehind back (out of sight)
+            // this chase, what drained the bar (log): seconds with a unit on you (and slow), collisions counted / unseen, backup
+            public float OnYouTime, SlowOnYouTime, CrashLoss, BackupLoss;
+            public int CrashesSeen, CrashesUnseen;
+            public float CooldownUntil;
+            public int LastHits = -1, LastNear = -1;
+            public float LastCrash = -100f, LastNearMiss = -100f, LastDrift = -100f;
+            public int Hits, Nears;            // this tick's new collisions / near misses
+            public bool Chasing => Chasers.Count > 0;
+            public Suspect(int slot, bool local) { Slot = slot; Local = local; Who = ""; }
+        }
+
         private readonly List<Patrol> _patrols = new List<Patrol>();
-        private readonly List<Patrol> _chasers = new List<Patrol>();
         private readonly List<Patrol> _scratch = new List<Patrol>();
         private readonly HashSet<IntPtr> _patrolPtrs = new HashSet<IntPtr>();
         private readonly List<MonoBehaviour> _candidates = new List<MonoBehaviour>();
         private readonly System.Random _rng = new System.Random();
-        private PlayerState _player;
+        private readonly Suspect _local = new Suspect(0, true);
+        private readonly List<Suspect> _suspects = new List<Suspect>();
         private IntPtr _raceCar, _raceSpawner;
-        private float _nextPatrolAt = float.NaN, _nextPickTry, _cooldownUntil, _lastTickTime = -1f, _nextTick;
-        private int _lastHits = -1, _lastNear = -1;
-        private float _bar, _chaseTime;
-        private float _maxGap, _catchUpTime;   // this chase: farthest any unit fell behind you, seconds a unit drove with catch-up (log)
-        private float _farTime;                // this chase: seconds every unit has been more than EscapeBehind back (out of sight)
-        // this chase, what drained the bar (log): seconds with a unit on you (and slow), collisions counted / unseen, backup
-        private float _onYouTime, _slowOnYouTime, _crashLoss, _backupLoss;
-        private int _crashesSeen, _crashesUnseen;
+        private float _nextPatrolAt = float.NaN, _nextPickTry, _lastTickTime = -1f, _nextTick;
+        private int _pickCursor;
         // chase driving (0.7.0)
         private readonly RoadCar[] _road = new RoadCar[128];
         private int _roadN;
         private float _snapTime, _nextSnap = -1f;
         private PlayerState _dp;               // you, read each frame while chasers are driven
         private float _dpTime = -1f, _dpLaneVel, _dpLastLane = float.NaN;
+        private readonly PlanOther[] _others = new PlanOther[MaxSuspects + 2];
         private Action _drive;
         private bool _driveOff;
         private bool _sessionOn = true;
@@ -137,7 +178,7 @@ namespace Police
         // boss looks
         private readonly List<BossModel> _models = new List<BossModel>();
         private float _nextModelLoad;
-        private int _modelCursor, _lookFailures, _policeCursor = -1;
+        private int _modelCursor, _lookFailures, _policeCursor = -1, _hintCursor;
         private bool _looksOff, _modelsLogged;
 
         // breakers
@@ -173,11 +214,16 @@ namespace Police
         private static readonly Color MarkerZone = new Color(1f, 0.7f, 0.1f, 0.95f);
         private static readonly Color MarkerChase = new Color(1f, 0.15f, 0.1f, 0.95f);
         private static readonly Color Shade = new Color(0f, 0f, 0f, 0.65f);
-        private static readonly Color Good = new Color(0.3f, 1f, 0.4f, 1f);
+        private static readonly Color Good = new Color(0.3f, 1f, 0.45f, 1f);
         private static readonly Color Bad = new Color(1f, 0.3f, 0.25f, 1f);
         private static readonly Color Warn = new Color(1f, 0.75f, 0.2f, 1f);
 
-        private bool Chasing => _chasers.Count > 0;
+        /// <summary>The pursuit panel shows a chase: yours (single-player, host) or the host's chase of you (guest).</summary>
+        private bool HudChasing => _mode == NetMode.Guest ? _gLive : _local.Chasing;
+        private float HudBar => _mode == NetMode.Guest ? _gBar : _local.Bar;
+        private int HudUnits => _mode == NetMode.Guest ? _gUnits : _local.Chasers.Count;
+        private int HudSecLeft => _mode == NetMode.Guest ? _gSecLeft
+                                : Mathf.CeilToInt(Mathf.Max(0f, Mathf.Clamp(Plugin.Duration.Value, 10f, 300f) - _local.ChaseTime));
 
         // ------------------------------------------------------------------ Unity entry points
 
@@ -190,16 +236,21 @@ namespace Police
                 if (_tick == null)
                 {
                     _tick = Tick; _visuals = Visuals; _hud = Hud; _drive = Drive; _pursuit = new PursuitScore(Fault);   // created once: no delegate per frame
+                    _netTick = NetTick; _netFrame = NetFrame; _guestLooks = GuestLooks;
+                    _suspects.Add(_local);
                     try { useGUILayout = false; } catch { /* only skips the IMGUI layout pass; GUI.Box / GUI.Label need none */ }
                 }
                 ReadHotkey();
                 float now = Time.unscaledTime;
+                if (!_netOff) Guard(ref _netOff, "multiplayer link", _netFrame);   // every frame: the Steam channel (cheap when empty)
                 if (now >= _nextTick)
                 {
                     _nextTick = now + TickSeconds;
+                    CheckMode();   // also after the link breaker: the role must follow (back in single-player the HUD and PURSUIT are yours again)
                     if (!_tickOff) Guard(ref _tickOff, "patrols", _tick);
+                    if (!_broken && !_netOff) Guard(ref _netOff, "multiplayer link", _netTick);
                     // after the patrol tick: a chase cut short by a new race has already ended its live action
-                    if (!_broken) _pursuit.Tick(!_tickOff && WhyOff() == null);
+                    if (!_broken) _pursuit.Tick(_mode == NetMode.Guest ? GuestPoliceOn() : !_tickOff && WhyOff() == null);
                 }
                 if (!_broken) _pursuit.Frame();   // PURSUIT rows on the results and Victory screens
             }
@@ -210,25 +261,33 @@ namespace Police
         {
             if (_broken) return;
             using var perf = RogueShared.Perf.Scope("Police.LateUpdate");
-            if (!_driveOff && !_tickOff && _chasers.Count > 0) Guard(ref _driveOff, "chase driving", _drive);
+            if (!_driveOff && !_tickOff && AnyChasers()) Guard(ref _driveOff, "chase driving", _drive);
             if (!_visualsOff && _patrols.Count > 0) Guard(ref _visualsOff, "car looks / lightbars", _visuals);
+            if (!_visualsOff && _gview != null && (_gview.Count > 0 || _mode == NetMode.Guest && _guest != null && _guest.Linked))
+                Guard(ref _visualsOff, "car looks / lightbars", _guestLooks);
             if (!_hudOff) PursuitHudTick();
+        }
+
+        private bool AnyChasers()
+        {
+            for (int i = 0; i < _suspects.Count; i++) if (_suspects[i].Chasers.Count > 0) return true;
+            return false;
         }
 
         private void PursuitHudTick()
         {
             try
             {
+                bool chasing = HudChasing;
                 if (_phud == null)
                 {
-                    if (_phudTried || !Chasing && (_toast == null || Time.unscaledTime > _toastUntil)) return;   // built on first need
+                    if (_phudTried || !chasing && (_toast == null || Time.unscaledTime > _toastUntil)) return;   // built on first need
                     _phudTried = true;
                     _phud = PursuitHud.Create();
                     if (!_phud.Ok) { _phud = null; return; }
                     if (_toast != null && Time.unscaledTime <= _toastUntil) _phud.Banner(_toast, _toastColor);
                 }
-                int secLeft = Mathf.CeilToInt(Mathf.Max(0f, Mathf.Clamp(Plugin.Duration.Value, 10f, 300f) - _chaseTime));
-                _phud.Tick(Chasing, _bar, _chasers.Count, secLeft);
+                _phud.Tick(chasing, HudBar, HudUnits, HudSecLeft);
             }
             catch (Exception e)
             {
@@ -248,7 +307,7 @@ namespace Police
             // OnGUI) whenever there is a chase or banner, so the flat one never had anything to draw then
             bool fallbackHud = _phud == null && _phudTried;
             if (!markers && !fallbackHud) return;
-            if (_patrols.Count == 0 && !Chasing && (_toast == null || Time.unscaledTime > _toastUntil)) return;
+            if (_patrols.Count == 0 && !HudChasing && (_toast == null || Time.unscaledTime > _toastUntil)) return;
             var ev = Event.current;
             if (ev == null || ev.type != EventType.Repaint) return;
             using var perf = RogueShared.Perf.Scope("Police.OnGUI");
@@ -291,7 +350,15 @@ namespace Police
             if (IsMode("Off")) return "Mode = Off";
             if (!_sessionOn) return "off (F3)";
             if (!GameApi.TrafficOk || !GameApi.PlayerOk) return "game check failed (see log)";
-            if (GameApi.IsMultiplayer()) return "multiplayer (single-player only)";
+            if (_mode != NetMode.Single && GameApi.IsMultiplayer())
+            {
+                if (_netOff) return "multiplayer: the multiplayer link was switched off after an error";
+                if (!GameApi.ModeOk) return "game mode can't be read (multiplayer assumed)";
+                if (!Plugin.MpEnabled.Value) return "multiplayer (Multiplayer.Enabled = false)";
+                if (_mode == NetMode.Guest) return "multiplayer guest: the host runs the police";
+                if (_mode != NetMode.Host) return GameApi.NetOk ? "multiplayer: role unknown" : "multiplayer: game check failed (see log)";
+            }
+            else if (_mode == NetMode.Single && GameApi.IsMultiplayer()) return "multiplayer: role unknown";
             return null;
         }
 
@@ -309,14 +376,14 @@ namespace Police
             string off = WhyOff();
             if (off != null)
             {
-                if (_patrols.Count > 0) ReleaseAll(off);
+                if (_patrols.Count > 0 || AnyLive()) ReleaseAll(off);
                 if (!ReferenceEquals(off, _offReason)) { _offReason = off; SetState("idle: " + off); }   // no string built per tick
                 return;
             }
             _offReason = null;
-            if (!GameApi.ReadPlayer(ref _player))
+            if (!GameApi.ReadPlayer(ref _local.P))
             {
-                if (_patrols.Count > 0) ReleaseAll("no player car");
+                if (_patrols.Count > 0 || AnyLive()) ReleaseAll("no player car");
                 _raceCar = IntPtr.Zero;
                 SetState("waiting for a race");
                 return;
@@ -324,16 +391,17 @@ namespace Police
             IntPtr spawner = GameApi.Spawner();
             if (spawner == IntPtr.Zero)
             {
-                if (_patrols.Count > 0) ReleaseAll("no traffic spawner");
+                if (_patrols.Count > 0 || AnyLive()) ReleaseAll("no traffic spawner");
                 SetState("waiting for traffic");
                 return;
             }
-            if (_player.Car != _raceCar || spawner != _raceSpawner)
+            if (_local.P.Car != _raceCar || spawner != _raceSpawner)
             {
                 // a new race (or a new car): nothing carries over
-                if (_patrols.Count > 0) ReleaseAll("new race");
-                _raceCar = _player.Car; _raceSpawner = spawner;
-                _nextPatrolAt = float.NaN; _cooldownUntil = 0f; _lastHits = -1; _lastNear = -1; _lastTickTime = -1f; _nextPickTry = 0f;
+                if (_patrols.Count > 0 || AnyLive()) ReleaseAll("new race");
+                _raceCar = _local.P.Car; _raceSpawner = spawner;
+                _nextPatrolAt = float.NaN; _lastTickTime = -1f; _nextPickTry = 0f;
+                foreach (var s in _suspects) NewRaceFor(s);
                 GameApi.ForgetScene();
                 // load the police car models now (race start), not when the first patrol is picked mid-race; once per session
                 if (string.Equals(Plugin.CarModels.Value, "Police", StringComparison.OrdinalIgnoreCase))
@@ -342,48 +410,95 @@ namespace Police
                     catch (Exception e) { Plugin.Log.LogWarning($"[Police] police car models: {e.Message}"); }
                 }
             }
-            if (_player.LevelEnded)
+            _local.Valid = true;
+            if (_mode == NetMode.Host) RefreshRemoteSuspects();   // Runner.Net.cs: remote players' positions, links and reports
+            // 0.7.0: at or past the middle when the race ends = escaped at the finish (the time-up rule); else banked
+            if (!_local.P.LevelEnded) _local.Ended = false;
+            if (_local.P.LevelEnded && !_local.Ended) FinishFor(_local);
+            for (int i = 1; i < _suspects.Count; i++) { var s = _suspects[i]; if (s.Valid && s.P.LevelEnded && !s.Ended) FinishFor(s); }
+            if (AllEnded())
             {
-                // 0.7.0: at or past the middle when the race ends = escaped at the finish (the time-up rule); else banked
-                if (_chaseLive && _bar >= EscapeLead) EndChase(Outcome.Escaped, $"ahead at the finish at {_bar:0}%", true);
-                if (_patrols.Count > 0) ReleaseAll(RaceOver);   // a running chase's pending PURSUIT points are banked
+                if (_patrols.Count > 0 || AnyLive()) ReleaseAll(RaceOver);   // a running chase's pending PURSUIT points are banked
                 SetState("race over");
                 return;
             }
-            SetState(IsMode("Chill") ? "active (Chill: patrols never notice)" : "active");
+            SetState(IsMode("Chill") ? "active (Chill: patrols never notice)" : _suspects.Count > 1 ? "active (multiplayer host: police for every player)" : "active");
 
             float now = Time.time;   // game time: stands still while paused
             float dt = _lastTickTime < 0f ? 0f : Mathf.Clamp(now - _lastTickTime, 0f, 0.5f);
             float rawDt = _lastTickTime < 0f ? 0f : Mathf.Max(0f, now - _lastTickTime);
             _lastTickTime = now;
 
-            int hits = 0, nears = 0;
-            if (_player.Hits >= 0 && _lastHits >= 0 && _player.Hits > _lastHits) hits = _player.Hits - _lastHits;
-            if (_player.NearMisses >= 0 && _lastNear >= 0 && _player.NearMisses > _lastNear) nears = _player.NearMisses - _lastNear;
-            _lastHits = _player.Hits; _lastNear = _player.NearMisses;
+            for (int i = 0; i < _suspects.Count; i++)
+            {
+                var s = _suspects[i];
+                s.Hits = 0; s.Nears = 0;
+                if (!s.Valid) { s.LastHits = -1; s.LastNear = -1; continue; }   // counts start over when they're back (nothing banked meanwhile)
+                if (s.P.Hits >= 0 && s.LastHits >= 0 && s.P.Hits > s.LastHits) s.Hits = s.P.Hits - s.LastHits;
+                if (s.P.NearMisses >= 0 && s.LastNear >= 0 && s.P.NearMisses > s.LastNear) s.Nears = s.P.NearMisses - s.LastNear;
+                s.LastHits = s.P.Hits; s.LastNear = s.P.NearMisses;
+            }
 
             UpdatePatrols(rawDt);
-            bool wasChasing = Chasing;
-            if (dt > 0f) Notice(hits, nears, now, dt);
-            // a chase that just started doesn't also pay for the event that started it; paused (dt 0): no chase step, no writes
-            if (Chasing && wasChasing && dt > 0f) StepChase(dt, hits, nears);
+            for (int i = 0; i < _suspects.Count; i++)
+            {
+                var s = _suspects[i];
+                if (!s.Valid || s.Ended) continue;
+                bool wasChasing = s.Chasing;
+                if (dt > 0f) Notice(s, s.Hits, s.Nears, now, dt);
+                // a chase that just started doesn't also pay for the event that started it; paused (dt 0): no chase step, no writes
+                if (s.Chasing && wasChasing && dt > 0f) StepChase(s, dt, s.Hits, s.Nears);
+                if (_broken || _tickOff) return;   // a breaker tripped inside the chase step
+            }
             if (_broken || _tickOff) return;   // a breaker tripped inside the chase step: pick nothing new (nothing would restore it)
             MaybePick();
         }
 
-        /// <summary>Reads every patrol; releases the ones that are gone, back in the pool, reused, or 150 m behind.</summary>
+        private bool AnyLive()
+        {
+            for (int i = 0; i < _suspects.Count; i++) if (_suspects[i].Live) return true;
+            return false;
+        }
+
+        /// <summary>Every player's race is over (single-player: yours).</summary>
+        private bool AllEnded()
+        {
+            for (int i = 0; i < _suspects.Count; i++) { var s = _suspects[i]; if ((s.Local || s.Valid) && !s.Ended) return false; }
+            return true;
+        }
+
+        /// <summary>A new race: this player's per-race state starts over (nothing carries over).</summary>
+        private static void NewRaceFor(Suspect s)
+        {
+            s.CooldownUntil = 0f; s.LastHits = -1; s.LastNear = -1; s.Ended = false;
+        }
+
+        /// <summary>
+        /// This player's race is over: a running chase at or past the middle is escaped at the finish (the time-up rule),
+        /// below it its points are banked. Its chasers are given back; the player gets no new patrols or notices.
+        /// </summary>
+        private void FinishFor(Suspect s)
+        {
+            if (s.Live && s.Bar >= EscapeLead) EndChase(s, Outcome.Escaped, $"ahead at the finish at {s.Bar:0}%", true);
+            if (s.Live) EndChase(s, Outcome.None, RaceOver);   // banked
+            s.Ended = true;
+            if (!s.Local && Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] race over{s.Who}: no more police for them this race");
+        }
+
+        /// <summary>Reads every patrol; releases the ones that are gone, back in the pool, reused, or 150 m behind every player.</summary>
         private void UpdatePatrols(float rawDt)
         {
             float range = Mathf.Clamp(Plugin.NoticeRange.Value, 10f, 200f);
             for (int i = _patrols.Count - 1; i >= 0; i--)
             {
                 var p = _patrols[i];
+                var who = p.Target ?? _local;   // distances in the log are against the player it chases (else you)
                 bool ok = GameApi.ReadCar(p.Car, p.Pf, ref p.S);
                 if (!ok || !p.S.Active)
                 {
                     // gone or back in the pool: restore at once (pooled cars keep serialized fields)
                     // why (diagnostic): crashed (wrecks are cleared), or how far from you along the road
-                    Release(p, ok ? $"returned to the pool ({(p.S.WasHit ? "wrecked" : "not wrecked")}, {p.S.Road - _player.Distance:+0;-0} m from you)" : "gone", true);
+                    Release(p, ok ? $"returned to the pool ({(p.S.WasHit ? "wrecked" : "not wrecked")}, {p.S.Road - who.P.Distance:+0;-0} m from you)" : "gone", true);
                     continue;
                 }
                 // a big jump in its own distance means the pool reused it between two ticks: it is a different car now
@@ -404,85 +519,90 @@ namespace Police
                 {
                     // 0.7.0: a wrecked unit leaves the chase at once (it used to stay until the pool took it at 260 m,
                     // draining the bar while you were slow beside it, then "escaping" you with a close-call bonus)
-                    float at = p.S.Road - _player.Distance;
+                    var s = p.Target;
+                    float at = p.S.Road - s.P.Distance;
                     Release(p, $"wrecked ({at:+0;-0} m from you)", false);
-                    if (_chaseLive)
+                    if (s.Live)
                     {
-                        if (_chasers.Count > 0) Toast("UNIT WRECKED", Good);
-                        else if (_chaseTime < StartGrace) EndChase(Outcome.None, "the unit crashed at the start");   // you hit it as it noticed you: no chase, no points
-                        else EndChase(Outcome.Escaped, "they crashed: the last unit was wrecked");
+                        if (s.Chasers.Count > 0) Toast(s, "UNIT WRECKED", Good);
+                        else if (s.ChaseTime < StartGrace) EndChase(s, Outcome.None, "the unit crashed at the start");   // you hit it as it noticed you: no chase, no points
+                        else EndChase(s, Outcome.Escaped, "they crashed: the last unit was wrecked");
                     }
                     continue;
                 }
-                float rel = _player.Distance - p.S.Road;
-                if (!p.Chasing && rel > ReleaseBehind) { Release(p, "left behind", false); continue; }
-                p.InZone = Mathf.Abs(rel) <= range;
+                // left behind: more than ReleaseBehind behind every player (single-player: you)
+                float behindAll = float.MaxValue;
+                for (int k = 0; k < _suspects.Count; k++) { var s = _suspects[k]; if (s.Local || s.Valid) behindAll = Mathf.Min(behindAll, s.P.Distance - p.S.Road); }
+                if (!p.Chasing && behindAll > ReleaseBehind) { Release(p, "left behind", false); continue; }
+                p.InZone = Mathf.Abs(_local.P.Distance - p.S.Road) <= range;
                 if (p.Look != null && p.Skin != null) p.Look.HideTraffic(p.Skin);   // undo anything that switched the traffic model back on
             }
-            if (!Chasing && _chaseLive) EndChase(Outcome.Escaped, LostAll("every unit was despawned"));
+            for (int k = 0; k < _suspects.Count; k++)
+            {
+                var s = _suspects[k];
+                if (!s.Chasing && s.Live) EndChase(s, Outcome.Escaped, LostAll(s, "every unit was despawned"));
+            }
         }
 
-        private bool _chaseLive;   // a chase is running (set by StartChase, cleared by EndChase)
-
-        /// <summary>Strict noticing; during a chase, patrols you come near join as backup.</summary>
-        private void Notice(int hits, int nears, float now, float dt)
+        /// <summary>Strict noticing of one player; during their chase, patrols they pass recklessly join as backup.</summary>
+        private void Notice(Suspect s, int hits, int nears, float now, float dt)
         {
             // police engage ONLY on a reckless pass (the player's rule, 2026-10-03): the moment you go by a patrol, and
             // only if that pass was reckless. Nothing else (speeding nearby, drifting nearby) starts a chase.
-            if (hits > 0) _lastCrash = now;
-            if (nears > 0) _lastNearMiss = now;
-            if (_player.Drifting) _lastDrift = now;
+            if (hits > 0) s.LastCrash = now;
+            if (nears > 0) s.LastNearMiss = now;
+            if (s.P.Drifting) s.LastDrift = now;
             float overspeed = Mathf.Clamp(Plugin.OverspeedKmh.Value, 10f, 300f) / 3.6f;
             float closeLane = Mathf.Clamp(Plugin.CloseLaneMetres.Value, 0f, 10f);
             float window = Mathf.Clamp(Plugin.PassWindow.Value, 0.2f, 5f);
-            bool normal = IsMode("Normal");
-            bool canNotice = !Chasing && now >= _cooldownUntil && normal;
+            bool normal = IsMode("Normal") && s.CanNotice;
+            bool chasing = s.Chasing;
+            bool canNotice = !chasing && now >= s.CooldownUntil && normal;
             int maxChasers = Mathf.Clamp(Plugin.MaxChasers.Value, 1, 4);
+            int slot = s.Slot;
             Patrol witness = null; string reason = null;
             _scratch.Clear();
             for (int i = 0; i < _patrols.Count; i++)
             {
                 var p = _patrols[i];
-                float rel = _player.Distance - p.S.Road;
+                float rel = s.P.Distance - p.S.Road;
                 if (!p.Chasing && normal)
                 {
                     // a wrecked patrol can't chase (0.7.0: ramming a patrol used to start a chase that paid an escape)
-                    bool watching = !p.S.WasHit && (Chasing ? _chasers.Count + _scratch.Count < maxChasers : canNotice);
+                    bool watching = !p.S.WasHit && (chasing ? s.Chasers.Count + _scratch.Count < maxChasers : canNotice);
                     // the pass itself: you were behind it at the last tick and are level with or ahead of it now
-                    bool passing = !float.IsNaN(p.LastRel) && p.LastRel < 0f && rel >= 0f;
-                    if (passing) p.PassedAt = now;
+                    bool passing = !float.IsNaN(p.LastRel[slot]) && p.LastRel[slot] < 0f && rel >= 0f;
+                    if (passing) p.PassedAt[slot] = now;
                     string why = null;
-                    if (watching && passing) why = Reckless(p, now, now, overspeed, closeLane, window);
+                    if (watching && passing) why = Reckless(s, p, now, now, overspeed, closeLane, window);
                     // a crash, near miss or drift just after the pass (it is still right behind you) counts too
-                    else if (watching && now - p.PassedAt <= window && rel >= 0f && rel < 40f && !p.PassJudged) why = Reckless(p, p.PassedAt, now, float.MaxValue, -1f, window);
+                    else if (watching && now - p.PassedAt[slot] <= window && rel >= 0f && rel < 40f && !p.PassJudged[slot]) why = Reckless(s, p, p.PassedAt[slot], now, float.MaxValue, -1f, window);
                     if (why != null)
                     {
-                        p.PassJudged = true;
-                        if (Chasing) _scratch.Add(p);                  // backup: you blew past it while fleeing
+                        p.PassJudged[slot] = true;
+                        if (chasing) _scratch.Add(p);                  // backup: you blew past it while fleeing
                         else if (witness == null) { witness = p; reason = why; }
                     }
-                    else if (passing) p.PassJudged = false;
+                    else if (passing) p.PassJudged[slot] = false;
                 }
-                p.LastRel = rel;
+                p.LastRel[slot] = rel;
             }
-            if (witness != null) StartChase(witness, reason);
-            foreach (var b in _scratch) JoinChase(b);
+            if (witness != null) StartChase(s, witness, reason);
+            foreach (var b in _scratch) JoinChase(s, b);
             _scratch.Clear();
         }
-
-        private float _lastCrash = -100f, _lastNearMiss = -100f, _lastDrift = -100f;
 
         /// <summary>
         /// Why a pass of p was reckless, or null if it wasn't: much faster than it (overspeed), cutting close at speed
         /// (closer than closeLane across), or a crash / near miss / drift within the pass window.
         /// </summary>
-        private string Reckless(Patrol p, float passedAt, float now, float overspeed, float closeLane, float window)
+        private static string Reckless(Suspect s, Patrol p, float passedAt, float now, float overspeed, float closeLane, float window)
         {
-            float faster = _player.Speed - p.S.Speed;
-            float across = Mathf.Abs(_player.Lane - p.S.Lane);
-            if (Mathf.Abs(_lastCrash - passedAt) <= window && _lastCrash <= now) return "crashed while passing it";
-            if (Plugin.NoticeNearMiss.Value && Mathf.Abs(_lastNearMiss - passedAt) <= window && _lastNearMiss <= now) return "near miss while passing it";
-            if (Plugin.NoticeDrift.Value && Mathf.Abs(_lastDrift - passedAt) <= window && _lastDrift <= now) return "drifted past it";
+            float faster = s.P.Speed - p.S.Speed;
+            float across = Mathf.Abs(s.P.Lane - p.S.Lane);
+            if (Mathf.Abs(s.LastCrash - passedAt) <= window && s.LastCrash <= now) return "crashed while passing it";
+            if (Plugin.NoticeNearMiss.Value && Mathf.Abs(s.LastNearMiss - passedAt) <= window && s.LastNearMiss <= now) return "near miss while passing it";
+            if (Plugin.NoticeDrift.Value && Mathf.Abs(s.LastDrift - passedAt) <= window && s.LastDrift <= now) return "drifted past it";
             if (faster > overspeed) return $"passed it {faster * 3.6f:0} km/h faster";
             if (closeLane > 0f && across < closeLane && faster > 15f / 3.6f) return $"cut past it {across:0.0} m away at {faster * 3.6f:0} km/h faster";
             return null;
@@ -492,12 +612,28 @@ namespace Police
         {
             int max = Mathf.Clamp(Plugin.MaxPatrols.Value, 0, 4);
             float spacing = Mathf.Clamp(Plugin.PatrolSpacing.Value, 300f, 10000f);
+            // multiplayer: spacing follows the leading player; each new patrol is picked ahead of the next player in turn
+            Suspect at = _local;
+            float lead = _local.P.Distance;
+            if (_suspects.Count > 1)
+            {
+                at = null;
+                lead = float.MinValue;
+                for (int i = 0; i < _suspects.Count; i++) { var s = _suspects[i]; if ((s.Local || s.Valid) && !s.Ended) lead = Mathf.Max(lead, s.P.Distance); }
+                for (int k = 0; k < _suspects.Count && at == null; k++)
+                {
+                    var s = _suspects[(_pickCursor + k) % _suspects.Count];
+                    if ((s.Local || s.Valid) && !s.Ended) at = s;
+                }
+                if (at == null) return;
+            }
             // the first patrol of a race comes early (5-30% of the spacing), so every race has police to meet
-            if (float.IsNaN(_nextPatrolAt)) _nextPatrolAt = _player.Distance + spacing * (0.05f + 0.25f * (float)_rng.NextDouble());
-            if (_patrols.Count >= max || _player.Distance < _nextPatrolAt || Time.unscaledTime < _nextPickTry) return;
+            if (float.IsNaN(_nextPatrolAt)) _nextPatrolAt = lead + spacing * (0.05f + 0.25f * (float)_rng.NextDouble());
+            if (_patrols.Count >= max || lead < _nextPatrolAt || Time.unscaledTime < _nextPickTry) return;
             _nextPickTry = Time.unscaledTime + 1f;   // no candidate: look again in a second, never every tick
+            if (_suspects.Count > 1) _pickCursor++;
 
-            GameApi.FindCandidates(_player.Distance, _player.Lane, PickMinAhead, PickMaxAhead, PickLaneClear, _patrolPtrs, _candidates);
+            GameApi.FindCandidates(at.P.Distance, at.P.Lane, PickMinAhead, PickMaxAhead, PickLaneClear, _patrolPtrs, _candidates);
             if (_candidates.Count == 0) return;
             // prefer cars long enough to carry a boss car's shape (>= 4.3 m box); any car if none
             MonoBehaviour car = null;
@@ -517,20 +653,23 @@ namespace Police
             if (!GameApi.ReadCar(p.Car, p.Pf, ref p.S)) return;
             GameApi.BoxOf(car, out p.BoxC, out p.BoxS);
             p.LastTravelled = p.S.Travelled;
-            p.LastRel = _player.Distance - p.S.Road;
+            for (int i = 0; i < _suspects.Count; i++) { var s = _suspects[i]; if (s.Local || s.Valid) p.LastRel[s.Slot] = s.P.Distance - p.S.Road; }
+            if (_mode == NetMode.Host) p.NetId = GameApi.NetIdOf(car);
             if (!_visualsOff) MakeVisuals(p);
             _patrols.Add(p);
             _patrolPtrs.Add(p.Ptr);
-            _nextPatrolAt = _player.Distance + spacing * (0.6f + 0.8f * (float)_rng.NextDouble());
+            _nextPatrolAt = lead + spacing * (0.6f + 0.8f * (float)_rng.NextDouble());
             if (Plugin.LogEvents.Value)
-                Plugin.Log.LogInfo($"[Police] patrol picked: {p.S.Road - _player.Distance:0} m ahead, lane {p.S.Lane:0.0} m, {p.S.Speed * 3.6f:0} km/h, " +
-                                   $"{(p.Look != null ? p.Look.Name : "traffic look")} ({_patrols.Count}/{max} patrols, next in ~{_nextPatrolAt - _player.Distance:0} m)");
+                Plugin.Log.LogInfo($"[Police] patrol picked: {p.S.Road - at.P.Distance:0} m ahead{at.Who}, lane {p.S.Lane:0.0} m, {p.S.Speed * 3.6f:0} km/h, " +
+                                   $"{(p.Look != null ? p.Look.Name : "traffic look")} ({_patrols.Count}/{max} patrols, next in ~{_nextPatrolAt - lead:0} m)" +
+                                   (_mode == NetMode.Host ? $", netId {p.NetId}" : ""));
         }
 
         /// <summary>Boss-car look, lightbar and marker for a new patrol. Each part fails on its own (the patrol still works).</summary>
         private void MakeVisuals(Patrol p)
         {
             string models = Plugin.CarModels.Value ?? "Police";
+            p.LookHint = _hintCursor++;   // guests use it to pick their look (0.8.0); our own police model's cursor below when there is one
             if (!string.Equals(models, "Traffic", StringComparison.OrdinalIgnoreCase) && !_looksOff && GameApi.SkinOk)
             {
                 try
@@ -544,6 +683,7 @@ namespace Police
                         if (string.Equals(models, "Police", StringComparison.OrdinalIgnoreCase) && PoliceModels.EnsureLoaded() > 0)
                         {
                             if (_policeCursor < 0) _policeCursor = _rng.Next(PoliceModels.Count);
+                            p.LookHint = _policeCursor;   // the guests draw the same police model
                             look = PoliceCar.Build(PoliceModels.Get(_policeCursor++), livery);
                         }
                         else if (GameApi.BossOk)
@@ -602,32 +742,33 @@ namespace Police
 
         // ------------------------------------------------------------------ chase
 
-        private void StartChase(Patrol p, string reason)
+        private void StartChase(Suspect s, Patrol p, string reason)
         {
-            _bar = 50f; _chaseTime = 0f; _chaseLive = true;
-            _maxGap = 0f; _catchUpTime = 0f; _farTime = 0f;
-            _onYouTime = _slowOnYouTime = _crashLoss = _backupLoss = 0f; _crashesSeen = _crashesUnseen = 0;
-            _barShownPct = -1;
-            AddChaser(p);
-            if (_pursuit != null) _pursuit.ChaseStart(_chasers.Count);   // PURSUIT live action
-            Toast("POLICE PURSUIT", Bad);
+            s.Bar = 50f; s.ChaseTime = 0f; s.Live = true; s.ChaseId++;
+            s.MaxGap = 0f; s.CatchUpTime = 0f; s.FarTime = 0f;
+            s.OnYouTime = s.SlowOnYouTime = s.CrashLoss = s.BackupLoss = 0f; s.CrashesSeen = s.CrashesUnseen = 0;
+            if (s.Local) _barShownPct = -1;
+            AddChaser(s, p);
+            if (s.Local) { if (_pursuit != null) _pursuit.ChaseStart(s.Chasers.Count); }   // PURSUIT live action
+            else SendEvent(s, new NetEvent { Kind = NetEvent.Start, Units = s.Chasers.Count });   // the guest's own PURSUIT
+            Toast(s, "POLICE PURSUIT", Bad);
             if (Plugin.LogEvents.Value)
-                Plugin.Log.LogInfo($"[Police] noticed: {reason}. Chase on (you {_player.Speed * 3.6f:0} km/h, your top speed now {Basis() * 3.6f:0} km/h, patrol {p.S.Speed * 3.6f:0} km/h, " +
+                Plugin.Log.LogInfo($"[Police] noticed{s.Who}: {reason}. Chase on ({(s.Local ? "you" : "them")} {s.P.Speed * 3.6f:0} km/h, {(s.Local ? "your" : "their")} top speed now {Basis(s) * 3.6f:0} km/h, patrol {p.S.Speed * 3.6f:0} km/h, " +
                                    $"its top speed {p.SavedMax * 3.6f:0} -> {p.Written * 3.6f:0} km/h, acceleration smoothing {p.SavedSmooth:0.00} -> {Smooth(p):0.00} s, rubber banding {p.SavedRubber} -> False, " +
                                    $"driving: {(Driven && p.Lane != null && !p.Reverse ? "own (passes traffic)" : "game traffic")})");
         }
 
-        private void JoinChase(Patrol p)
+        private void JoinChase(Suspect s, Patrol p)
         {
-            AddChaser(p);
-            float before = _bar;
-            _bar = Mathf.Max(1f, _bar - Mathf.Clamp(Plugin.BackupPenalty.Value, 0f, 50f));
-            _backupLoss += before - _bar;
-            Toast($"BACKUP JOINED  ({_chasers.Count} UNITS)", Bad);
-            if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] backup joined: {_chasers.Count} units, lead {_bar:0}%");
+            AddChaser(s, p);
+            float before = s.Bar;
+            s.Bar = Mathf.Max(1f, s.Bar - Mathf.Clamp(Plugin.BackupPenalty.Value, 0f, 50f));
+            s.BackupLoss += before - s.Bar;
+            Toast(s, $"BACKUP JOINED  ({s.Chasers.Count} UNITS)", Bad);
+            if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] backup joined{s.Who}: {s.Chasers.Count} units, lead {s.Bar:0}%");
         }
 
-        private void AddChaser(Patrol p)
+        private void AddChaser(Suspect s, Patrol p)
         {
             GameApi.ReadChase(p.Pf, out p.SavedRubber, out p.SavedMax, out p.SavedSmooth, out p.SavedDespawn);
             p.Written = float.NaN; p.Offset = 0f;
@@ -639,13 +780,14 @@ namespace Police
                 p.Reverse = GameApi.IsReversePath(p.Car);   // an oncoming patrol keeps the game's driving (the steering frame is verified for your direction only)
             }
             p.Chasing = true;
-            _chasers.Add(p);
+            p.Target = s;
+            s.Chasers.Add(p);
             ApplyChase(p);
-            if (!Driven || p.Lane == null || p.Reverse) GameApi.Launch(p.Pf, LaunchFactor * _player.Speed);   // driven: Drive launches it once the way is clear
+            if (!Driven || p.Lane == null || p.Reverse) GameApi.Launch(p.Pf, LaunchFactor * s.P.Speed);   // driven: Drive launches it once the way is clear
         }
 
-        /// <summary>Your car's current top speed (upgrades and boosts), or its base top speed if unknown.</summary>
-        private float Basis() => !float.IsNaN(_player.MaxNow) ? _player.MaxNow : _player.TopSpeed;
+        /// <summary>A player's car's current top speed (upgrades and boosts), or its base top speed if unknown.</summary>
+        private static float Basis(Suspect s) => !float.IsNaN(s.P.MaxNow) ? s.P.MaxNow : s.P.TopSpeed;
 
         private static float Smooth(Patrol p)
         {
@@ -654,17 +796,17 @@ namespace Police
         }
 
         /// <summary>
-        /// Rubber banding off, MaxSpeed = SpeedFactor x your current top speed, quicker acceleration, no despawn behind
-        /// you. Re-applied every tick. A chaser more than CatchUpFrom behind you (behind = your distance - its distance)
-        /// gets up to +CatchUp on that, in full at CatchUpFull, none again within CatchUpFrom. The game itself only moves
-        /// MaxSpeed for slow motion (-/+ 0.2 x the car's base speed): any change we didn't write is kept as an offset,
-        /// applied on top of ours and given back on restore. Returns the catch-up share used (0 = none).
+        /// Rubber banding off, MaxSpeed = SpeedFactor x the chased player's current top speed, quicker acceleration, no
+        /// despawn behind them. Re-applied every tick. A chaser more than CatchUpFrom behind (behind = their distance -
+        /// its distance) gets up to +CatchUp on that, in full at CatchUpFull, none again within CatchUpFrom. The game itself
+        /// only moves MaxSpeed for slow motion (-/+ 0.2 x the car's base speed): any change we didn't write is kept as an
+        /// offset, applied on top of ours and given back on restore. Returns the catch-up share used (0 = none).
         /// </summary>
         private float ApplyChase(Patrol p, float behind = 0f)
         {
             float cur = GameApi.ReadMaxSpeed(p.Pf);
             if (!p.Driving && !float.IsNaN(p.Written) && Mathf.Abs(cur - p.Written) > 0.01f) p.Offset += cur - p.Written;   // driven: Drive folds it (never twice)
-            float basis = Basis();
+            float basis = p.Target != null ? Basis(p.Target) : float.NaN;
             float boost = 0f;
             float target = p.SavedMax;
             if (basis > 1f)
@@ -700,7 +842,7 @@ namespace Police
             catch (Exception e) { Plugin.Log.LogWarning($"[Police] restoring a patrol car's AI values failed: {e.Message}"); }
         }
 
-        private void StepChase(float dt, int hits, int nears)
+        private void StepChase(Suspect s, float dt, int hits, int nears)
         {
             float gap = float.MaxValue;        // to the nearest chaser either way (+ = you're ahead of it)
             float behind = float.MaxValue;     // to the nearest chaser behind you or level with you
@@ -709,18 +851,18 @@ namespace Police
             bool catchUp = false;
             bool sees = false;                 // a unit close enough to see a collision of yours
             // distance counts only once earned: the lead bar at or past the middle, after the first seconds of the chase
-            bool distanceCounts = _bar >= EscapeLead && _chaseTime >= MinEscapeSeconds;
-            for (int i = _chasers.Count - 1; i >= 0; i--)
+            bool distanceCounts = s.Bar >= EscapeLead && s.ChaseTime >= MinEscapeSeconds;
+            for (int i = s.Chasers.Count - 1; i >= 0; i--)
             {
-                var c = _chasers[i];
+                var c = s.Chasers[i];
                 if (c.S.WasHit) continue;          // a wreck never counts (it is released at the next read)
-                float g = _player.Distance - c.S.Road;
-                _maxGap = Mathf.Max(_maxGap, g);
+                float g = s.P.Distance - c.S.Road;
+                s.MaxGap = Mathf.Max(s.MaxGap, g);
                 bool lost = g > ChaseDespawnBehind || (distanceCounts && g > EscapeBehind);
-                if (lost && _chasers.Count > 1)
+                if (lost && s.Chasers.Count > 1)
                 {
                     Release(c, $"lost you ({g:0} m behind)", false);   // one unit dropped off; the others keep going
-                    Toast("UNIT LOST", Good);
+                    Toast(s, "UNIT LOST", Good);
                     continue;
                 }
                 if (g > ChaseDespawnBehind) lastLost = g;
@@ -729,16 +871,16 @@ namespace Police
                 if (g >= -AlongsideAhead) { behind = Mathf.Min(behind, g); if (g <= CloseGap) onYou++; }
                 if (g >= -SeeCrashAhead && g <= SeeCrashBehind) sees = true;
             }
-            if (!Chasing) return;
-            _chaseTime += dt;
-            if (catchUp) _catchUpTime += dt;
-            _farTime = gap > EscapeBehind ? _farTime + dt : 0f;
+            if (!s.Chasing) return;
+            s.ChaseTime += dt;
+            if (catchUp) s.CatchUpTime += dt;
+            s.FarTime = gap > EscapeBehind ? s.FarTime + dt : 0f;
             // a collision only costs lead when a unit is close enough to see it (0.7.0)
             int counted = sees ? hits : 0;
-            _crashesSeen += counted; _crashesUnseen += hits - counted;
+            s.CrashesSeen += counted; s.CrashesUnseen += hits - counted;
 
-            float top = Basis();
-            float frac = top > 1f ? _player.Speed / top : 1f;
+            float top = Basis(s);
+            float frac = top > 1f ? s.P.Speed / top : 1f;
             float rate;
             if (behind == float.MaxValue)
                 rate = frac < 0.6f ? -StuckPenalty : 0f;   // every chaser is still ahead of you: neutral unless you're stuck behind it
@@ -753,68 +895,86 @@ namespace Police
                 float nibble = Mathf.Clamp01((SafeShare - frac) / (SafeShare - SlowShare));
                 float close = 1f - Mathf.Clamp01(Mathf.Max(0f, behind) / CloseGap);
                 rate = -(BustAtSpeed * nibble + (BustWhenSlow - BustAtSpeed) * slow) * (0.5f + 0.5f * close) * (1f + 0.25f * (onYou - 1));
-                if (_chaseTime >= StartGrace) { _onYouTime += dt; if (frac < SlowShare) _slowOnYouTime += dt; }
+                if (s.ChaseTime >= StartGrace) { s.OnYouTime += dt; if (frac < SlowShare) s.SlowOnYouTime += dt; }
             }
-            if (_chaseTime < StartGrace && rate < 0f) rate = 0f;   // nobody is busted in the first seconds of a chase
-            float before = _bar;
-            float after = _bar + rate * dt + nears * NearMissBonus - counted * CrashPenalty;
-            if (onYou == 0) after = Mathf.Max(after, Mathf.Min(_bar, 1f));   // the bar only empties with a unit on you (0.7.0)
-            _crashLoss += counted * CrashPenalty;
-            _bar = Mathf.Clamp(after, 0f, 100f);
-            if (_pursuit != null) _pursuit.ChaseStep(before, _bar, dt, top > 1f && frac >= PursuitScore.FastShare, _chasers.Count);
+            if (s.ChaseTime < StartGrace && rate < 0f) rate = 0f;   // nobody is busted in the first seconds of a chase
+            float before = s.Bar;
+            float after = s.Bar + rate * dt + nears * NearMissBonus - counted * CrashPenalty;
+            if (onYou == 0) after = Mathf.Max(after, Mathf.Min(s.Bar, 1f));   // the bar only empties with a unit on you (0.7.0)
+            s.CrashLoss += counted * CrashPenalty;
+            s.Bar = Mathf.Clamp(after, 0f, 100f);
+            bool fast = top > 1f && frac >= PursuitScore.FastShare;
+            if (s.Local) { if (_pursuit != null) _pursuit.ChaseStep(before, s.Bar, dt, fast, s.Chasers.Count); }
+            else SendEvent(s, new NetEvent { Kind = NetEvent.Step, A = before, B = s.Bar, C = dt, Fast = fast, Units = s.Chasers.Count });
 
             float duration = Mathf.Clamp(Plugin.Duration.Value, 10f, 300f);
-            if (!float.IsNaN(lastLost)) EndChase(Outcome.Escaped, LostAll($"the last unit fell {lastLost:0} m behind"));
-            else if (_farTime >= OutOfSightSeconds && _bar >= EscapeLead && _chaseTime >= MinEscapeSeconds) EndChase(Outcome.Escaped, $"left it {gap:0} m behind");
-            else if (_bar >= 100f) EndChase(Outcome.Escaped, "lead bar full");
-            else if (_bar <= 0f) EndChase(Outcome.Caught, "lead bar empty");
-            else if (_chaseTime >= duration) EndChase(_bar >= EscapeLead ? Outcome.Escaped : Outcome.Caught, $"time up at {_bar:0}%", true);   // 0.7.0: the middle counts as escaped
+            if (!float.IsNaN(lastLost)) EndChase(s, Outcome.Escaped, LostAll(s, $"the last unit fell {lastLost:0} m behind"));
+            else if (s.FarTime >= OutOfSightSeconds && s.Bar >= EscapeLead && s.ChaseTime >= MinEscapeSeconds) EndChase(s, Outcome.Escaped, $"left it {gap:0} m behind");
+            else if (s.Bar >= 100f) EndChase(s, Outcome.Escaped, "lead bar full");
+            else if (s.Bar <= 0f) EndChase(s, Outcome.Caught, "lead bar empty");
+            else if (s.ChaseTime >= duration) EndChase(s, s.Bar >= EscapeLead ? Outcome.Escaped : Outcome.Caught, $"time up at {s.Bar:0}%", true);   // 0.7.0: the middle counts as escaped
         }
 
         /// <summary>The reason for a chase that ended because every unit was lost: "lost them" below the middle of the bar.</summary>
-        private string LostAll(string detail) => _bar < EscapeLead ? "lost them: " + detail : detail;
+        private static string LostAll(Suspect s, string detail) => s.Bar < EscapeLead ? "lost them: " + detail : detail;
 
-        private void EndChase(Outcome outcome, string reason, bool timeUp = false)
+        private void EndChase(Suspect s, Outcome outcome, string reason, bool timeUp = false)
         {
-            if (!_chaseLive) return;
-            _chaseLive = false;
-            int units = _chasers.Count;
-            if (outcome != Outcome.None) _cooldownUntil = Time.time + Mathf.Clamp(Plugin.Cooldown.Value, 0f, 300f);
+            if (!s.Live) return;
+            s.Live = false;
+            int units = s.Chasers.Count;
+            if (outcome != Outcome.None) s.CooldownUntil = Time.time + Mathf.Clamp(Plugin.Cooldown.Value, 0f, 300f);
 
             // PURSUIT: escaped = into the combo with the escape bonus, caught = lost, race over = banked, else cancelled
-            double pts = 0;
-            if (_pursuit != null)
-            {
-                var kind = outcome == Outcome.Escaped ? (timeUp ? PursuitScore.End.TimeUp : PursuitScore.End.Escaped)
-                         : outcome == Outcome.Caught ? PursuitScore.End.Caught
-                         : string.Equals(reason, RaceOver, StringComparison.Ordinal) ? PursuitScore.End.Bank : PursuitScore.End.Cancel;
-                pts = _pursuit.ChaseEnd(kind, _chaseTime, Mathf.Clamp(Plugin.Duration.Value, 10f, 300f), units, reason);
-            }
-
+            var kind = outcome == Outcome.Escaped ? (timeUp ? PursuitScore.End.TimeUp : PursuitScore.End.Escaped)
+                     : outcome == Outcome.Caught ? PursuitScore.End.Caught
+                     : string.Equals(reason, RaceOver, StringComparison.Ordinal) ? PursuitScore.End.Bank : PursuitScore.End.Cancel;
+            float duration = Mathf.Clamp(Plugin.Duration.Value, 10f, 300f);
             string penalty = "";
-            if (outcome == Outcome.Escaped)
-                Toast(pts >= 1 ? "ESCAPED  +" + Math.Round(pts).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "ESCAPED", Good);
-            else if (outcome == Outcome.Caught)
+            if (s.Local)
             {
-                float taken = 0f; string note = null;
-                float want = Mathf.Clamp(Plugin.CaughtPenaltySeconds.Value, 0f, 30f);
-                if (want > 0f && GameApi.TimerOk && !_penaltyOff)
-                {
-                    try { taken = GameApi.TakeTime(want, PenaltyKeepSeconds, out note); }
-                    catch (Exception e) { _penaltyOff = true; note = "penalty switched off after an error: " + e.Message; Plugin.Log.LogWarning($"[Police] {note}"); }
-                }
-                else note = want <= 0f ? "penalty off" : !GameApi.TimerOk ? "timer not found (game check)" : "penalty switched off";
-                Toast(taken > 0f ? $"BUSTED  -{taken:0.#} s" : "BUSTED", Bad);
-                penalty = taken > 0f ? $", -{taken:0.#} s" : $", no time penalty ({note})";
+                double pts = 0;
+                if (_pursuit != null) pts = _pursuit.ChaseEnd(kind, s.ChaseTime, duration, units, reason);
+                if (outcome == Outcome.Escaped)
+                    Toast(pts >= 1 ? "ESCAPED  +" + Math.Round(pts).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "ESCAPED", Good);
+                else if (outcome == Outcome.Caught) penalty = TakePenalty();
+            }
+            else
+            {
+                // the guest scores its own PURSUIT, shows its own ESCAPED / BUSTED banner and takes its own penalty
+                SendEvent(s, new NetEvent { Kind = NetEvent.End, EndKind = (byte)kind, Outcome = (byte)outcome, A = s.ChaseTime, B = duration, C = s.Bar, Units = units, Text = reason });
+                if (outcome == Outcome.Caught) penalty = ", no time penalty (multiplayer: shared race timer)";
             }
             if (Plugin.LogEvents.Value)
-                Plugin.Log.LogInfo($"[Police] chase over: {(outcome == Outcome.None ? "cancelled" : outcome.ToString().ToUpperInvariant())} ({reason}) after {_chaseTime:0.0} s, " +
-                                   $"lead {_bar:0}%, {units} unit(s){penalty}, max gap {_maxGap:0} m, catch-up used {_catchUpTime:0.0} s; " +
-                                   $"drain: unit on you {_onYouTime:0.0} s (slow {_slowOnYouTime:0.0} s), collisions {_crashesSeen} (-{_crashLoss:0}%), unseen {_crashesUnseen}, backup -{_backupLoss:0}%; patrol AI values restored");
-            for (int i = _chasers.Count - 1; i >= 0; i--) Release(_chasers[i], "chase over", false);
-            _chasers.Clear();
+                Plugin.Log.LogInfo($"[Police] chase over{s.Who}: {(outcome == Outcome.None ? "cancelled" : outcome.ToString().ToUpperInvariant())} ({reason}) after {s.ChaseTime:0.0} s, " +
+                                   $"lead {s.Bar:0}%, {units} unit(s){penalty}, max gap {s.MaxGap:0} m, catch-up used {s.CatchUpTime:0.0} s; " +
+                                   $"drain: unit on you {s.OnYouTime:0.0} s (slow {s.SlowOnYouTime:0.0} s), collisions {s.CrashesSeen} (-{s.CrashLoss:0}%), unseen {s.CrashesUnseen}, backup -{s.BackupLoss:0}%; patrol AI values restored");
+            for (int i = s.Chasers.Count - 1; i >= 0; i--) Release(s.Chasers[i], "chase over", false);
+            s.Chasers.Clear();
             float spacing = Mathf.Clamp(Plugin.PatrolSpacing.Value, 300f, 10000f);
-            if (!float.IsNaN(_nextPatrolAt)) _nextPatrolAt = Mathf.Max(_nextPatrolAt, _player.Distance + 0.5f * spacing);
+            if (!float.IsNaN(_nextPatrolAt)) _nextPatrolAt = Mathf.Max(_nextPatrolAt, s.P.Distance + 0.5f * spacing);
+        }
+
+        /// <summary>
+        /// The caught penalty on the race timer (single-player only); returns the log text and shows the BUSTED banner.
+        /// 0.8.0 audit: in multiplayer the race countdown is game-networked (NetworkGameManager.AddTimerSeconds ->
+        /// CMD_/RPC_AddTimerSeconds, serverLevelElapsedTime is a SyncVar), so a local RemoveCountdownTime could shorten
+        /// everyone's race (host) or end a guest's race early: a catch there is BUSTED with no time penalty.
+        /// </summary>
+        private string TakePenalty()
+        {
+            float taken = 0f; string note = null;
+            float want = Mathf.Clamp(Plugin.CaughtPenaltySeconds.Value, 0f, 30f);
+            bool mp = GameApi.IsMultiplayer();   // unreadable mode counts as multiplayer: no penalty
+            if (mp) note = "multiplayer: shared race timer";
+            else if (want > 0f && GameApi.TimerOk && !_penaltyOff && Time.timeScale > 0f)
+            {
+                try { taken = GameApi.TakeTime(want, PenaltyKeepSeconds, out note); }
+                catch (Exception e) { _penaltyOff = true; note = "penalty switched off after an error: " + e.Message; Plugin.Log.LogWarning($"[Police] {note}"); }
+            }
+            else note = want <= 0f ? "penalty off" : !GameApi.TimerOk ? "timer not found (game check)" : Time.timeScale <= 0f ? "paused" : "penalty switched off";
+            Toast(taken > 0f ? $"BUSTED  -{taken:0.#} s" : "BUSTED", Bad);
+            return taken > 0f ? $", -{taken:0.#} s" : $", no time penalty ({note})";
         }
 
         // ------------------------------------------------------------------ patrol lifetime
@@ -822,26 +982,29 @@ namespace Police
         /// <summary>Restores the car and destroys our objects. lostMidChase: the car vanished; the chase goes on if others remain.</summary>
         private void Release(Patrol p, string reason, bool lostMidChase)
         {
-            bool wasChaser = _chasers.Remove(p);
+            var s = p.Target;
+            bool wasChaser = s != null && s.Chasers.Remove(p);
             RestoreChase(p, true);
+            p.Target = null;
             if (p.Bar != null) { try { p.Bar.Destroy(); } catch { /* scene */ } p.Bar = null; }
             if (p.Look != null) { try { p.Look.Destroy(); } catch { /* scene */ } p.Look = null; p.Skin = null; }
             if (p.Mark != null) { try { p.Mark.Destroy(); } catch { /* scene */ } p.Mark = null; }
             _patrols.Remove(p);
             _patrolPtrs.Remove(p.Ptr);
-            if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] patrol released: {reason} ({_patrols.Count} left{(wasChaser ? $", {_chasers.Count} chasing" : "")})");
-            if (wasChaser && lostMidChase && _chaseLive)
+            if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Police] patrol released: {reason} ({_patrols.Count} left{(wasChaser ? $", {s.Chasers.Count} chasing{s.Who}" : "")})");
+            if (wasChaser && lostMidChase && s.Live)
             {
-                if (_chasers.Count == 0) EndChase(Outcome.Escaped, LostAll($"the last unit was despawned ({reason})"));
-                else Toast("UNIT LOST", Good);   // one unit despawned; the others keep going
+                if (s.Chasers.Count == 0) EndChase(s, Outcome.Escaped, LostAll(s, $"the last unit was despawned ({reason})"));
+                else Toast(s, "UNIT LOST", Good);   // one unit despawned; the others keep going
             }
         }
 
         private void ReleaseAll(string reason)
         {
-            if (_chaseLive) EndChase(Outcome.None, reason);
+            for (int i = 0; i < _suspects.Count; i++) if (_suspects[i].Live) EndChase(_suspects[i], Outcome.None, reason);
             for (int i = _patrols.Count - 1; i >= 0; i--) Release(_patrols[i], reason, false);
-            _patrols.Clear(); _chasers.Clear();
+            _patrols.Clear();
+            foreach (var s in _suspects) s.Chasers.Clear();
             _patrolPtrs.Clear();
         }
 
@@ -857,8 +1020,10 @@ namespace Police
                     try { RestoreChase(p, true); } catch { /* scene */ }
                     try { p.Bar?.Destroy(); p.Look?.Destroy(); p.Mark?.Destroy(); } catch { /* the scene takes it */ }
                 }
-                _patrols.Clear(); _patrolPtrs.Clear(); _chasers.Clear(); _chaseLive = false;
+                _patrols.Clear(); _patrolPtrs.Clear();
+                foreach (var s in _suspects) { s.Chasers.Clear(); s.Live = false; }
             }
+            NetShutdown(reason);   // Runner.Net.cs: guest chase ended, guest looks destroyed, links closed (never throws)
             if (_pursuit != null) _pursuit.Close(false);   // never leave the game's live action open (never throws)
             try { _phud?.Destroy(); } catch { /* scene */ }
             _phud = null;
@@ -881,6 +1046,7 @@ namespace Police
                 try { p.Mark?.Destroy(); } catch { /* the scene takes it */ }
                 p.Bar = null; p.Look = null; p.Skin = null; p.Mark = null;
             }
+            try { _gview?.DestroyAll(); } catch { /* the scene takes it */ }
         }
 
         // ------------------------------------------------------------------ chase driving (every frame, 0.7.0)
@@ -892,9 +1058,11 @@ namespace Police
 
         /// <summary>
         /// Drives every chaser for the next physics steps like a daredevil: the gap planner on a traffic snapshot (every
-        /// 0.1 s) picks its offset across the road (towards your lane, round traffic, never into you) and caps its speed
-        /// for a car it can't get round; GameApi.Steer writes the offset, holds the game's curve slow-down and (unless the
-        /// snapshot was full) its obstruction braking off, and writes the capped top speed. Nothing while paused.
+        /// 0.1 s) picks its offset across the road (towards the chased player's lane, round traffic, never into any
+        /// player) and caps its speed for a car it can't get round; GameApi.Steer writes the offset, holds the game's
+        /// curve slow-down and (unless the snapshot was full) its obstruction braking off, and writes the capped top
+        /// speed. Nothing while paused. Multiplayer host: a chaser of a remote player aims at that player's synced lane;
+        /// you and every remote player are never-hit obstacles (remote ones with latency margins, Players.FillOthers).
         /// </summary>
         private void Drive()
         {
@@ -903,7 +1071,7 @@ namespace Police
             if (!DriveOn)
             {
                 // switched off mid-chase: back to the game's driving (home lane, game factors)
-                foreach (var c in _chasers) if (c.Driving) StopDriving(c);
+                foreach (var s in _suspects) foreach (var c in s.Chasers) if (c.Driving) StopDriving(c);
                 return;
             }
             if (!GameApi.ReadPlayer(ref _dp, false)) return;
@@ -916,54 +1084,93 @@ namespace Police
             {
                 _nextSnap = now + DriveSnapSeconds;
                 float lo = -60f, hi = 60f;
-                foreach (var c in _chasers) { float rel = c.S.Road - _dp.Distance; lo = Mathf.Min(lo, rel - 40f); hi = Mathf.Max(hi, rel + DriveLookAhead); }
+                foreach (var s in _suspects) foreach (var c in s.Chasers) { float rel = c.S.Road - _dp.Distance; lo = Mathf.Min(lo, rel - 40f); hi = Mathf.Max(hi, rel + DriveLookAhead); }
                 _roadN = GameApi.ReadRoad(_dp.Distance, -lo, hi, _road);
                 TrafficTracker.Update(_road, _roadN, now);
                 _snapTime = now;
             }
             float youV = Mathf.Max(0f, _dp.Speed);
             float soon = _dp.Lane + Mathf.Clamp(_dpLaneVel, -8f, 8f) * 0.6f;
-            for (int i = 0; i < _chasers.Count; i++)
+            // multiplayer host: _others = [you exactly as the planner's "you" (no latency)] + every remote player (with their
+            // latency margins), for chasers of a remote player; _othersShift = the remote players only, for chasers of you
+            bool mp = _mode == NetMode.Host && Players.All.Count > 0;
+            int othersN = 0, remotesN = 0;
+            if (mp)
             {
-                var c = _chasers[i];
-                if (c.Lane == null || c.T == null || c.Reverse) continue;
-                if (!GameApi.ReadCar(c.Car, c.Pf, ref c.S) || !c.S.Active || c.S.WasHit) continue;   // the tick releases it
-                if (float.IsNaN(c.ChaseTop)) continue;
-                // reused by the pool since the last tick (a different car now): never steer it; the tick releases it
-                float moved = c.S.Travelled - c.LastTravelled;
-                if (!float.IsNaN(c.LastTravelled) && (moved < -5f || moved > Mathf.Max(60f, Mathf.Abs(c.S.Speed) * 0.5f + 20f))) continue;
-                // the game's slow-motion change to MaxSpeed (-/+0.2 x base) since our last write: kept as the offset, as in ApplyChase
-                float cur = GameApi.ReadMaxSpeed(c.Pf);
-                if (!float.IsNaN(c.Written) && Mathf.Abs(cur - c.Written) > 0.01f) { c.Offset += cur - c.Written; c.ChaseTop += cur - c.Written; }
-                float v = Mathf.Max(0f, c.S.Speed);
-                bool start = !c.Driving;
-                if (start)
-                {
-                    c.Driving = true;
-                    c.LatOffset = c.S.Lane;
-                    c.PlanTarget = float.NaN;
-                    GameApi.ClampSpeed(c.Pf, v);   // from what it really drives: no jump when the game's slow-down factors go to 1
-                }
-                float halfW = Mathf.Clamp(c.BoxS.x * 0.5f, 0.8f, 1.3f), halfL = Mathf.Clamp(c.BoxS.z * 0.5f, 1.8f, 3.2f);
-                var plan = DaredevilPlanner.Plan(new PlanInput
-                {
-                    Self = c.Ptr, S = c.S.Road, V = v, Offset = c.LatOffset, HalfW = halfW, HalfL = halfL,
-                    LineTarget = Mathf.Clamp(_dp.Lane, -DriveLimit, DriveLimit), PrevTarget = c.PlanTarget,
-                    Limit = DriveLimit, Rate = DriveRate, Vmax = c.ChaseTop, SinceSnap = now - _snapTime,
-                    YouValid = true, YouRoad = _dp.Distance, YouLane = _dp.Lane,
-                    YouLo = Mathf.Min(_dp.Lane, soon), YouHi = Mathf.Max(_dp.Lane, soon), YouSpeed = youV,
-                }, _road, _roadN);
-                c.PlanTarget = plan.Target;
-                float before = c.LatOffset;
-                c.LatOffset = Mathf.MoveTowards(c.LatOffset, plan.Target, DriveRate * (plan.Evading ? 1.6f : 1f) * dt);
-                float sideways = (c.LatOffset - before) / dt;
-                c.Yaw = v > 1f ? Mathf.Atan2(sideways, v) * Mathf.Rad2Deg : 0f;   // the look points where it goes
-                float top = Mathf.Max(1f, Mathf.Min(c.ChaseTop, plan.Cap));
-                GameApi.Steer(c.Pf, c.Lane, c.LatOffset, top, _roadN < _road.Length);   // a full snapshot: keep the game's braking too
-                c.Written = top;   // ours: ApplyChase doesn't take it for a slow-motion change
-                if (plan.Instant < v) GameApi.ClampSpeed(c.Pf, plan.Instant);
-                else if (start) GameApi.Launch(c.Pf, Mathf.Min(LaunchFactor * youV, top));   // the launch, now that the way is known to be clear
+                Players.Refresh();
+                _others[0] = new PlanOther { Road = _dp.Distance, Lo = Mathf.Min(_dp.Lane, soon), Hi = Mathf.Max(_dp.Lane, soon), Speed = youV };
+                othersN = Players.FillOthers(_others, 1, null, now);
+                remotesN = CopyRemotes(othersN);
             }
+            for (int k = 0; k < _suspects.Count; k++)
+            {
+                var s = _suspects[k];
+                for (int i = 0; i < s.Chasers.Count; i++)
+                {
+                    var c = s.Chasers[i];
+                    if (c.Lane == null || c.T == null || c.Reverse) continue;
+                    if (!s.Local && (!mp || s.Remote == null || !s.Remote.Ok)) continue;   // a remote player not read this frame: the tick ends that chase
+                    if (!GameApi.ReadCar(c.Car, c.Pf, ref c.S) || !c.S.Active || c.S.WasHit) continue;   // the tick releases it
+                    if (float.IsNaN(c.ChaseTop)) continue;
+                    // reused by the pool since the last tick (a different car now): never steer it; the tick releases it
+                    float moved = c.S.Travelled - c.LastTravelled;
+                    if (!float.IsNaN(c.LastTravelled) && (moved < -5f || moved > Mathf.Max(60f, Mathf.Abs(c.S.Speed) * 0.5f + 20f))) continue;
+                    // the game's slow-motion change to MaxSpeed (-/+0.2 x base) since our last write: kept as the offset, as in ApplyChase
+                    float cur = GameApi.ReadMaxSpeed(c.Pf);
+                    if (!float.IsNaN(c.Written) && Mathf.Abs(cur - c.Written) > 0.01f) { c.Offset += cur - c.Written; c.ChaseTop += cur - c.Written; }
+                    float v = Mathf.Max(0f, c.S.Speed);
+                    bool start = !c.Driving;
+                    if (start)
+                    {
+                        c.Driving = true;
+                        c.LatOffset = c.S.Lane;
+                        c.PlanTarget = float.NaN;
+                        GameApi.ClampSpeed(c.Pf, v);   // from what it really drives: no jump when the game's slow-down factors go to 1
+                    }
+                    float halfW = Mathf.Clamp(c.BoxS.x * 0.5f, 0.8f, 1.3f), halfL = Mathf.Clamp(c.BoxS.z * 0.5f, 1.8f, 3.2f);
+                    var input = new PlanInput
+                    {
+                        Self = c.Ptr, S = c.S.Road, V = v, Offset = c.LatOffset, HalfW = halfW, HalfL = halfL,
+                        LineTarget = Mathf.Clamp(_dp.Lane, -DriveLimit, DriveLimit), PrevTarget = c.PlanTarget,
+                        Limit = DriveLimit, Rate = DriveRate, Vmax = c.ChaseTop, SinceSnap = now - _snapTime,
+                        YouValid = true, YouRoad = _dp.Distance, YouLane = _dp.Lane,
+                        YouLo = Mathf.Min(_dp.Lane, soon), YouHi = Mathf.Max(_dp.Lane, soon), YouSpeed = youV,
+                    };
+                    float targetV = youV;
+                    if (mp && !s.Local && s.Remote != null && s.Remote.Ok)
+                    {
+                        // chasing a remote player: aim at their lane; you are an obstacle with exactly your rules (no
+                        // latency: [0]), every remote player (them included) one with their latency margins
+                        var r = s.Remote;
+                        input.YouValid = false;
+                        input.LineTarget = Mathf.Clamp(r.Lane + Mathf.Clamp(r.LaneVel, -8f, 8f) * r.OneWay, -DriveLimit, DriveLimit);
+                        input.Others = _others; input.OthersN = othersN;
+                        targetV = r.Speed;
+                    }
+                    else if (mp) { input.Others = _othersShift; input.OthersN = remotesN; }   // you as before, every remote player as an obstacle
+                    var plan = DaredevilPlanner.Plan(input, _road, _roadN);
+                    c.PlanTarget = plan.Target;
+                    float before = c.LatOffset;
+                    c.LatOffset = Mathf.MoveTowards(c.LatOffset, plan.Target, DriveRate * (plan.Evading ? 1.6f : 1f) * dt);
+                    float sideways = (c.LatOffset - before) / dt;
+                    c.Yaw = v > 1f ? Mathf.Atan2(sideways, v) * Mathf.Rad2Deg : 0f;   // the look points where it goes
+                    float top = Mathf.Max(1f, Mathf.Min(c.ChaseTop, plan.Cap));
+                    GameApi.Steer(c.Pf, c.Lane, c.LatOffset, top, _roadN < _road.Length);   // a full snapshot: keep the game's braking too
+                    c.Written = top;   // ours: ApplyChase doesn't take it for a slow-motion change
+                    if (plan.Instant < v) GameApi.ClampSpeed(c.Pf, plan.Instant);
+                    else if (start) GameApi.Launch(c.Pf, Mathf.Min(LaunchFactor * targetV, top));   // the launch, now that the way is known to be clear
+                }
+            }
+        }
+
+        private readonly PlanOther[] _othersShift = new PlanOther[MaxSuspects + 2];
+
+        /// <summary>The remote players of _others (from index 1) copied to the front of _othersShift; returns how many.</summary>
+        private int CopyRemotes(int n)
+        {
+            int m = 0;
+            for (int i = 1; i < n && m < _othersShift.Length; i++) _othersShift[m++] = _others[i];
+            return m;
         }
 
         /// <summary>Gives a driven chaser back to the game's driving (still chasing: its chase values stay).</summary>
@@ -1070,7 +1277,7 @@ namespace Police
                 if (_drawMarkers) DrawMarkers(s);
                 if (_drawHud)
                 {
-                    if (Chasing) DrawLeadBar(s);
+                    if (HudChasing) DrawLeadBar(s);
                     if (_toast != null && Time.unscaledTime <= _toastUntil) DrawToast(s);
                 }
             }
@@ -1116,15 +1323,16 @@ namespace Police
             GUI.color = Shade;
             GUI.Box(new Rect(x, y, w, h), _none, _white);
             float pad = 3f * s;
-            GUI.color = _bar >= 70f ? Good : _bar <= 30f ? Bad : Warn;
-            GUI.Box(new Rect(x + pad, y + pad, (w - 2f * pad) * _bar / 100f, h - 2f * pad), _none, _white);
+            float bar = HudBar;
+            GUI.color = bar >= 70f ? Good : bar <= 30f ? Bad : Warn;
+            GUI.Box(new Rect(x + pad, y + pad, (w - 2f * pad) * bar / 100f, h - 2f * pad), _none, _white);
 
-            int pct = Mathf.RoundToInt(_bar);
-            int sec = Mathf.CeilToInt(Mathf.Max(0f, Mathf.Clamp(Plugin.Duration.Value, 10f, 300f) - _chaseTime));
+            int pct = Mathf.RoundToInt(bar);
+            int sec = HudSecLeft;
             if (pct != _barShownPct || sec != _barShownSec)
             {
                 _barShownPct = pct; _barShownSec = sec;
-                _barText = $"POLICE   lead {pct}%   {sec} s   {_chasers.Count} unit(s)";
+                _barText = $"POLICE   lead {pct}%   {sec} s   {HudUnits} unit(s)";
                 _barContent.text = _barText;
             }
             SetFont(Mathf.RoundToInt(14f * s));
@@ -1158,6 +1366,13 @@ namespace Police
             try { _phud?.Banner(text, color); } catch { /* HUD breaker handles it in LateUpdate */ }
         }
 
+        /// <summary>A banner for one player: yours on this screen, a remote player's sent to their game.</summary>
+        private void Toast(Suspect s, string text, Color color)
+        {
+            if (s.Local) { Toast(text, color); return; }
+            SendEvent(s, new NetEvent { Kind = NetEvent.Toast, Text = text, Color = (byte)(color == Good ? 0 : color == Bad ? 1 : 2) });
+        }
+
         // ------------------------------------------------------------------ breakers
 
         /// <summary>Runs one feature; an exception switches just that feature off (logged once) and counts toward the plugin breaker.</summary>
@@ -1170,8 +1385,9 @@ namespace Police
                 Plugin.Log.LogWarning($"[Police] {feature} switched off for this session after an error: {e.Message}");
                 if (feature == "patrols") Shutdown("patrols off");
                 else if (feature == "car looks / lightbars") DestroyVisuals();
-                else if (feature == "chase driving") foreach (var c in _chasers) { if (c.Driving) StopDriving(c); }
+                else if (feature == "chase driving") { foreach (var s in _suspects) foreach (var c in s.Chasers) { if (c.Driving) StopDriving(c); } }
                 else if (feature == "HUD") { try { _phud?.Destroy(); } catch { /* scene */ } _phud = null; }   // nothing frozen on screen
+                else if (feature == "multiplayer link") NetOff();
                 Fault(e);
             }
         }

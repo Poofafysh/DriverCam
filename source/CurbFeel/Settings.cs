@@ -71,6 +71,11 @@ namespace CurbFeel
         public static ConfigEntry<bool> IncludeRacers;
         public static ConfigEntry<bool> LogLanes;
 
+        // F. Drift
+        public static ConfigEntry<bool> DriftEnabled;
+        public static ConfigEntry<float> DriftStartSpeedLoss;
+        public static ConfigEntry<bool> DriftKeepOffLeaderboards;
+
         public static void Bind(ConfigFile cfg)
         {
             Enabled = cfg.Bind("General", "Enabled", true, new ConfigDescription("Master switch. ToggleKey flips it in game so you can compare stock vs modded.", null, HubLink.Meta("CurbFeel on")));
@@ -161,6 +166,11 @@ namespace CurbFeel
                 new ConfigDescription("VehicleStuntHandler.withinNearMissExtraRange for your car (stock 0.1 m). -1 = stock + the width removed by WidthScale, so near-misses still score.", null, HubLink.Meta("Near-miss extra range", advanced: true)));
             IncludeRacers = cfg.Bind("E.Traffic", "IncludeRacers", false, new ConfigDescription("Also treat shallow contacts with AI racers as side-swipes.", null, HubLink.Meta("Treat AI racers like traffic")));
             LogLanes = cfg.Bind("E.Traffic", "LogLanes", true, new ConfigDescription("Log the lane offsets traffic actually uses.", null, HubLink.Meta("Log lanes (debug)", advanced: true)));
+            DriftEnabled = cfg.Bind("F.Drift", "Enabled", true,
+                new ConfigDescription("Starting a drift costs speed (your own car, also in multiplayer). A card that negates drift speed loss skips it.", null, HubLink.Meta("Drift start speed loss")));
+            DriftStartSpeedLoss = cfg.Bind("F.Drift", "StartSpeedLoss", 0.05f, new ConfigDescription("Fraction of speed lost the moment a drift starts (0.05 = 5%), unless a card negates drift speed loss.", new AcceptableValueRange<float>(0f, 0.2f), HubLink.Meta("Speed lost per drift start", 0, 0.2, 0.005, "%", scale: 100)));
+            DriftKeepOffLeaderboards = cfg.Bind("F.Drift", "KeepOffLeaderboards", false,
+                new ConfigDescription("Don't upload a run to the Steam leaderboards if a drift start cost speed in it. Off = such runs upload as usual (the drift loss only makes runs slower).", null, HubLink.Meta("Keep drift-nerf runs off leaderboards")));
             ConfigVersion = cfg.Bind("General", "ConfigVersion", 0, "Written by the plugin (settings migration). Don't edit.");
             Migrate();
         }

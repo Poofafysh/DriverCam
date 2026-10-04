@@ -63,12 +63,13 @@ namespace Police
             CheckBoss(asm, missing);
             CheckDaredevil(asm, missing);
             CheckScore(asm, missing);   // GameApi.Score.cs: PURSUIT category, results / Victory rows, run position
+            CheckNet(asm, missing);     // GameApi.Net.cs: multiplayer host (spawner, players) and guest (cars by netId)
 
-            if (missing.Count == 0) Plugin.Log.LogInfo("[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode, boss car models, daredevils, pursuit score, results/victory rows");
+            if (missing.Count == 0) Plugin.Log.LogInfo("[Police] game check OK: traffic, player, collision/near-miss counts, race timer, game mode, boss car models, daredevils, pursuit score, results/victory rows, multiplayer host + guest");
             else Plugin.Log.LogWarning($"[Police] game check: missing {string.Join(", ", missing)}. Patrols {On(TrafficOk && PlayerOk)}, " +
                                        $"crash notice + lead bar events {On(ScoreOk)}, caught penalty {On(TimerOk)}, game mode {On(ModeOk)}, boss car looks {On(BossOk && SkinOk)}, daredevils {On(DaredevilOk)}, " +
-                                       $"pursuit score {On(PursuitOk)}, results row {On(ResultsOk)}, victory row {On(VictoryOk)}, run reset {On(RunOk)} " +
-                                       "(without it the plugin assumes multiplayer and stays off).");
+                                       $"pursuit score {On(PursuitOk)}, results row {On(ResultsOk)}, victory row {On(VictoryOk)}, run reset {On(RunOk)}, multiplayer host {On(NetOk)}, multiplayer guest {On(NetViewOk)} " +
+                                       "(without the game mode the plugin assumes multiplayer; without the multiplayer parts it stays off in multiplayer).");
         }
 
         private static string On(bool ok) => ok ? "on" : "OFF";

@@ -13,7 +13,9 @@ namespace Police
     /// PURSUIT as a real score category (design doc "Police Pursuit - v1 Concept": Scoring, Technical approach: Score),
     /// made exactly like RacingLine's Racing Line category (RacingLine/GameApi.Native.cs).
     ///
-    /// Single-player only: a copy of the level's stock Top Speed provider (never another mod's copy: ids rogue.racingline
+    /// Single-player, and multiplayer with Multiplayer.Enabled (0.8.0: each player's PURSUIT goes into their own score,
+    /// as RacingLine's Racing Line does with Scoring.InMultiplayer; a guest's points come from the host's chase events):
+    /// a copy of the level's stock Top Speed provider (never another mod's copy: ids rogue.racingline
     /// and rogue.police are skipped), made inert (its own logic can never start: timeThreshold 1e9, targetSpeedFactor 2
     /// &gt; any speed factor, scoreMultiplier 0), with the unique id rogue.police, the name PURSUIT and our icons, appended
     /// once to scoreProviderList. An existing copy is adopted by id, never added twice (duplicate ids would break
@@ -60,6 +62,16 @@ namespace Police
 
         internal static bool PursuitActive => _pursuit != null && _pursuitOwner != null;
 
+        /// <summary>True when PURSUIT may not count: the game mode can't be read, or multiplayer with Multiplayer.Enabled off.</summary>
+        internal static bool NoScore()
+        {
+            if (!ModeOk) return true;
+            bool mp;
+            try { mp = ReadMultiplayerFlag(); }
+            catch { return true; }
+            return mp && !Plugin.MpEnabled.Value;
+        }
+
         /// <summary>The level's score manager (shared with the collision / near-miss counts), searched for at most every 2 s.</summary>
         private static LevelScoreManager ScoreManager()
         {
@@ -75,13 +87,13 @@ namespace Police
 
         /// <summary>
         /// Makes sure the current level's score manager holds exactly one PURSUIT provider. True if it does (already
-        /// there, or appended now). Never in multiplayer. Only when PursuitOk.
+        /// there, or appended now). In multiplayer only with Multiplayer.Enabled (0.8.0). Only when PursuitOk.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static bool EnsurePursuit(Sprite hudIcon, Sprite statIcon, int coinReward, out string log)
         {
             log = null;
-            if (IsMultiplayer()) return false;
+            if (NoScore()) return false;
             var mgr = ScoreManager();
             if (mgr == null) return false;
             if (PursuitActive && _pursuitOwner.Pointer == mgr.Pointer) return true;
@@ -161,7 +173,7 @@ namespace Police
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void PursuitBegin(bool activate)
         {
-            if (!PursuitActive || IsMultiplayer()) return;
+            if (!PursuitActive || NoScore()) return;
             var p = PursuitProvider();
             if (p == null || p.IsBeingPerformed) return;
             p.OnScoreBegin();
@@ -172,7 +184,7 @@ namespace Police
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void PursuitAdd(double points)
         {
-            if (!PursuitActive || points <= 0 || IsMultiplayer()) return;
+            if (!PursuitActive || points <= 0 || NoScore()) return;
             var p = PursuitProvider();
             if (p == null || !p.IsBeingPerformed) return;
             p.AddToTemporaryScore(points, false, false);
@@ -193,7 +205,7 @@ namespace Police
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void PursuitCoinUnits(float units)
         {
-            if (!PursuitActive || units <= 0f || IsMultiplayer()) return;
+            if (!PursuitActive || units <= 0f || NoScore()) return;
             var p = _pursuit.TryCast<TopSpeedScoreProviderSO>();
             if (p != null) p.totalTopSpeedTime += units;
         }

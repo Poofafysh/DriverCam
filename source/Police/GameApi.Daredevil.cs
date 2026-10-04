@@ -97,7 +97,7 @@ namespace Police
         {
             found.Clear();
             if (_spawner == null) return;
-            var cars = ((DefaultAISpawner)_spawner).activeAiCars;
+            var cars = CarList();
             if (cars == null) return;
             int count = cars.Count;
             for (int i = 0; i < count; i++)
@@ -216,7 +216,7 @@ namespace Police
         internal static int ReadRoad(float around, float behind, float ahead, RoadCar[] buf)
         {
             if (_spawner == null) return 0;
-            var cars = ((DefaultAISpawner)_spawner).activeAiCars;
+            var cars = CarList();
             if (cars == null) return 0;
             int n = 0, count = cars.Count;
             for (int i = 0; i < count && n < buf.Length; i++)

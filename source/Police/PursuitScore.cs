@@ -112,6 +112,9 @@ namespace Police
                 IntPtr spawner = GameApi.TrafficOk ? GameApi.Spawner() : IntPtr.Zero;
                 // like Runner.Tick: no spawner (loading) is not a new race
                 if (car != IntPtr.Zero && spawner != IntPtr.Zero && (car != _raceCar || spawner != _raceSpawner)) NewRace(car, spawner);
+                // multiplayer has no single-player spawner: a new car alone is a new race (0.7.1: the race counters, and
+                // with them a stale "0/1" PURSUIT row, used to carry over from the last single-player race)
+                else if (car != IntPtr.Zero && spawner == IntPtr.Zero && car != _raceCar && GameApi.IsMultiplayer()) NewRace(car, IntPtr.Zero);
                 if (_runCheckPending) CheckNewRun();
                 if (policeOn && Wanted && car != IntPtr.Zero && Time.timeScale > 0f && Time.unscaledTime >= _nextNativeTry)
                 {

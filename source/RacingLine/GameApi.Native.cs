@@ -9,7 +9,7 @@ namespace RacingLine
     /// <summary>
     /// Racing Line as a real score category (design docs: v1 "native score category", v2 "Coins (gold)").
     ///
-    /// Single-player only: a copy of the level's Top Speed provider, made inert (its own logic can never start:
+    /// Single-player, and multiplayer with Scoring.InMultiplayer: a copy of the level's Top Speed provider, made inert (its own logic can never start:
     /// timeThreshold 1e9, targetSpeedFactor 2 > any speed factor, scoreMultiplier 0), with a unique id, our name and icons,
     /// appended once to scoreProviderList. Points go through the game's own AddToScore (contributeToCombo on, so ticks keep
     /// the combo alive; the popup flag only controls the HUD popup, verified in AddToScore 0x1806EC990). Coins: the game
@@ -37,17 +37,30 @@ namespace RacingLine
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static bool ReadMultiplayerFlag() => Game.Runtime.GameState.IsMultiplayerMode;
 
+        /// <summary>
+        /// True when nothing may count: the game mode can't be read, or multiplayer with Scoring.InMultiplayer off. In
+        /// multiplayer each player's Racing Line points go into their own score (everyone in the session runs the same build).
+        /// </summary>
+        internal static bool NoScore()
+        {
+            if (!ModeOk) return true;
+            bool mp;
+            try { mp = ReadMultiplayerFlag(); }
+            catch { return true; }
+            return mp && !Plugin.ScoreInMultiplayer.Value;
+        }
+
         internal static bool NativeActive => _native != null && _nativeOwner != null;
 
         /// <summary>
         /// Makes sure the current level's score manager holds exactly one Racing Line provider. Returns true if it does
-        /// (already there, or appended now). Never in multiplayer. Only call when ScoreOk.
+        /// (already there, or appended now). In multiplayer only with Scoring.InMultiplayer. Only call when ScoreOk.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static bool EnsureNative(Sprite hudIcon, Sprite statIcon, int coinReward, out string log)
         {
             log = null;
-            if (IsMultiplayer()) return false;
+            if (NoScore()) return false;
             var mgr = ScoreManager();
             if (mgr == null) return false;
             if (NativeActive && _nativeOwner.Pointer == mgr.Pointer) return true;
@@ -113,7 +126,7 @@ namespace RacingLine
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void AwardNative(double points, bool popup)
         {
-            if (!NativeActive || points <= 0 || IsMultiplayer()) return;
+            if (!NativeActive || points <= 0 || NoScore()) return;
             var p = _native.TryCast<AScoreProviderSO>();
             p?.AddToScore(points, popup);
         }
@@ -146,12 +159,12 @@ namespace RacingLine
 
         /// <summary>
         /// Starts a live action (HUD counter appears). activate = also the game's activation (counters, activation
-        /// bonus): once per corner. Only when NativeActive, single-player.
+        /// bonus): once per corner. Only when NativeActive (and not NoScore()).
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void BeginLive(bool activate)
         {
-            if (!NativeActive || IsMultiplayer()) return;
+            if (!NativeActive || NoScore()) return;
             var p = Provider();
             if (p == null || p.IsBeingPerformed) return;
             p.OnScoreBegin();
@@ -162,7 +175,7 @@ namespace RacingLine
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void AddLive(double points)
         {
-            if (!NativeActive || points <= 0 || IsMultiplayer()) return;
+            if (!NativeActive || points <= 0 || NoScore()) return;
             var p = Provider();
             if (p == null || !p.IsBeingPerformed) return;
             p.AddToTemporaryScore(points, false, false);
@@ -183,7 +196,7 @@ namespace RacingLine
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void AddCoinUnits(float units)
         {
-            if (!NativeActive || units <= 0f || IsMultiplayer()) return;
+            if (!NativeActive || units <= 0f || NoScore()) return;
             var p = _native.TryCast<TopSpeedScoreProviderSO>();
             if (p != null) p.totalTopSpeedTime += units;
         }

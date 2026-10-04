@@ -18,7 +18,7 @@ namespace PitStop
     /// <summary>
     /// PitStop: one key (F2) refills your car's health, through the game's own heal (the same path its repair pickups
     /// use: VehicleHealth.Heal(100%, forceFinalValue), which updates the health bar, plays the heal sound and fires the
-    /// game's heal event), then SetHealthFactor(1) in case a card scaled the heal down. Single-player only, never while
+    /// game's heal event), then SetHealthFactor(1) in case a card scaled the heal down. In multiplayer your own car only, never while
     /// the car is already defeated, and only during a race (a player car exists and the level hasn't ended).
     ///
     /// Leaderboard (the player's decision, 2026-10-03): a run in which F2 refilled health is never uploaded to the game's
@@ -32,7 +32,7 @@ namespace PitStop
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.pitstop";
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;
@@ -75,8 +75,8 @@ namespace PitStop
             // Rogue Hub (optional): a Refill button and the live line on PitStop's card
             HubLink.Status(Guid, Runner.HubStatus);
             HubLink.Action(Guid, "refill", "Refill health",
-                "Fills your car's health now. Single-player, during a race; this run is then kept off the Steam leaderboards.", Runner.HubRefill);
-            Log.LogInfo($"PitStop {Version} loaded. {RefillKey.Value} refills your car's health (single-player; a run with a refill isn't uploaded to the leaderboards)." +
+                "Fills your car's health now. During a race (in multiplayer: your own car); this run is then kept off the Steam leaderboards.", Runner.HubRefill);
+            Log.LogInfo($"PitStop {Version} loaded. {RefillKey.Value} refills your car's health (also your own car in multiplayer; a run with a refill isn't uploaded to the leaderboards)." +
                         (RefilledThisRun.Value ? " The current run had a refill: its leaderboard upload stays blocked until a new run starts." : ""));
         }
 
@@ -231,7 +231,7 @@ namespace PitStop
         private static string Refill(out bool refilled)
         {
             refilled = false;
-            if (Game.Runtime.GameState.IsMultiplayerMode) return "not in multiplayer (single-player only)";
+            // multiplayer (0.3.0): your own car only; the game sends your car's health to the other players itself
             var veh = Game.Runtime.Vehicle.VehicleManager.Instance;
             if (veh == null) return "no player car (not in a race)";
             if (veh.LevelWasEnded) return "race already over";
@@ -243,7 +243,7 @@ namespace PitStop
             health.Heal(100f, true, true);                                  // the game's own heal: bar, sound, heal event
             if (health.HealthFactor < 0.999f) health.SetHealthFactor(1f);   // a card scaled the heal down: fill it anyway
             refilled = true;
-            return $"health refilled: {before * 100f:0}% -> {health.HealthFactor * 100f:0}%";
+            return $"health refilled: {before * 100f:0}% -> {health.HealthFactor * 100f:0}%{(Game.Runtime.GameState.IsMultiplayerMode ? " (multiplayer: your car)" : "")}";
         }
     }
 }

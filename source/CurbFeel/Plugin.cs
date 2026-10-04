@@ -36,7 +36,7 @@ namespace CurbFeel
         }
 #endif
         public const string Guid = "rogue.curbfeel";
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         /// <summary>BepInEx/config/rogue.curbfeel.cfg (the plugin's Config, or the one the HotReload host passes in).</summary>
         internal static ConfigFile Cfg;

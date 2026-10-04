@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: press **F2** to refill your car's health.
 
-Current version: **0.2.0**
+Current version: **0.3.0**
 
 In **Rogue Hub** (0.2.0): a "Refill health" button (also in the quick menu by default), a status line (ready / this run is off the leaderboards), and each refill's result (or the reason it was refused) as a notification. The cooldown is limited to 0-120 s. Pressed in the hub while the race is paused, the refill is queued and happens when the race resumes (PitStop never changes the game while it's paused); F2 does nothing while paused.
 
@@ -11,8 +11,9 @@ In **Rogue Hub** (0.2.0): a "Refill health" button (also in the quick menu by de
 - **F2** (`RefillKey`) fills your car's health to 100% through the game's own heal, the same one its repair pickups
   use (`VehicleHealth.Heal(100%, forceFinalValue)`): the health bar updates, the heal sound plays and the game's own
   heal event fires. If a card scales heals down, PitStop tops it up to full anyway (`SetHealthFactor(1)`).
-- Only in a race, only in single-player, and never on a car that's already wrecked (it doesn't revive). The log says
-  why when it does nothing (`[PitStop] health already full`, `not in multiplayer`, ...).
+- Only in a race, and never on a car that's already wrecked (it doesn't revive). In multiplayer (0.3.0) it refills
+  your own car only; the game sends your car's health to the other players itself (everyone should run the same build).
+  The log says why when it does nothing (`[PitStop] health already full`, ...).
 - `Cooldown` (0 = any time) limits how often it works.
 
 ## This is a gameplay change (a cheat), kept off the leaderboards
@@ -29,7 +30,7 @@ upload while the current run is marked:
 - If the patch can't be installed (e.g. after a game update), **F2 does nothing**: a refill can never reach the
   leaderboard.
 
-Nothing is sent to other players; it never works in multiplayer.
+PitStop sends nothing to other players itself: in multiplayer the game's own health sync carries your refilled health.
 
 ## Settings (`rogue.pitstop.cfg`)
 
@@ -42,9 +43,9 @@ Nothing is sent to other players; it never works in multiplayer.
 
 ## Log (`/game-log PitStop`)
 
-- `[PitStop] leaderboard guard installed (LeaderboardsManager.PublishEntry)` at startup, then `PitStop 0.2.0 loaded. F2 refills your car's health (single-player; a run with a refill isn't uploaded to the leaderboards).` (with ` The current run had a refill: its leaderboard upload stays blocked until a new run starts.` added if the saved flag is still set).
+- `[PitStop] leaderboard guard installed (LeaderboardsManager.PublishEntry)` at startup, then `PitStop 0.3.0 loaded. F2 refills your car's health (also your own car in multiplayer; a run with a refill isn't uploaded to the leaderboards).` (with ` The current run had a refill: its leaderboard upload stays blocked until a new run starts.` added if the saved flag is still set).
 - `[PitStop] health refilled: 34% -> 100%; this run won't be uploaded to the leaderboards`, or why it didn't (`health already full`, `no player car`, `race already
-  over`, `the car is already wrecked`, `not in multiplayer`).
+  over`, `the car is already wrecked`); in multiplayer the refill line ends with `(multiplayer: your car)`.
 - `[PitStop] leaderboard upload skipped: this run used a health refill` (once per leaderboard at the run's end) and
   `[PitStop] new run: leaderboard uploads allowed again`.
 - `[PitStop] game check: missing ...` / `the refill key stays off (...)`: a game update removed something it needs.

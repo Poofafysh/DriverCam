@@ -65,6 +65,9 @@ namespace CurbFeel
                     Reapply("settings changed");
                 }
 
+                // F. Drift first, even with the master switch off: its run check keeps the optional leaderboard flag honest
+                // (DriftTax applies no speed loss while the master switch is off)
+                using (Perf.Scope("CurbFeel.Drift")) DriftTax.Tick();
                 if (!Settings.Enabled.Value) return;
                 float now = Time.unscaledTime;
                 if (Due(ref _nextWalls, WallsPeriod, WallsPhase, now)) using (Perf.Scope("CurbFeel.Walls")) Walls.Tick();

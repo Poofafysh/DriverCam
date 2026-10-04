@@ -15,6 +15,25 @@ namespace Police
         public float SinceSnap;                     // seconds since the traffic snapshot (cars move on at their speed)
         public bool YouValid;
         public float YouRoad, YouLane, YouLo, YouHi, YouSpeed;   // you: road distance, lane, band you may occupy soon, road speed
+        /// <summary>
+        /// 0.8.0 multiplayer: every other player, each kept to the same never-hit rules as you (null / 0 in single-player,
+        /// so the plan is exactly the single-player one).
+        /// </summary>
+        public PlanOther[] Others;
+        public int OthersN;
+    }
+
+    /// <summary>
+    /// Another player the plan must never hit (0.8.0). A remote player's numbers are honest estimates: Road is its synced
+    /// distance moved on by its speed for the time since the update and half a round trip; ViewLag is how far behind
+    /// the host's real cars that player's screen shows them (half a round trip + the interpolation buffer), so its
+    /// effective place against this car is Road + this car's speed x ViewLag. Margin widens its band sideways, ExtraGap
+    /// lengthens every gap to it. All zero = exactly the rules for you.
+    /// </summary>
+    internal struct PlanOther
+    {
+        public float Road, Lo, Hi, Speed;   // road distance, band it may occupy soon (m, + = right), road speed (m/s)
+        public float ViewLag, Margin, ExtraGap;
     }
 
     internal struct PlanOutput
@@ -76,7 +95,7 @@ namespace Police
             // never shorter than the distance needed to stop for a standing car behind the safe gap
             float look = Mathf.Max(Mathf.Max(60f, p.V * 3.5f), p.V * p.V / (2f * Braking) + SafeGapYou + (SafeTimeYou + Smoothness) * p.V);
             int m = 0;
-            bool guard = false; float guardLo = 0f, guardHi = 0f;
+            int gn = 0;   // guards: you (first) and every other player alongside or about to be (0.8.0)
 
             // ---- obstacles
             if (p.YouValid)
@@ -87,9 +106,24 @@ namespace Police
                 {
                     float clear = 1.0f + p.HalfW + GapMarginYou;
                     Add(ref m, gap, p.YouLo - clear, p.YouHi + clear, p.YouSpeed, p, true, 2.4f);
-                    if (gap < 6f) { guard = true; guardLo = p.YouLo - clear; guardHi = p.YouHi + clear; }   // alongside or about to be
+                    if (gap < 6f) { s_gLo[gn] = p.YouLo - clear; s_gHi[gn] = p.YouHi + clear; gn++; }   // alongside or about to be
                 }
             }
+            // 0.8.0: every other player gets the same rules (with their latency margins)
+            for (int q = 0; p.Others != null && q < p.OthersN && q < p.Others.Length && m < s_obs.Length; q++)
+            {
+                var ot = p.Others[q];
+                float otherRoad = ot.Road + p.V * ot.ViewLag;
+                float gap = (otherRoad - 2.4f) - (p.S + p.HalfL);
+                float past = 2f * 2.4f + 2f * p.HalfL + YouClearAhead + YouClearSeconds * Mathf.Max(0f, ot.Speed - p.V) + ot.ExtraGap;
+                if (gap >= -past && gap <= look + ot.ExtraGap)
+                {
+                    float clear = 1.0f + p.HalfW + GapMarginYou + ot.Margin;
+                    Add(ref m, gap, ot.Lo - clear, ot.Hi + clear, ot.Speed, p, true, 2.4f, false, ot.ExtraGap);
+                    if (gap < 6f + ot.ExtraGap && gn < s_gLo.Length) { s_gLo[gn] = ot.Lo - clear; s_gHi[gn] = ot.Hi + clear; gn++; }
+                }
+            }
+            bool guard = gn > 0;
             for (int j = 0; j < n && m < s_obs.Length; j++)
             {
                 var c = road[j];
@@ -113,13 +147,12 @@ namespace Police
 
             // ---- gap finding
             float lim = p.Limit + (guard ? 0.5f : 0f);   // an escape from you may use the road's last half metre
-            float mid = (guardLo + guardHi) * 0.5f;
             float bestCost = float.PositiveInfinity, best = float.NaN, bestFree = p.Vmax;
             int steps = Mathf.Max(1, Mathf.FloorToInt(2f * lim / Step));
             for (int k = -2; k <= steps; k++)
             {
                 float x = k == -2 ? Mathf.Clamp(p.LineTarget, -lim, lim) : k == -1 ? Mathf.Clamp(p.Offset, -lim, lim) : -lim + k * Step;
-                if (guard && (p.Offset <= mid ? x > guardLo : x < guardHi)) continue;   // never across you, never inside your band
+                if (guard && Guarded(x, p.Offset, gn)) continue;   // never across you (or another player), never inside a band
                 float free = p.Vmax;
                 bool ok = true;
                 for (int i = 0; i < m && ok; i++)
@@ -131,6 +164,14 @@ namespace Police
                     if (inBand)
                     {
                         if (b.Gap < 0f && !coversNow) { ok = false; continue; }   // alongside it: never move into it
+                        // alongside it and already inside its band (it moved over, or we were squeezed): only a way OUT is
+                        // allowed, never deeper toward its middle (0.7.1, from the crash forensics: rivals and chasers swung
+                        // into a car beside them, side clearance below zero, because any spot inside the band passed)
+                        if (b.Gap < 0f && coversNow)
+                        {
+                            float midB = (b.Lo + b.Hi) * 0.5f;
+                            if (Math.Abs(x - midB) < Math.Abs(p.Offset - midB) - 0.05f) { ok = false; continue; }
+                        }
                         if (b.Ahead && b.Allowed < free) free = b.Allowed;
                         continue;
                     }
@@ -147,7 +188,17 @@ namespace Police
                 if (cost < bestCost) { bestCost = cost; best = x; bestFree = free; }
             }
             if (!float.IsNaN(best)) { o.Target = best; o.Cap = Mathf.Min(o.Cap, bestFree); }
-            else if (guard) o.Target = Mathf.Clamp(p.Offset <= mid ? Mathf.Min(p.Offset, guardLo) : Mathf.Max(p.Offset, guardHi), -lim, lim);   // boxed in: at least keep off you
+            else if (guard)
+            {
+                // boxed in: at least keep off you (and every other player alongside), each pushing it out on its own side
+                float t = p.Offset;
+                for (int g = 0; g < gn; g++)
+                {
+                    float gm = (s_gLo[g] + s_gHi[g]) * 0.5f;
+                    t = p.Offset <= gm ? Mathf.Min(t, s_gLo[g]) : Mathf.Max(t, s_gHi[g]);
+                }
+                o.Target = Mathf.Clamp(t, -lim, lim);
+            }
 
             // ---- braking for what covers us now and won't be cleared in time; instant cut; slipstream
             for (int i = 0; i < m; i++)
@@ -174,14 +225,29 @@ namespace Police
                 float mid2 = (b.Lo + b.Hi) * 0.5f;
                 if (b.Gap > 0f && b.Gap < TowGap && b.Speed > 15f && Mathf.Abs(p.Offset - mid2) < TowLane) o.Tow = true;
             }
-            o.Evading = guard && p.Offset > guardLo && p.Offset < guardHi;
+            bool evading = false;
+            for (int g = 0; g < gn && !evading; g++) evading = p.Offset > s_gLo[g] && p.Offset < s_gHi[g];
+            o.Evading = evading;
             return o;
         }
 
-        private static void Add(ref int m, float gap, float lo, float hi, float speed, in PlanInput p, bool you, float halfLength, bool rear = false)
+        private static readonly float[] s_gLo = new float[6], s_gHi = new float[6];
+
+        /// <summary>x is out for a guard: on the far side of that player from where the car is now, or inside its band.</summary>
+        private static bool Guarded(float x, float offset, int gn)
+        {
+            for (int g = 0; g < gn; g++)
+            {
+                float gm = (s_gLo[g] + s_gHi[g]) * 0.5f;
+                if (offset <= gm ? x > s_gLo[g] : x < s_gHi[g]) return true;
+            }
+            return false;
+        }
+
+        private static void Add(ref int m, float gap, float lo, float hi, float speed, in PlanInput p, bool you, float halfLength, bool rear = false, float extraSafe = 0f)
         {
             float closing = p.V - speed;
-            float safe = you ? SafeGapYou + SafeTimeYou * p.V : SafeGapTraffic + SafeTimeTraffic * p.V;
+            float safe = (you ? SafeGapYou + SafeTimeYou * p.V : SafeGapTraffic + SafeTimeTraffic * p.V) + extraSafe;
             float room = gap - safe - Mathf.Max(0f, closing) * Smoothness;
             float slowTo = Mathf.Max(0f, speed);
             s_obs[m++] = new Ob

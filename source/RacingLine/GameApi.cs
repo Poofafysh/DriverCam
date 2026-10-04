@@ -25,6 +25,7 @@ namespace RacingLine
         internal static bool ResultsOk { get; private set; }   // per-race results row (RogueShared.ModScoreRows)
         internal static bool VictoryOk { get; private set; }   // Victory screen row (RogueShared.ModScoreRows)
         internal static bool ModeOk { get; private set; }      // GameState.IsMultiplayerMode
+        internal static bool BoostOk { get; private set; }     // the clean-exit boost: the game's speed-modifier handler (0.7.0)
         // TrafficOk: GameApi.Traffic.cs (spawner, traffic cars)
 
         // typed as MonoBehaviour, not RunWorldManager: a field of a game type would stop this class loading at all if
@@ -57,11 +58,17 @@ namespace RacingLine
             CheckRows(asm, missing);
             ModeOk = Has(asm, "Game.Runtime.GameState", missing, "IsMultiplayerMode");
             CheckTraffic(asm, missing);
+            BoostOk = Has(asm, "Game.Runtime.Vehicle.VehicleManager", missing, "Instance", "SpeedModifierHandler", "VehicleMovement", "LevelWasEnded")
+                   && Has(asm, "Game.Runtime.Vehicle.VehicleSpeedModifierHandler", missing, "RegisterTemporaryModifier", "UnregisterModifier")
+                   && Has(asm, "Game.Runtime.Vehicle.VehicleMovement", missing, "driftEndBoostModifier")
+                   && Has(asm, "Game.Runtime.Vehicle.SpeedModifier", missing, "intensity", "maxSpeedMultiplier", "maxSpeedIncrement", "currentSpeedMultiplier",
+                          "currentSpeedIncrement", "accelerationMultiplier", "timeScaleMultiplier", "regularTurningMultiplier", "driftTurningMultiplier", "driftNormalizationMultiplier")
+                   && Has(asm, "Game.Runtime.Manager.RunWorldManager", missing, "currentStageIndex", "currentRaceIndex");
 
             if (missing.Count == 0) Plugin.Log.LogInfo("[RacingLine] game check OK: path, road width, player, scoring, results screen, game mode, traffic");
             else Plugin.Log.LogWarning($"[RacingLine] game check: missing {string.Join(", ", missing)}. Line {On(PathOk)}, road width {On(WidthOk)}, " +
                                        $"player {On(PlayerOk)}, scoring {On(ScoreOk)}, results row {On(ResultsOk)}, victory row {On(VictoryOk)}, game mode {On(ModeOk)}, " +
-                                       $"traffic-aware line {On(TrafficOk)}. Re-check the contract table after a game update.");
+                                       $"traffic-aware line {On(TrafficOk)}, exit boost {On(BoostOk)}. Re-check the contract table after a game update.");
         }
 
         private static string On(bool ok) => ok ? "on" : "OFF";

@@ -32,23 +32,44 @@ namespace Police
     /// </summary>
     internal static partial class GameApi
     {
-        private static MonoBehaviour _spawner;   // the DefaultAISpawner (TryCast result), untyped like every game object here
+        private static MonoBehaviour _spawner;   // the DefaultAISpawner, or on a multiplayer host the MultiplayerAISpawner (TryCast result), untyped like every game object here
         private static IntPtr _spawnerPtr;
 
-        /// <summary>The current traffic spawner's pointer, or zero (menus, loading, a non-default spawner). Only call when TrafficOk.</summary>
+        /// <summary>
+        /// The current traffic spawner's pointer, or zero (menus, loading, a spawner we don't drive). Single-player: the
+        /// DefaultAISpawner. Multiplayer host (0.8.0): the MultiplayerAISpawner (the host owns the traffic). A guest never
+        /// gets one: it never drives traffic. Only call when TrafficOk.
+        /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static IntPtr Spawner()
         {
             var sp = AISpawnerBase.Instance;
-            if (sp == null) { _spawner = null; _spawnerPtr = IntPtr.Zero; return IntPtr.Zero; }
-            if (_spawner == null || _spawnerPtr != sp.Pointer)
+            if (sp == null) { _spawner = null; _spawnerPtr = IntPtr.Zero; _spawnerMp = false; return IntPtr.Zero; }
+            // a new spawner object, or ours was destroyed (its pointer reused): look at it again
+            if (_spawnerPtr != sp.Pointer || (_spawnerHad && _spawner == null))
             {
                 _spawnerPtr = sp.Pointer;
+                _spawnerMp = false;
                 _spawner = sp.TryCast<DefaultAISpawner>();   // once per spawner object
+                _mpChecked = _spawner != null;
+                _spawnerHad = _spawner != null;
                 ForgetCars();                                // its cars are new objects
+            }
+            // not the single-player spawner: the multiplayer one, on the host only (asked again until our role is known)
+            if (!_mpChecked && NetOk)
+            {
+                var mode = Mode();
+                if (mode != NetMode.None)
+                {
+                    _mpChecked = true;
+                    if (mode == NetMode.Host) { _spawner = MpSpawner(sp); _spawnerMp = _spawner != null; _spawnerHad = _spawnerMp; ForgetCars(); }
+                }
             }
             return _spawner != null ? _spawnerPtr : IntPtr.Zero;
         }
+
+        private static bool _mpChecked;   // the spawner's type (and, in multiplayer, our role) has been settled
+        private static bool _spawnerHad;  // _spawner was found for _spawnerPtr
 
         /// <summary>
         /// Fills <paramref name="found"/> with active, undamaged traffic cars whose road distance is
@@ -62,7 +83,7 @@ namespace Police
         {
             found.Clear();
             if (_spawner == null) return;
-            var cars = ((DefaultAISpawner)_spawner).activeAiCars;
+            var cars = CarList();
             if (cars == null) return;
             int count = cars.Count;
             for (int i = 0; i < count; i++)
@@ -166,7 +187,7 @@ namespace Police
             if (!float.IsNaN(maxSpeed)) pf.MaxSpeed = maxSpeed;
         }
 
-        internal static void ForgetSpawner() { _spawner = null; _spawnerPtr = IntPtr.Zero; ForgetCars(); }
+        internal static void ForgetSpawner() { _spawner = null; _spawnerPtr = IntPtr.Zero; _spawnerMp = false; _mpChecked = false; _spawnerHad = false; ForgetCars(); }
 
         // ------------------------------------------------------------------ per-car parts, cached (0.6.0 perf)
         // Every getter on a traffic car is a native call and every one that returns an object makes a new wrapper. A

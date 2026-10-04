@@ -12,14 +12,14 @@ namespace RacingLine
     /// Plan" (claude.ai artifact 799a19cf-48f1-4019-9d37-925b9838d47f).
     ///
     /// Builds the minimum-curvature line from the run's centre-line path, previews it on the road, scores corners
-    /// (LineScorer) and, in single-player, adds Racing Line as a real score category (GameApi.Native) with its own row
-    /// on the per-race results screen and the end-of-run Victory screen (shared RogueShared.ModScoreRows). No Harmony patches.
+    /// (LineScorer) and adds Racing Line as a real score category (multiplayer: with Scoring.InMultiplayer) (GameApi.Native) with its own row
+    /// on the per-race results screen and the end-of-run Victory screen (shared RogueShared.ModScoreRows). One optional Harmony prefix: ExitBoost's leaderboard guard (LeaderboardsManager.PublishEntry).
     /// </summary>
     [BepInPlugin(Guid, "RacingLine", Version)]
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.racingline";
-        public const string Version = "0.5.0";
+        public const string Version = "0.7.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;
@@ -29,7 +29,8 @@ namespace RacingLine
         internal static ConfigEntry<float> Margin;
         internal static ConfigEntry<float> SampleStep;
         internal static ConfigEntry<float> FrameBudgetMs;
-        internal static ConfigEntry<bool> NativeScoring;
+        internal static ConfigEntry<bool> NativeScoring, ScoreInMultiplayer, ExitBoostEnabled, ExitBoostKeepOffLeaderboards, ExitBoostUsedThisRun;
+        internal static ConfigEntry<float> ExitBoostTopSpeed, ExitBoostAcceleration, ExitBoostSeconds;
         internal static ConfigEntry<int> CoinReward;
         internal static ConfigEntry<float> CoinTargetPerCorner, CornerMinRadius;
         internal static ConfigEntry<float> LineFull, LineZero, LineFloor, WSpeed, WGrip, WPedal, Base, LiveGrace, TickMinQ, DriftFactor, TrafficGrace;
@@ -55,9 +56,20 @@ namespace RacingLine
 
             // ---- Racing Line v2 (design doc "Racing Line v2 - Scoring Algorithm"); every default is a starting value to tune
             NativeScoring = Config.Bind("Scoring", "NativeCategory", true,
-                "Single-player: Racing Line is a real score category (results row, HUD popups, combo, coins, counts toward TOTAL, grade, XP). " +
+                "Racing Line is a real score category (in multiplayer with Scoring.InMultiplayer) (results row, HUD popups, combo, coins, counts toward TOTAL, grade, XP). " +
                 "Its points are part of the run total the game uploads to its Steam leaderboard. Implemented as an inert copy of Top Speed, so " +
-                "Top Speed cards also affect it. Multiplayer always uses display mode (nothing counts). Off = display mode everywhere.");
+                "Top Speed cards also affect it. In multiplayer it counts only with Scoring.InMultiplayer. Off = display mode everywhere.");
+            ScoreInMultiplayer = Config.Bind("Scoring", "InMultiplayer", true,
+                "Racing Line points also count in multiplayer (your own score; everyone in the session should run the same build). Off = display mode in multiplayer.");
+            ExitBoostEnabled = Config.Bind("ExitBoost", "Enabled", true,
+                "A clean grip corner (a grade, no drift, no hit) gives a short boost on the exit: more top speed and acceleration, scaled by the grade (GOLD 1, SILVER 0.6, BRONZE 0.3). The game's own speed-boost mechanism (like its drift-end boost).");
+            ExitBoostTopSpeed = Config.Bind("ExitBoost", "TopSpeed", 0.05f, new ConfigDescription("Extra top speed at GOLD (0.05 = +5%).", new AcceptableValueRange<float>(0f, 0.2f)));
+            ExitBoostAcceleration = Config.Bind("ExitBoost", "Acceleration", 0.25f, new ConfigDescription("Extra acceleration at GOLD (0.25 = +25%).", new AcceptableValueRange<float>(0f, 1f)));
+            ExitBoostSeconds = Config.Bind("ExitBoost", "Seconds", 1.5f, new ConfigDescription("How long the boost lasts in seconds (it fades in and out).", new AcceptableValueRange<float>(0.3f, 4f)));
+            ExitBoostKeepOffLeaderboards = Config.Bind("ExitBoost", "KeepOffLeaderboards", true,
+                "Don't upload a run to the Steam leaderboards if an exit boost fired in it (on by default: the boost is a speed advantage). Off = such runs upload as usual.");
+            ExitBoostUsedThisRun = Config.Bind("ExitBoost", "UsedThisRun", false,
+                "Written by the plugin: true once an exit boost fired, until the next run starts (kept across a quit and continue). Don't edit.");
             CoinReward = Config.Bind("Scoring", "CoinReward", 130, "Coins at full target (the game's own categories use 130).");
             CoinTargetPerCorner = Config.Bind("Scoring", "CoinTargetPerCorner", 0.6f,
                 "Full coins need this many grade units per corner of the race (GOLD 1, SILVER 0.6, BRONZE 0.3, x1.5 Grip line). 0.6 = a steady SILVER run maxes it.");
@@ -105,6 +117,7 @@ namespace RacingLine
 
             ClassInjector.RegisterTypeInIl2Cpp<Runner>();
             AddComponent<Runner>();
+            ExitBoostLeaderboardGuard.Install();   // optional ExitBoost.KeepOffLeaderboards (only ever skips an upload when that is on)
             Log.LogInfo($"RacingLine {Version} loaded (v2 scoring: quality per metre, combo ticks, coins; traffic-aware line {(TrafficEnabled.Value ? "on" : "off")}). F5 shows or hides the line.");
         }
     }

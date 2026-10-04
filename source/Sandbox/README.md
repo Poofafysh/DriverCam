@@ -1,6 +1,6 @@
 # Sandbox
 
-Current version: 0.1.0
+Current version: 0.1.1
 
 A separate run mode for trying builds: a **SANDBOX** button on the main menu (right under Singleplayer) starts a run
 in which every card is free and you can have 20 mods. Sandbox runs stay off your records (except the known gaps under Risks and limits).
@@ -97,8 +97,8 @@ Not patched on purpose: `ACardSO.IncreaseCardAcquiredStat` (see Risks and limits
 
 ## Log lines
 
-- `Sandbox 0.1.0 loaded. N record guards, N run-state hooks, N sandbox perks installed; the SANDBOX button is on the main menu.`
-- `Sandbox 0.1.0 loaded WITHOUT the SANDBOX button: these guard / run-state patches failed, ...` (with the list)
+- `Sandbox x.y.z loaded. N record guards, N run-state hooks, N sandbox perks installed; the SANDBOX button is on the main menu.`
+- `Sandbox x.y.z loaded WITHOUT the SANDBOX button: these guard / run-state patches failed, ...` (with the list)
 - `[Sandbox] SANDBOX button added under Singleplayer (layout group)` / `(placed under the last button)`
 - `[Sandbox] SANDBOX button not added: ...`
 - `[Sandbox] SANDBOX button not added ([General] Enabled is off)`

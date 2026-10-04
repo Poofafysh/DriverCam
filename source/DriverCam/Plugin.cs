@@ -8,7 +8,7 @@ using Il2CppInterop.Runtime.Injection;
 
 namespace DriverCam;
 
-[BepInPlugin(Guid, "DriverCam", "0.11.0")]
+[BepInPlugin(Guid, "DriverCam", "0.11.1")]
 public class Plugin : BasePlugin
 {
     public const string Guid = "drivingrogue.drivercam";
@@ -95,7 +95,10 @@ public class Plugin : BasePlugin
         // not saved per car (not in CarPresets.Track), so switching it never rebuilds the cockpit
         WorkingGauges = Config.Bind("View", "WorkingGauges", true, "Speedometer and tachometer needles (and the W8's digital panel) follow the car's speed, in the game HUD's unit, and EngineAudio's RPM (a built-in engine model without it). Off = the dials rest at zero.");
 
-        ShowButton = Config.Bind("UI", "ShowButton", true, "Show the on-screen DriverCam button.");
+        ShowButton = Config.Bind("UI", "ShowButton", false, new ConfigDescription(
+            "Show the on-screen DriverCam button (a dev tool: it opens DriverCam's settings panel). Off by default; F6 (driver view) and " +
+            "F7 (Edit mode) work without it, and every setting is also in Rogue Hub (MODS > Camera).", null,
+            RogueShared.HubLink.Meta("On-screen DriverCam button (dev tool)")));
         ButtonX = Config.Bind("UI", "ButtonX", 20f, "Button position from the left edge, in pixels.");
         ButtonY = Config.Bind("UI", "ButtonY", 420f, "Button position from the top edge, in pixels.");
         UiScale = Config.Bind("UI", "UiScale", 1.5f, "Size of the DriverCam button and panel.");
@@ -149,7 +152,7 @@ public class Plugin : BasePlugin
         AddComponent<DriverCamBehaviour>();
 
         new Harmony(Guid).PatchAll(typeof(Patches));
-        Log.LogInfo("DriverCam 0.11.0 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
+        Log.LogInfo("DriverCam 0.11.1 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
     }
 }
 

@@ -52,7 +52,8 @@ namespace Sandbox
     ///   working; with HideLights the Lights under Biomes too, except tunnel and bridge lights;
     /// - SimpleBlocks: one combined mesh of plain boxes, one per hidden building (LOD0 or a single-LOD renderer named like a
     ///   building, its own name or its parent's), using its world bounds (read before hiding; boxes larger than 120 m across
-    ///   are skipped), no colliders, no shadows, one shared material; a root named "fx_SandboxBlocks" in the tile scene
+    ///   are skipped, and so is any box that comes within 13 m of the tile's road path, the PathWaypoints children, since a
+    ///   building's bounding box can reach over the road), no colliders, no shadows, one shared dark grey material; a root named "fx_SandboxBlocks" in the tile scene
     ///   (fx_ is a CurbFeel ignore word, so it never becomes a wall) that goes when the tile unloads (its mesh is destroyed
     ///   by us). A tile that fails is left as it is and logged, without switching the feature off.
     /// Everything is given back (renderers and lights on, blocks destroyed) when Sandbox ends or StripBuildings is switched
@@ -72,6 +73,9 @@ namespace Sandbox
         };
         private static readonly string[] BuildingWords = { "residential", "c_bd", "c_store", "i_bd", "silo", "house", "building" };
         private const int LayerStreet = 11, LayerGuardrail = 15, LayerWeather = 28;
+        // a block whose footprint comes closer than this to the road path is dropped: a building's bounding box (an L-shaped
+        // block, a long terrace along a bend) can reach over the road, so its box would cover the road (half width 10 m + sidewalk)
+        private const float RoadClearance = 13f;
 
         private sealed class Tile
         {
@@ -87,6 +91,8 @@ namespace Sandbox
             public readonly List<Vector3> BoxMin = new List<Vector3>(), BoxMax = new List<Vector3>();
             public GameObject Blocks;
             public Mesh BlockMesh;
+            public Transform[] Waypoints;   // the tile's road path (PathWaypoints children): blocks near it are dropped
+            public int Dropped, BoxCount;
         }
 
         private readonly Dictionary<int, Tile> _tiles = new Dictionary<int, Tile>();
@@ -177,12 +183,61 @@ namespace Sandbox
                 }
             }
             if (biomes == null) return null;   // not a road tile (the game scene, menus, UI)
+            Transform path = null;
+            // the path lives under "Road Network": the Biomes subtree (1,000+ transforms) is never walked
+            for (int i = 0; i < roots.Length && path == null; i++) if (roots[i] != null) path = FindDeep(roots[i].transform, "PathWaypoints", 4, biomes);
+            Transform[] wps = null;
+            if (path != null)
+            {
+                var list = new List<Transform>(path.childCount);
+                for (int i = 0; i < path.childCount; i++)
+                {
+                    var c = path.GetChild(i);
+                    if (c != null && c.gameObject.name.StartsWith("EasyRoad_PathWaypoint", StringComparison.Ordinal)) list.Add(c);
+                }
+                wps = list.ToArray();
+            }
             return new Tile
             {
                 Handle = scene.handle, Name = scene.name, Scene = scene,
                 Renderers = biomes.GetComponentsInChildren<Renderer>(false),
                 Lights = biomes.GetComponentsInChildren<Light>(false),
+                Waypoints = wps,
             };
+        }
+
+        private static Transform FindDeep(Transform t, string name, int depth, Transform skip)
+        {
+            if (t == skip) return null;
+            if (t.gameObject.name == name) return t;
+            if (depth <= 0) return null;
+            for (int i = 0; i < t.childCount; i++)
+            {
+                var f = FindDeep(t.GetChild(i), name, depth - 1, skip);
+                if (f != null) return f;
+            }
+            return null;
+        }
+
+        /// <summary>Road path points every 2.5 m or less (the waypoints sit about 10 m apart), read when the blocks are built (the tile is placed by then).</summary>
+        private static List<Vector3> PathPoints(Tile t)
+        {
+            var pts = new List<Vector3>();
+            if (t.Waypoints == null) return pts;
+            Vector3 prev = default; bool have = false;
+            foreach (var w in t.Waypoints)
+            {
+                if (w == null) continue;
+                Vector3 p = w.position;
+                if (have)
+                {
+                    float dx = p.x - prev.x, dz = p.z - prev.z;
+                    int steps = (int)Math.Ceiling(Math.Sqrt(dx * dx + dz * dz) / 2.5);
+                    for (int k = 1; k < steps; k++) { float f = (float)k / steps; pts.Add(new Vector3(prev.x + dx * f, 0f, prev.z + dz * f)); }
+                }
+                pts.Add(p); prev = p; have = true;
+            }
+            return pts;
         }
 
         // ------------------------------------------------------------------ strip, a slice per frame
@@ -234,11 +289,12 @@ namespace Sandbox
             if (SceneryHost.HideLights.Value)
                 foreach (var l in t.Lights)
                     if (l != null && l.enabled && !Lit(l.transform)) { l.enabled = false; t.Off.Add(l); }
-            int blocks = t.BoxMin.Count;
             if (SceneryHost.SimpleBlocks.Value) BuildBlocks(t);
+            int blocks = t.Blocks == null ? 0 : t.BoxCount;
             t.Done = true;
             t.Renderers = Array.Empty<Renderer>(); t.Lights = Array.Empty<Light>();   // let the arrays go
-            Plugin.Log.LogInfo($"[Sandbox] scenery: tile {t.Name}: {t.Hidden.Count} renderers hidden, {t.Off.Count} lights off, {blocks} blocks");
+            Plugin.Log.LogInfo($"[Sandbox] scenery: tile {t.Name}: {t.Hidden.Count} renderers hidden, {t.Off.Count} lights off, {blocks} blocks" +
+                               (t.Waypoints == null ? " (no road path found: no blocks dropped)" : $", {t.Dropped} dropped near the road"));
             return true;
         }
 
@@ -294,9 +350,25 @@ namespace Sandbox
 
         private void BuildBlocks(Tile t)
         {
-            int n = t.BoxMin.Count;
-            if (n == 0) return;
             if (!t.Scene.isLoaded) { t.BoxMin.Clear(); t.BoxMax.Clear(); return; }   // unloaded meanwhile
+            // drop boxes that reach the road: a path point inside the footprint grown by RoadClearance
+            var path = PathPoints(t);
+            if (path.Count > 0)
+            {
+                for (int b = t.BoxMin.Count - 1; b >= 0; b--)
+                {
+                    Vector3 lo = t.BoxMin[b], hi = t.BoxMax[b];
+                    float x0 = lo.x - RoadClearance, x1 = hi.x + RoadClearance, z0 = lo.z - RoadClearance, z1 = hi.z + RoadClearance;
+                    for (int k = 0; k < path.Count; k++)
+                    {
+                        Vector3 p = path[k];
+                        if (p.x > x0 && p.x < x1 && p.z > z0 && p.z < z1) { t.BoxMin.RemoveAt(b); t.BoxMax.RemoveAt(b); t.Dropped++; break; }
+                    }
+                }
+            }
+            int n = t.BoxMin.Count;
+            t.BoxCount = n;
+            if (n == 0) return;
             var mat = BlockMaterial();   // first: a missing shader throws before anything is created
             var verts = new Vector3[n * 20];   // 5 faces (no bottom) x 4
             var norms = new Vector3[n * 20];
@@ -347,7 +419,7 @@ namespace Sandbox
             if (sh == null) sh = Shader.Find("Universal Render Pipeline/Lit");
             if (sh == null) throw new InvalidOperationException("no URP lit shader for the blocks");
             _blockMat = new Material(sh) { name = "Sandbox.Blocks", hideFlags = HideFlags.DontUnloadUnusedAsset };
-            _blockMat.SetColor("_BaseColor", new Color(0.62f, 0.64f, 0.68f, 1f));
+            _blockMat.SetColor("_BaseColor", new Color(0.22f, 0.23f, 0.26f, 1f));   // dark: the city's lights and fog made light grey read as white
             return _blockMat;
         }
 

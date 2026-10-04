@@ -678,6 +678,7 @@ seat("RL_SeatDriver", E.x, low=style == "low", style=style, simple=True, w=SEAT_
 seat("RL_SeatPassenger", -E.x, low=style == "low", style=style, w=SEAT_W[-DS])
 RZ, RY = floor + 0.30, E.y - 0.95                # rear seat cushion height and position
 RT = math.radians(28)                           # rear backrest lean
+RB_SINK = 0.04                                  # how far the rear backrests reach down into the cushions
 if S["rear"]:   # 2+2: two shaped rear seats with a hump between them, the backrest up to the parcel shelf
     xr = min(abs(E.x) * 0.85, min(XW.values()) - 0.26)
     wr = min(0.46, 2 * (min(XW.values()) - xr - 0.03))
@@ -687,19 +688,30 @@ if S["rear"]:   # 2+2: two shaped rear seats with a hump between them, the backr
         cx = XC + s * xr
         box(f"RL_RearCushion{s}", Vector((cx, RY, RZ - 0.05)), (wr, 0.44, 0.11), "seat", bevel=0.03)
         box(f"RL_RearCushionInsert{s}", Vector((cx, RY + 0.01, RZ + 0.008)), (wr * 0.6, 0.36, 0.02), "seat_insert", bevel=0.0)
-        bc = Vector((cx, RY - 0.24, RZ)) + Rr @ Vector((0, 0, rback_h / 2))
-        box(f"RL_RearBack{s}", bc, (wr, 0.10, rback_h), "seat", rot=Rr, bevel=0.03)
-        box(f"RL_RearBackInsert{s}", bc + Rr @ Vector((0, 0.052, -0.03)), (wr * 0.56, 0.012, rback_h * 0.6), "seat_insert", rot=Rr, bevel=0.0)
+        # the backrest's foot runs RB_SINK down its own axis into the cushion (no see-through slit in the crease);
+        # its top stays where it was
+        bc = Vector((cx, RY - 0.24, RZ)) + Rr @ Vector((0, 0, (rback_h - RB_SINK) / 2))
+        box(f"RL_RearBack{s}", bc, (wr, 0.10, rback_h + RB_SINK), "seat", rot=Rr, bevel=0.03)
+        box(f"RL_RearBackInsert{s}", bc + Rr @ Vector((0, 0.052, -0.03 + RB_SINK / 2)), (wr * 0.56, 0.012, rback_h * 0.6), "seat_insert", rot=Rr, bevel=0.0)
+        # quarter trim: closes the gap from the backrest's outer edge to the side wall (else the eye looks past the
+        # seat into the open space under the shelf and out of the car)
+        xe = cx + s * wr / 2 - s * 0.03               # 3 cm into the seat (its bevelled edge)
+        xw = s * (XW[s] + 0.015)                      # into the side panel
+        if s * (xw - xe) > 0.04:
+            qc = Vector(((xe + xw) / 2, RY - 0.24, RZ)) + Rr @ Vector((0, -0.015, (rback_h - RB_SINK) / 2))
+            box(f"RL_RearQuarter{s}", qc, (abs(xw - xe), 0.06, rback_h + RB_SINK), "door", rot=Rr, bevel=0.01)
     mid_w = 2 * xr - wr + 0.02
     if mid_w > 0.05:
         box("RL_RearMiddle", Vector((XC, RY - 0.02, RZ - 0.06)), (mid_w, 0.42, 0.09), "seat", bevel=0.02)
-        box("RL_RearMiddleBack", Vector((XC, RY - 0.26, RZ)) + Rr @ Vector((0, 0, rback_h / 2)), (mid_w, 0.08, rback_h - 0.02), "seat", rot=Rr, bevel=0.02)
+        box("RL_RearMiddleBack", Vector((XC, RY - 0.26, RZ)) + Rr @ Vector((0, 0, (rback_h - RB_SINK) / 2)), (mid_w, 0.08, rback_h - 0.02 + RB_SINK), "seat", rot=Rr, bevel=0.02)
     # the backrest's top meets the shelf: everything behind it is the boot
     Y_SHELF = RY - 0.24 - math.sin(RT) * rback_h - 0.04
+    # the boot wall behind the backrests, floor to shelf: whatever slips past a seat ends on trim, never outside
+    box("RL_RearBootWall", Vector((XC, Y_SHELF - 0.015, (floor + Z_PS) / 2 - 0.01)), (XW[-1] + XW[1] + 0.03, 0.03, Z_PS - floor - 0.02), "carpet", bevel=0.005)
 
 # carpet: the floor, rising at the front into a toe board under the dash
 bm = bmesh.new()
-y1c = (RY - 0.30) if S["rear"] else y_bh
+y1c = (Y_SHELF - 0.01) if S["rear"] else y_bh    # 2+2: on under the backrests to the boot wall
 xl, xr_ = -XW[-1] - 0.03, XW[1] + 0.03          # tucked under the side walls: no gap at the floor line
 rows = [(y1c, floor + 0.005), (yR + 0.28, floor + 0.005), (yR + 0.46, floor + 0.075)]
 grid = [[bm.verts.new((x, y, z)) for x in (xl, xr_)] for (y, z) in rows]
@@ -741,9 +753,10 @@ if REAR in ("bulkhead", "hatch"):
     z_top = Z_PS if REAR == "hatch" else E.z - 0.20
     z_mid = floor + (z_top - floor) * 0.55
     wdt = XW[-1] + XW[1]
-    box("RL_BulkheadLow", Vector((XC, y_bh, (floor + z_mid) / 2)), (wdt, 0.04, z_mid - floor), "carpet", bevel=0.006)
+    # both reach 1.5 cm into the side walls: their bevelled ends left a see-through slit in the corners
+    box("RL_BulkheadLow", Vector((XC, y_bh, (floor + z_mid) / 2)), (wdt + 0.03, 0.04, z_mid - floor), "carpet", bevel=0.006)
     Rb = Matrix.Rotation(math.radians(6), 3, "X")
-    box("RL_BulkheadUp", Vector((XC, y_bh - 0.01, (z_mid + z_top) / 2)), (wdt - 0.004, 0.035, z_top - z_mid + 0.01), "door", rot=Rb, bevel=0.008)
+    box("RL_BulkheadUp", Vector((XC, y_bh - 0.01, (z_mid + z_top) / 2)), (wdt + 0.03, 0.035, z_top - z_mid + 0.01), "door", rot=Rb, bevel=0.008)
     if REAR == "bulkhead":
         box("RL_BulkheadLedge", Vector((XC, y_bh - 0.03, z_top + 0.012)), (wdt - 0.004, 0.13, 0.024), "dash", bevel=0.008)
     else:
@@ -916,6 +929,8 @@ for side in (-1, 1):
         bw = TRIM["b_w"]
         y_cf = min(max(y_b - bw - TRIM["quarter"], Y0 + 0.14), y_b - bw + 0.01)   # C-pillar's front edge (roof)
         y_cfb = max(y_cf - 0.05, y_rw + 0.12)
+        if TRIM["quarter"] < 0.05:   # no quarter window: the foot reaches forward under the B-pillar (no sliver at the cap)
+            y_cfb = y_cf + 0.03
         yrr = rear_corner[side].y
         bot = [Vector((xo, y_cfb, cap_top(side, y_cfb) - 0.04)), Vector((xo, (y_cfb + y_rw) / 2, cap_top(side, (y_cfb + y_rw) / 2) - 0.04)),
                Vector((xo, y_rw, Z_PS - 0.02))]
@@ -945,7 +960,8 @@ if REAR == "bulkhead":
     box("TR_RearHeader", Vector((XC, y_bh - 0.005, (zt_ + liner_z(XC, y_bh + 0.06)) / 2 + 0.01)), (xr2 - xl_ + 0.04, 0.03, liner_z(XC, y_bh + 0.06) - zt_ + 0.04), "headliner", bevel=0.008, group=TG)
     for side in (-1, 1):   # the window's sides: from the bulkhead's edge out to the sail, ledge to headliner
         x0j, x1j = XW[side] - 0.01, SIDE[side]["x_out"] + 0.03
-        box(f"TR_RearJamb{side}", Vector((side * (x0j + x1j) / 2, y_bh - 0.005, (E.z - 0.20 + zt_) / 2 + 0.02)), (x1j - x0j, 0.03, zt_ - (E.z - 0.20) + 0.06), "headliner", bevel=0.008, group=TG)
+        zj0 = min(E.z - 0.21, cap_top(side, y_bh) - 0.03)   # the foot sits down in the door cap: no gap above it
+        box(f"TR_RearJamb{side}", Vector((side * (x0j + x1j) / 2, y_bh - 0.005, (zj0 + zt_ + 0.05) / 2)), (x1j - x0j, 0.03, zt_ + 0.05 - zj0), "headliner", bevel=0.008, group=TG)
 else:
     cl, cr = rear_corner[-1] + Vector((0.03, -0.005, -0.012)), rear_corner[1] + Vector((-0.03, -0.005, -0.012))
     bl, br = Vector((-(XW[-1] + 0.01), y_rw + 0.02, Z_PS + 0.012)), Vector((XW[1] + 0.01, y_rw + 0.02, Z_PS + 0.012))

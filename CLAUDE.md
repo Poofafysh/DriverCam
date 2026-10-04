@@ -5,7 +5,7 @@ developers who both push to `main` of `github.com/Poofafysh/DriverCam`:
 
 | Developer | Owns | Git author |
 |---|---|---|
-| **Poofafysh** | `source/CurbFeel/` (curbs, sidewalks, lane splitting), `source/TrafficDensity/` (NPC traffic multiplier), `source/RacingLine/` (racing-line points) | Poofafysh |
+| **Poofafysh** | `source/CurbFeel/` (curbs, sidewalks, lane splitting), `source/TrafficDensity/` (NPC traffic multiplier), `source/RacingLine/` (racing-line points), `source/Police/` (police patrols and chases) | Poofafysh |
 | **Aste-risks** | `source/DriverCam/` (first-person camera, cockpits, mirrors, shared car setups) | Alec DeMilt |
 
 Repo tooling (`tools/`, `.claude/`, docs) is shared. Don't edit the other developer's plugin without the person asking.
@@ -85,9 +85,10 @@ Scripts (run from the repo root with `powershell -NoProfile -ExecutionPolicy Byp
 | CurbFeel | `rogue.curbfeel` | `CurbFeel.dll` | `rogue.curbfeel.cfg` | F8 panel, F9 reload config, F10 on/off | panel top-right |
 | TrafficDensity | `rogue.trafficdensity` | `TrafficDensity.dll` | `rogue.trafficdensity.cfg` | Ctrl+PageUp/PageDown step, Ctrl+Home stock, F4 perf overlay (when [Perf] Enabled) | toast top-centre, perf overlay top-left (when [Perf] Enabled) |
 | RacingLine | `rogue.racingline` | `RacingLine.dll` | `rogue.racingline.cfg` | F5 show/hide line | status line bottom-left, dots on the road |
+| Police | `rogue.police` | `Police.dll` | `rogue.police.cfg` | F3 patrols on/off | lead bar + toasts top-centre below TrafficDensity's toast, markers above patrols |
 | HotReload (dev only) | `rogue.hotreload` | `HotReload.dll` (+ modules in `BepInEx\hot\`) | `rogue.hotreload.cfg` | F11 reload hot modules | toast top-centre, below TrafficDensity's |
 
-Not used by our plugins: F1-F3 (avoid F12, Steam screenshot). New plugins: GUID `rogue.<name>`, read keys through the Input
+Not used by our plugins: F1-F2 (avoid F12, Steam screenshot). New plugins: GUID `rogue.<name>`, read keys through the Input
 System (`Keyboard.current.f11Key` / `Key.F11`) so push-check can see clashes, and add a row here.
 
 ## Layout
@@ -102,6 +103,7 @@ source/TrafficDensity/         Plugin.cs (spawner patch + hotkeys, owns the shar
 source/Shared/Perf.cs          shared timing helper, linked into plugins as source (<Compile Include="..\Shared\Perf.cs" Link="Perf.cs" />);
                                a change to it needs a bump of every plugin that links it (push-check doesn't see source/Shared)
 source/RacingLine/             Racing Line score category: line build + preview, corner scoring, native provider, results row (design doc linked in Plugin.cs)
+source/Police/                 police patrols (traffic cars), noticing, chase with lead bar (design doc named in Plugin.cs)
 source/HotReload/              dev-only host: loads BepInEx\hot\*.dll from bytes, Unload/Load on change or F11 (DevOnly: /sync skips it)
 tools/                         push-check, push-check.tests, bump-version, sync-install (PowerShell 5.1)
 .claude/agents/ .claude/commands/

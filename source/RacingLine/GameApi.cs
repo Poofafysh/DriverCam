@@ -37,7 +37,8 @@ namespace RacingLine
             if (asm == null) { try { asm = Assembly.Load("Assembly-CSharp"); } catch { /* reported as missing below */ } }
             PathOk = Has(asm, "Game.Runtime.Systems.LevelGeneration.RoadPathGenerator", missing, "Instance", "RegularPath")
                   && Has(asm, "IRoadPath", missing, "TotalLength", "GetPositionFromDistance", "GetDirectionFromDistance");
-            WidthOk = Has(asm, "Game.Runtime.Manager.RunWorldManager", missing, "CurrentRoadWidth", "laneOffsetList");
+            WidthOk = Has(asm, "Game.Runtime.Manager.RunWorldManager", missing, "CurrentRoadWidth", "laneOffsetList", "currentStageIndex", "currentRaceIndex");
+            CheckVictory(asm, missing);
             PlayerOk = Has(asm, "Game.Runtime.Vehicle.VehicleManager", missing, "Instance", "Rigidbody", "PlayerPathFollower", "VehicleMovement",
                                "VehicleInputHandler", "LevelWasEnded", "WaitingFirstInput")
                     && Has(asm, "Game.Runtime.Vehicle.PlayerPathFollower", missing, "GetDistanceTravelled", "GetLaneOffset")

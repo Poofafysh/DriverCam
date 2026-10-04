@@ -19,7 +19,7 @@ namespace RacingLine
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.racingline";
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.1";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;
@@ -36,6 +36,7 @@ namespace RacingLine
         internal static ConfigEntry<float> GripStart, BrakeDecel, AccelRate;
         internal static ConfigEntry<bool> LogCorners;
         internal static ConfigEntry<string> HudIconFile, StatIconFile;
+        internal static ConfigEntry<double> BestRunTotal;
 
         public override void Load()
         {
@@ -84,6 +85,7 @@ namespace RacingLine
             LogCorners = Config.Bind("Scoring", "LogCorners", false, "Log every corner's result with q, speed, exit and coasting (for tuning with /game-log). Off by default: logging costs frames.");
             HudIconFile = Config.Bind("Icons", "HudIcon", "racingline_hud.png", "PNG in plugins/RacingLine/ for HUD popups (~56x44 plus glow). Missing = built-in placeholder.");
             StatIconFile = Config.Bind("Icons", "StatIcon", "racingline_stat.png", "PNG in plugins/RacingLine/ for the results row (~44x32). Missing = built-in placeholder.");
+            BestRunTotal = Config.Bind("Records", "BestRunTotal", 0.0, "Best Racing Line run total so far (the Victory screen shows NEW RECORD when a run beats it). Written by the plugin.");
 
             try { GameApi.Check(); }
             catch (Exception e) { Log.LogError($"[RacingLine] game check crashed, plugin stays idle: {e}"); return; }

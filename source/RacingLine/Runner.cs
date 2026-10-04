@@ -43,11 +43,15 @@ namespace RacingLine
         private float _lastResultUntil;
         private float _nextNativeTry;
         private bool _nativeLogged, _iconsLoaded;
-        private bool _scoringOff, _nativeOff, _resultsOff;   // per-feature breakers
+        private bool _scoringOff, _nativeOff, _resultsOff, _victoryOff;   // per-feature breakers
         private Func<GameApi.ResultsData> _resultsData;
+        private Func<GameApi.VictoryData> _victoryData;
         private Action<string> _log;
         // created once (LoadIcons) so Update/Score don't allocate a delegate or closure every frame
-        private Action _resultsTick, _score, _ensureNative, _awardTick, _payCorner;
+        private Action _resultsTick, _victoryTick, _score, _ensureNative, _awardTick, _payCorner;
+        // run total for the Victory screen: each race's Racing Line score is added once (session only)
+        private double _runTotal;
+        private LineScorer _countedScorer;
         private double _pendingTick;          // read by _awardTick
         private CornerResult _pendingCorner;  // read by _payCorner
         private int _carChanges = -1;         // GameApi.CarChanges when the grip estimate was started
@@ -64,7 +68,7 @@ namespace RacingLine
         {
             // our results row is only ever removed once the results screen has closed (removing it mid-animation would
             // leave the player without a Continue button), and that cleanup keeps running when we're off or broken
-            if (_broken || !Plugin.Enabled.Value) { CleanupRowQuietly(); return; }
+            if (_broken || !Plugin.Enabled.Value) { CleanupRowQuietly(); CleanupVictoryQuietly(); return; }
             using var perf = RogueShared.Perf.Scope("RacingLine.Update");   // shared timing overlay (TrafficDensity [Perf]); free when off
             try
             {
@@ -74,6 +78,8 @@ namespace RacingLine
 
                 if (GameApi.ResultsOk && !_resultsOff) Guard(ref _resultsOff, "results row", _resultsTick);
                 else CleanupRowQuietly();
+                if (GameApi.VictoryOk && !_victoryOff) Guard(ref _victoryOff, "victory row", _victoryTick);
+                else CleanupVictoryQuietly();
 
                 if (!GameApi.PathOk) { _status = "game check failed (see log)"; return; }
                 if (Time.unscaledTime >= _nextWatch) { _nextWatch = Time.unscaledTime + 0.5f; Watch(); }
@@ -95,6 +101,8 @@ namespace RacingLine
             _resultsData = ResultsData;
             _log = s => Plugin.Log.LogInfo(s);
             _resultsTick = () => GameApi.ResultsTick(_resultsData, _log);
+            _victoryData = VictoryData;
+            _victoryTick = () => GameApi.VictoryTick(_victoryData, _log);
             _score = Score;
             _ensureNative = EnsureNative;
             _awardTick = () => GameApi.AwardNative(_pendingTick, Plugin.TickPopups.Value);
@@ -116,6 +124,12 @@ namespace RacingLine
                 var previous = _line;
                 _line = _builder.Result;
                 _nearest = -1;
+                // the first race of a new run (stage 0, race 0) starts the Victory screen's run total from zero
+                if (previous == null && GameApi.WidthOk && GameApi.RunPosition(out int stage, out int race) && stage == 0 && race == 0 && _runTotal > 0)
+                {
+                    Plugin.Log.LogInfo($"[RacingLine] new run: run total reset (previous run {_runTotal:0})");
+                    _runTotal = 0; _countedScorer = null;
+                }
                 // corners come from the road's centre line; quality and the speed profile use the racing line's own curvature
                 var centre = Corners.Curvature(_line.Px, _line.Pz, _line.N, _line.Step);
                 _corners = Corners.Find(centre, _line.N, _line.Step, 1f / Mathf.Max(50f, Plugin.CornerMinRadius.Value));
@@ -230,6 +244,7 @@ namespace RacingLine
         {
             float t = _scorer?.TimeOnLine ?? 0f;
             bool counts = GameApi.NativeActive && !_nativeOff;
+            CountRace();
             return new GameApi.ResultsData
             {
                 Amount = $"{(int)(t / 60):00}:{(int)(t % 60):00}",
@@ -238,6 +253,36 @@ namespace RacingLine
                 Coins = counts ? GameApi.NativeCoins() : 0,
                 Icon = Icons.Stat,
             };
+        }
+
+        /// <summary>Adds this race's Racing Line score to the run total, once per race (the scorer is the race's identity).</summary>
+        private void CountRace()
+        {
+            if (_scorer == null || ReferenceEquals(_scorer, _countedScorer)) return;
+            if (!(GameApi.NativeActive && !_nativeOff)) return;   // display mode: nothing counted, no Victory row
+            _countedScorer = _scorer;
+            _runTotal += GameApi.NativeScore();   // the game's own number for this race (card multipliers included)
+        }
+
+        private GameApi.VictoryData VictoryData()
+        {
+            CountRace();   // in case the Victory screen comes before the last race's results screen
+            bool show = _runTotal > 0 || (GameApi.NativeActive && !_nativeOff);
+            bool record = _runTotal > 0 && _runTotal > Plugin.BestRunTotal.Value;
+            if (record) Plugin.BestRunTotal.Value = Math.Round(_runTotal);   // saved to rogue.racingline.cfg
+            return new GameApi.VictoryData
+            {
+                Show = show,
+                Value = Math.Round(_runTotal).ToString("N0", System.Globalization.CultureInfo.InvariantCulture),
+                NewRecord = record,
+                Icon = Icons.Stat,
+            };
+        }
+
+        private static void CleanupVictoryQuietly()
+        {
+            try { if (GameApi.VictoryOk) GameApi.CleanupVictoryRowWhenClosed(); }
+            catch { /* the row goes with the scene at worst */ }
         }
 
         /// <summary>Notice a new or grown path and (re)build. Bad input means idle, not guess (Safety rule 10).</summary>

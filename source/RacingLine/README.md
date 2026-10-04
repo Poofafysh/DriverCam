@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a new score category, **Racing Line**, that rewards driving corners well on grip: the right line, good speed, braking straight, lifting in and powering out.
 
-Current version: **0.1.0** (v2 scoring; placeholder icons)
+Current version: **0.1.1** (v2 scoring; placeholder icons)
 
 Design docs (claude.ai artifacts):
 - "Racing Line Mechanic - Design & Build Plan" (`799a19cf-48f1-4019-9d37-925b9838d47f`): the category itself and the Safety rules that apply to every change here.
@@ -51,7 +51,7 @@ A simulated 3 km test road with 8 long corners gave these totals:
 - it has id `rogue.racingline`, our name and icons, and `contributeToCombo` on
 - it's appended once to the level's score list
 
-Points go through the game's own `AddToScore`. The combo event fires whatever the popup flag says, which was checked in `AddToScore` (0x1806EC990). A RACING LINE row is added to the results screen.
+Points go through the game's own `AddToScore`. The end-of-run **Victory screen** also gets a RACING LINE row (a clone of the Near Miss row, placed right after it) showing the run's Racing Line total. Each race's score is added once when its results screen opens. A run total higher than `Records.BestRunTotal` shows NEW RECORD. The total lives in this game session only: a run continued from a save only counts races played since launch. The combo event fires whatever the popup flag says, which was checked in `AddToScore` (0x1806EC990). A RACING LINE row is added to the results screen.
 
 Accepted side effects:
 - **Top Speed cards also affect Racing Line**, because the copy reports type Top Speed.
@@ -78,6 +78,7 @@ Accepted side effects:
 | `Racing Line added as a score category (... Top Speed template ...)` | native mode is on |
 | `corner 12A: SILVER grip q 0.68 exit 0.74 full-throttle 0.9 s coast 0.0 s -> 214 pts ...` | per corner, with `LogCorners` on (off by default) |
 | `results row added: 01:12, 2310 pts, 130 coins` | the results screen got its row |
+| `victory row added: 12,345 (new record)` | the end-of-run Victory screen got its row |
 
 ## Controls
 
@@ -97,6 +98,7 @@ Accepted side effects:
 | Bonuses | `ExitWeight` (0.5), `Clean` (1.15), `GripLine` (2), `CoastPerSecond` (0.15), `CoastFloor` (0.6), `Gold` / `Silver` / `Bronze` (0.8 / 0.6 / 0.4), `StreakStep` (0.15), `StreakMax` (2) |
 | Car | `GripStart` (9 m/s²), `BrakeDecel` (10), `AccelRate` (5) |
 | Icons | `HudIcon` / `StatIcon` (PNG names in `plugins/RacingLine/`; missing = built-in placeholder) |
+| Records | `BestRunTotal` (0; written by the plugin: the best Racing Line run total, for the Victory screen's NEW RECORD) |
 
 v1 keys (`Band`, `Core`, `Grace`, ...) are no longer used. They may stay in an old config file harmlessly.
 
@@ -105,7 +107,7 @@ v1 keys (`Band`, `Core`, `Grace`, ...) are no longer used. They may stay in an o
 | File | Job |
 |---|---|
 | `Plugin.cs` | config, startup check, starts the runner |
-| `GameApi.cs` (+ `.Player`, `.Native`, `.Results`) | the only files that touch game types |
+| `GameApi.cs` (+ `.Player`, `.Native`, `.Results`, `.Victory`) | the only files that touch game types (`.Victory`: the Victory screen row) |
 | `Net.cs` | offline / host / client role from Mirror |
 | `LineBuilder.cs` / `LineSolver.cs` | sampling and the two-level line solve |
 | `Corners.cs` / `SpeedProfile.cs` / `LineScorer.cs` | corners and zones, reference speed, the v2 rules (plain .NET, tested outside the game) |

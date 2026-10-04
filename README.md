@@ -1,13 +1,14 @@
 # Driving Rogue mods
 
-Source for several BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam): DriverCam, CurbFeel, TrafficDensity, RacingLine, and the dev-only HotReload.
+Source for several BepInEx 6 IL2CPP plugins for **Driving Rogue** (Steam): DriverCam, CurbFeel, TrafficDensity, RacingLine, Police, and the dev-only HotReload.
 
 | Plugin | Version | What it does |
 |---|---|---|
 | **DriverCam** | 0.9.2 | First-person driver view with a fitted cockpit for all 10 cars, working mirrors, HUD layout and a controller Edit mode. See [`source/DriverCam`](source/DriverCam) and [`source/README.md`](source/README.md) |
 | **CurbFeel** | 0.4.1 | Curbs, sidewalks and lane splitting: the road-edge walls move up to 3 m past the curb, wheels ride up onto the sidewalk, and shallow wall or traffic scrapes don't cost health or reset your drift. See [`source/CurbFeel/README.md`](source/CurbFeel/README.md) |
 | **TrafficDensity** | 0.2.1 | Multiplies the NPC traffic on the road (stacks with the game's traffic hazard, applies live). Ctrl+PageUp/PageDown to change, Ctrl+Home = stock. See [`source/TrafficDensity/README.md`](source/TrafficDensity/README.md) |
-| **RacingLine** | 0.1.0 | New score category **Racing Line** (v2): grades every corner on line, speed vs a reference, grip and pedals (brake straight, lift in, power out); combo ticks keep the chain alive through grip corners; Grip line x2 for no drifting; coins; RACING LINE row on the results screen. Counts in single-player only. F5 shows the line preview and readout. See [`source/RacingLine/README.md`](source/RacingLine/README.md) |
+| **RacingLine** | 0.1.1 | New score category **Racing Line** (v2): grades every corner on line, speed vs a reference, grip and pedals (brake straight, lift in, power out); combo ticks keep the chain alive through grip corners; Grip line x2 for no drifting; coins; RACING LINE row on the results screen. Counts in single-player only. F5 shows the line preview and readout. See [`source/RacingLine/README.md`](source/RacingLine/README.md) |
+| **Police** | 0.0.1 | Preview. Police patrols picked from the traffic notice what you do (a crash near them, passing them 80 km/h faster) and chase you; a lead bar decides ESCAPED or CAUGHT (-5 s off the race timer). Police only react to what you do: no random wanted level, no heat levels or escalation (which cars become patrols is random). Single-player only. F3 turns patrols off / on. See [`source/Police/README.md`](source/Police/README.md) |
 | **HotReload** (dev only) | 0.1.0 | Developer tool: reloads hot-module builds of plugins (CurbFeel so far) while the game runs, no restart. Not installed by `/sync`. See [`source/HotReload/README.md`](source/HotReload/README.md) |
 
 This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins yourself as described below.
@@ -42,6 +43,7 @@ This repo is **source only**: no DLLs, BepInEx files or zips. Build the plugins 
 | Ctrl+Home | TrafficDensity | stock traffic |
 | F4 | TrafficDensity | perf overlay on/off (only while [Perf] Enabled) |
 | F5 | RacingLine (preview) | show / hide the racing line |
+| F3 | Police (preview) | patrols off / on for this session |
 | F11 | HotReload (dev only) | reload all hot modules now |
 
 Our plugins only change your own game, with two exceptions:
@@ -87,7 +89,7 @@ In Claude Code, ask for the **repo-sync** agent (`.claude/agents/repo-sync.md`).
   - hotkey clashes, and two plugins patching the same game method
   - binaries, build output, `local.props` or game assets about to be committed
   - merge-conflict markers, and READMEs that state a different version than the code
-- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel), F11 (HotReload, dev only), Ctrl+PageUp/PageDown/Home and F4 (TrafficDensity), F5 (RacingLine).
+- Hotkeys in use: F6/F7 (DriverCam), F8/F9/F10 (CurbFeel), F11 (HotReload, dev only), Ctrl+PageUp/PageDown/Home and F4 (TrafficDensity), F5 (RacingLine), F3 (Police).
 - Bump versions with `tools/bump-version.ps1 -Plugin <Name> -To patch|minor|major` (it counts up from the higher of your version and the pushed one, so we never collide). No bump for docs-only changes.
 
 ### Claude Code slash commands

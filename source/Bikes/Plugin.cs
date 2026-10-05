@@ -9,8 +9,10 @@ using Il2CppInterop.Runtime.Injection;
 namespace Bikes
 {
     /// <summary>
-    /// Bikes: two sport motorcycles as new garage vehicles (single-player). The BMW S1000RR and the blue Sport Bike sit at
-    /// the end of the garage list, after the game's cars.
+    /// Bikes: new garage vehicles (single-player). They sit at the end of the garage list, after the game's cars:
+    /// - the BMW S1000RR and the blue Sport Bike (motorcycles, with lean);
+    /// - the M2 G87 (a car model on the donor's wheel pivots).
+    /// Garage.All holds the list.
     ///
     /// Each bike rides on a hidden copy of a donor car (the game's own driving, four physics wheels and collider). It has
     /// its own name, stats and look: the bike model at real size, wheels spinning and steering with the game's, and a lean
@@ -24,7 +26,7 @@ namespace Bikes
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.bikes";
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, RodeBikeThisRun;

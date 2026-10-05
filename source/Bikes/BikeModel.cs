@@ -7,12 +7,13 @@ using UnityEngine;
 namespace Bikes
 {
     /// <summary>
-    /// A bike model (.csm with `kind bike`, built in Blender by Assets/build_bike.py). Text, Unity axes, metres, real size,
-    /// origin on the ground midway between the two axles, +z forward. Lines:
+    /// A vehicle model: a bike (.csm with `kind bike`, Assets/build_bike.py; wheels WheelF / WheelR) or a car (`kind car`,
+    /// Assets/build_car.py; wheels WheelFL / FR / RL / RR). Text, Unity axes, metres, real size, origin on the ground
+    /// midway between the axles, +z forward. Lines:
     /// - `name`, `tex tag file` (base-colour texture for that tag), `mat tag r g b smoothness metallic emission`;
     /// - parts: `o part`, `p x y z` (a wheel's pivot, its triangles written around it), `m tag`, `f` / `u` triangles
     ///   (3 x position + normal [+ uv]).
-    /// Body = one mesh with a submesh per tag; WheelF and WheelR are their own meshes. Meshes, materials and textures are
+    /// Body = one mesh with a submesh per tag; each wheel is its own mesh. Meshes, materials and textures are
     /// built once, shared by every bike body that uses them, and freed on unload (DestroyAll).
     /// </summary>
     internal sealed class BikeModel
@@ -23,6 +24,9 @@ namespace Bikes
         public Vector3 PivotF, PivotR;
         public Mesh WheelF, WheelR;
         public Material[] WheelFMats, WheelRMats;
+        public bool Car;
+        /// <summary>Car models: FL / FR / RL / RR -> (pivot, mesh, materials).</summary>
+        public readonly Dictionary<string, (Vector3 pivot, Mesh mesh, Material[] mats)> Wheels = new Dictionary<string, (Vector3, Mesh, Material[])>();
 
         private static readonly Dictionary<string, BikeModel> s_cache = new Dictionary<string, BikeModel>();
         private static readonly List<UnityEngine.Object> s_owned = new List<UnityEngine.Object>();
@@ -41,7 +45,9 @@ namespace Bikes
                 if (!File.Exists(path)) { Plugin.Log.LogWarning($"[Bikes] model not found: {path}"); return null; }
                 m = Load(path);
                 s_cache[name] = m;
-                Plugin.Log.LogInfo($"[Bikes] model {m.Name} loaded: {(m.Body.vertexCount + m.WheelF.vertexCount + m.WheelR.vertexCount) / 3} triangles, wheelbase {m.PivotF.z - m.PivotR.z:0.00} m");
+                int tris = m.Body.vertexCount;
+                if (m.Car) foreach (var w in m.Wheels.Values) tris += w.mesh.vertexCount; else tris += m.WheelF.vertexCount + m.WheelR.vertexCount;
+                Plugin.Log.LogInfo($"[Bikes] model {m.Name} loaded ({(m.Car ? "car" : "bike")}): {tris / 3} triangles, wheelbase {m.PivotF.z - m.PivotR.z:0.00} m");
             }
             catch (Exception e) { Plugin.Log.LogWarning($"[Bikes] model {name} failed to load: {e.Message}"); }
             return m;
@@ -69,14 +75,14 @@ namespace Bikes
             var mats = new Dictionary<string, (Color c, float s, float m, float e)>();
             var tex = new Dictionary<string, string>();
             var parts = new List<Part>();
-            Part part = null; string tag = "paint"; bool bike = false;
+            Part part = null; string tag = "paint"; bool bike = false, car = false;
             foreach (var raw in File.ReadLines(path))
             {
                 if (raw.Length < 2 || raw[0] == '#') continue;
                 var t = raw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 switch (t[0])
                 {
-                    case "kind": bike = t.Length > 1 && t[1] == "bike"; break;
+                    case "kind": bike = t.Length > 1 && t[1] == "bike"; car = t.Length > 1 && t[1] == "car"; break;
                     case "name": model.Name = t[1]; break;
                     case "tex": tex[t[1]] = t[2]; break;
                     case "mat": mats[t[1]] = (new Color(F(t, 2), F(t, 3), F(t, 4)), F(t, 5), F(t, 6), F(t, 7)); break;
@@ -98,7 +104,8 @@ namespace Bikes
                         break;
                 }
             }
-            if (!bike) throw new InvalidDataException("not a bike model (no `kind bike` line)");
+            if (!bike && !car) throw new InvalidDataException("no `kind bike` or `kind car` line");
+            model.Car = car;
             var matCache = new Dictionary<string, Material>();
             foreach (var p in parts)
             {
@@ -116,9 +123,16 @@ namespace Bikes
                 }
                 if (p.Name == "WheelF") { model.WheelF = mesh; model.WheelFMats = arr; model.PivotF = p.Pivot; }
                 else if (p.Name == "WheelR") { model.WheelR = mesh; model.WheelRMats = arr; model.PivotR = p.Pivot; }
+                else if (p.HasPivot && p.Name.StartsWith("Wheel", StringComparison.Ordinal) && p.Name.Length == 7) model.Wheels[p.Name.Substring(5)] = (p.Pivot, mesh, arr);
                 else if (!p.HasPivot) { model.Body = mesh; model.BodyMats = arr; }
             }
-            if (model.Body == null || model.WheelF == null || model.WheelR == null) throw new InvalidDataException("expected Body, WheelF and WheelR");
+            if (car)
+            {
+                if (model.Body == null || model.Wheels.Count != 4) throw new InvalidDataException("expected Body and WheelFL / FR / RL / RR");
+                model.PivotF = (model.Wheels["FL"].pivot + model.Wheels["FR"].pivot) * 0.5f;
+                model.PivotR = (model.Wheels["RL"].pivot + model.Wheels["RR"].pivot) * 0.5f;
+            }
+            else if (model.Body == null || model.WheelF == null || model.WheelR == null) throw new InvalidDataException("expected Body, WheelF and WheelR");
             if (!(model.PivotF.z - model.PivotR.z > 0.5f)) throw new InvalidDataException("odd wheelbase");
             return model;
         }

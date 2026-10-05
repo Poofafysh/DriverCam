@@ -47,8 +47,10 @@ __pycache__/
 source/DriverCam/Assets/interiors/base/
 source/DriverCam/Assets/interiors/**/*.dcm
 
-# Sketchfab-sourced car/bike models and textures (CC-BY / unverified licences): kept local, never pushed
+# Sketchfab car/bike models and textures (credited in the plugin READMEs): kept local unless listed below
 source/CarSkins/Assets/*.csm
 source/CarSkins/Assets/*_basecolor.*
 source/Bikes/Assets/*.csm
 source/Bikes/Assets/*_basecolor.*
+# M2 G87 (CC BY-NC-SA 4.0, credited in source/Bikes/README.md): the user chose to publish it
+!source/Bikes/Assets/BMW_M2_G87.csm

@@ -35,7 +35,8 @@ namespace Bikes
         internal sealed class Bike
         {
             public string Key, Model, Title, Id;
-            public float[] Rider;   // seat xyz, right grip xyz, right peg xyz, hip height above the seat, knee half-width (bike frame)
+            public float[] Rider;     // seat xyz, right grip xyz, right peg xyz, hip height above the seat, knee half-width (bike frame)
+            public bool Car;          // a car model (four wheels on the donor's spin pivots, no lean)
             public int IntId;
             public float Speed, Accel, Handling, Durability;
             public Vehicle_SO So, Donor;
@@ -50,6 +51,8 @@ namespace Bikes
             new Bike { Key = "SportBike", Model = "SportBike", Title = "Sport Bike", Id = "rogue.bikes.sportbike", IntId = 9002,
                        Speed = 0.85f, Accel = 0.95f, Handling = 0.85f, Durability = 0.35f,
                        Rider = new[] { 0f, 0.90f, -0.20f, 0.33f, 0.92f, 0.40f, 0.18f, 0.38f, -0.40f, 0.10f, 0.20f } },
+            new Bike { Key = "M2G87", Model = "BMW_M2_G87", Title = "M2 G87", Id = "rogue.bikes.m2g87", IntId = 9003,
+                       Speed = 0.82f, Accel = 0.80f, Handling = 0.85f, Durability = 0.65f, Car = true },
         };
 
         internal static bool Injected { get; private set; }
@@ -84,6 +87,9 @@ namespace Bikes
 
         internal static int StockCount => s_stock == null ? -1 : s_stock.Length;
 
+        /// <summary>The vehicles actually added, in list order (a vehicle that failed to build isn't in the list).</summary>
+        internal static readonly List<Bike> Added = new List<Bike>();
+
         /// <summary>Adds the bikes to the vehicle list (once per list; safe to call again).</summary>
         internal static void Inject(string why)
         {
@@ -103,6 +109,7 @@ namespace Bikes
             s_container = c;
 
             var add = new List<Vehicle_SO>();
+            Added.Clear();
             foreach (var b in All)
             {
                 if (b.So == null && b.Failed == null)
@@ -110,7 +117,7 @@ namespace Bikes
                     try { Build(b, stock); }
                     catch (Exception e) { b.Failed = e.Message; Plugin.Log.LogWarning($"[Bikes] {b.Title}: not added ({e.Message})"); }
                 }
-                if (b.So != null) add.Add(b.So);
+                if (b.So != null) { add.Add(b.So); Added.Add(b); }
             }
             if (add.Count == 0) return;
             var next = new Il2CppReferenceArray<Vehicle_SO>(stock.Count + add.Count);
@@ -250,6 +257,8 @@ namespace Bikes
             if (!(scale > 1e-4f)) scale = 1f;
             float carR = WheelRadius(spin["FL"], bodyNode);
 
+            if (b.Car) return FinishCar(b, holder, model, bodyNode, spin, gF, gR, turn, carMeshes);
+
             var lean = new GameObject("Bikes.Lean");
             lean.transform.SetParent(bodyNode, false);
             lean.transform.localPosition = new Vector3((gF.x + gR.x) * 0.5f, (gF.y + gR.y) * 0.5f - carR, (gF.z + gR.z) * 0.5f);
@@ -267,6 +276,44 @@ namespace Bikes
             bars.transform.SetParent(lean.transform, false);
             bars.transform.localPosition = b.Rider != null ? new Vector3(0f, b.Rider[4], b.Rider[5]) : model.PivotF;
             Plugin.Log.LogInfo($"[Bikes] {b.Title} body: {carMeshes} car meshes to hide, bike at real size (car wheelbase {Math.Abs(gF.z - gR.z) / 1f:0.00} body units, wheel radius {carR:0.00})");
+            return holder;
+        }
+
+        /// <summary>
+        /// A car model, CarSkins-style. It's scaled so its wheelbase matches the donor's and placed with its front axle on
+        /// the donor's front axle. The body sits under the body node as "Bikes.Car". Each wheel goes under the donor's spin
+        /// pivot (it spins and steers with it), turned to the body's frame and scaled like the body.
+        /// </summary>
+        private static VehicleSkinHolder FinishCar(Bike b, VehicleSkinHolder holder, BikeModel model, Transform bodyNode,
+                                                   Dictionary<string, Transform> spin, Vector3 gF, Vector3 gR, Quaternion turn, int carMeshes)
+        {
+            float gWb = Math.Abs(gF.z - gR.z), mWb = model.PivotF.z - model.PivotR.z;
+            if (!(gWb > 0.5f) || !(mWb > 0.5f)) throw new InvalidOperationException($"odd wheelbase (donor {gWb:0.00}, model {mWb:0.00})");
+            float s = gWb / mWb;
+            var root = new GameObject("Bikes.Car");
+            root.transform.SetParent(bodyNode, false);
+            root.transform.localRotation = turn;
+            root.transform.localScale = new Vector3(s, s, s);
+            root.transform.localPosition = gF - turn * (model.PivotF * s);
+            AddRenderer(new GameObject("Bikes.Frame"), root.transform, Vector3.zero, model.Body, model.BodyMats);
+            float world = s * bodyNode.lossyScale.x;
+            foreach (var k in new[] { "FL", "FR", "RL", "RR" })
+            {
+                var p = spin[k];
+                var w = model.Wheels[k];
+                var go = new GameObject("Bikes.Wheel" + k);
+                go.transform.SetParent(p, false);
+                go.transform.localPosition = Vector3.zero;
+                go.transform.localRotation = turn;   // the pivots are identity at rest: the pivot's own spin and steer turn it
+                float ps = p.lossyScale.x;
+                float ls = ps > 1e-4f ? world / ps : world;
+                go.transform.localScale = new Vector3(ls, ls, ls);
+                go.AddComponent<MeshFilter>().sharedMesh = w.mesh;
+                var r = go.AddComponent<MeshRenderer>();
+                r.sharedMaterials = w.mats;
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+            }
+            Plugin.Log.LogInfo($"[Bikes] {b.Title} body: {carMeshes} car meshes to hide, car model at scale {s:0.000} (wheelbase {gWb:0.00} vs {mWb:0.00})");
             return holder;
         }
 

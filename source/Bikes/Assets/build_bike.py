@@ -205,7 +205,7 @@ def tag_name(me, i):
     m = me.materials[i] if i < len(me.materials) else None
     return m.name[4:] if m and m.name.startswith("tag_") else "c0"
 
-src = {"rr": "BMW S1000RR, Sketchfab (licence: see README)", "lp": "low-poly sport motorcycle, Sketchfab (licence: see README)"}[KIND]
+src = {"rr": "BMW S1000 RR by VTX, Sketchfab, CC BY-NC-SA 4.0", "lp": "Low Poly Motorcycle by pyrzegeclb, Sketchfab, CC BY 4.0"}[KIND]
 lines = [f"# CarSkins model '{NAME}' ({src}; decimated by build_bike.py; Unity axes, metres, real size)",
          "kind bike", f"name {NAME}"]
 if texfile: lines.append(f"tex paint {texfile}")

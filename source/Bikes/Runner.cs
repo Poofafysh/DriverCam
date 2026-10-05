@@ -128,8 +128,8 @@ namespace Bikes
             var holder = veh.VehicleSkin;
             if (holder == null) { Clear(); return; }
             if (holder.Pointer != _skinPtr || _skin == null) Find(holder.transform, veh);
-            if (_lean == null) return;
             if (now >= _nextHide && Time.timeScale > 0f) { _nextHide = now + 0.5f; Garage.HideCar(_skin); }
+            if (_lean == null) return;   // a car model: its wheels ride on the donor's pivots, no lean
 
             // wheels: copy the game's own spin and steer
             if (_wheelF != null && _carSpinF != null) _wheelF.localRotation = _carSpinF.localRotation;
@@ -184,7 +184,7 @@ namespace Bikes
             if (!_loggedRide)
             {
                 _loggedRide = true;
-                Plugin.Log.LogInfo($"[Bikes] riding {veh.VehicleSO.VehicleName}: bike model {(_lean != null ? "found" : "MISSING")}, " +
+                Plugin.Log.LogInfo($"[Bikes] driving {veh.VehicleSO.VehicleName}: {(_lean != null ? "bike" : "car or missing")} model, " +
                                    $"wheels {(_wheelF != null && _carSpinF != null ? "follow the game's" : "static")}, steering {(_steerF != null && _carSteerF != null ? "follows" : "static")}");
             }
             Garage.HideCar(skin);

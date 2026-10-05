@@ -49,7 +49,7 @@ namespace Bikes
                 new Hook { Name = "VehicleGarageManager.SaveData..ctor", Target = AccessTools.Constructor(typeof(VehicleGarageManager.SaveData), new[] { gm }), Postfix = nameof(SaveBuilt) },
                 // harmony-target: VehicleGarageManager.SnapshotData..ctor
                 new Hook { Name = "VehicleGarageManager.SnapshotData..ctor", Target = AccessTools.Constructor(typeof(VehicleGarageManager.SnapshotData), new[] { gm }), Postfix = nameof(SnapshotBuilt) },
-                // harmony-target: LeaderboardsManager.PublishEntry (cooperates with PitStop, Sandbox)
+                // harmony-target: LeaderboardsManager.PublishEntry (cooperates with PitStop, Sandbox, RacingLine, CurbFeel, TrafficDensity)
                 new Hook { Name = "LeaderboardsManager.PublishEntry", Target = AccessTools.Method(typeof(LeaderboardsManager), "PublishEntry", new[] { typeof(LeaderboardSO), typeof(int), typeof(LeaderboardDetails) }), Prefix = nameof(Publish) },
                 // harmony-target: SteamLeaderboardsManager.PublishEntry (cooperates with Sandbox)
                 new Hook { Name = "SteamLeaderboardsManager.PublishEntry", Target = AccessTools.Method(typeof(Game.Runtime.Steamworks.SteamLeaderboardsManager), "PublishEntry"), Prefix = nameof(Publish) },
@@ -148,7 +148,7 @@ namespace Bikes
                 int stock = Garage.StockCount;
                 if (stock <= 0 || vehicleIndex < stock) return;
                 int idx = vehicleIndex - stock;
-                Vehicle_SO donor = idx >= 0 && idx < Garage.All.Count ? Garage.All[idx].Donor : null;
+                Vehicle_SO donor = idx >= 0 && idx < Garage.Added.Count ? Garage.Added[idx].Donor : null;   // the list as injected
                 int d = Garage.StockIndexOf(donor);
                 Plugin.Log.LogInfo($"[Bikes] multiplayer: sending the donor car (list position {(d >= 0 ? d : 0)}) instead of a bike");
                 vehicleIndex = d >= 0 ? d : 0;

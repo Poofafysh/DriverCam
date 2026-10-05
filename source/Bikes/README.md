@@ -1,19 +1,21 @@
 # Bikes
 
-BepInEx 6 IL2CPP plugin for **Driving Rogue**: two sport motorcycles as new vehicles in the garage. The **BMW S1000RR**
-and the blue **Sport Bike** come after the game's cars.
+BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
+the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.1.0** (phase 1: the bikes are selectable, look right, spin their wheels and lean into corners;
-bike handling, a narrow body and a rider come later; see the design doc "Sport Bikes: Lean, Grip and Braking")
+Current version: **0.2.0** (bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
+Lean, Grip and Braking")
 
 ## What it does
 
-- **Two new garage vehicles.** Each bike has its own name and stats:
+- **New garage vehicles.** Each has its own name and stats:
 
-  | Bike | Speed | Accel | Handling | Durability |
+  | Vehicle | Speed | Accel | Handling | Durability |
   |---|---|---|---|---|
   | BMW S1000RR | 0.95 | 0.90 | 0.75 | 0.30 |
   | Sport Bike | 0.85 | 0.95 | 0.85 | 0.35 |
+  | M2 G87 (car) | 0.82 | 0.80 | 0.85 | 0.65 |
 
   They're always unlocked and cost nothing.
 - **A bike on a hidden car.** Underneath, each bike drives on a copy of a donor car (`DonorCar`, default Saber): the
@@ -25,8 +27,12 @@ bike handling, a narrow body and a rider come later; see the design doc "Sport B
   rear-left. The bike leans into corners by the physical lean for its speed and turn rate
   (tan lean = speed x yaw rate / g), up to `MaxLean` (50°), and stays upright at a crawl. The car's own meshes, and any
   part the game adds, are hidden.
-- **Models:** each about 3,600 triangles with one 1024 px texture, built from the downloaded models by
-  `Assets/build_bike.py` (Blender).
+- **The M2 G87** is a car model fitted the CarSkins way: scaled so its wheelbase matches the donor's, front axle on the
+  donor's front axle, its four wheels on the donor's own wheel pivots (they spin and steer with them). No lean.
+- **Models:**
+  - the bikes are each about 3,600 triangles with one 1024 px texture, built by `Assets/build_bike.py` (Blender);
+  - the M2 is about 11,000 triangles in flat colours (paint, carbon, glass, lights, tyres, rims), built by
+    `Assets/build_car.py`.
 
 ## For the rider (Driver plugin)
 
@@ -42,10 +48,12 @@ bike handling, a narrow body and a rider come later; see the design doc "Sport B
   | S1000RR | 0, 0.82, -0.18 | 0.32, 0.86, 0.38 | 0.17, 0.36, -0.38 |
   | SportBike | 0, 0.90, -0.20 | 0.33, 0.92, 0.40 | 0.18, 0.38, -0.40 |
 
-  The seats come from the real bikes' specs and the Sport Bike model's seat top (0.896 m). The pegs sit about 0.2 m
-  behind the seat for a sport-bike tuck.
+  The S1000RR seat comes from the real bike's spec (0.82 m), the Sport Bike's from its model's seat top (0.896 m). The
+  pegs sit about 0.2 m behind the seat for a sport-bike tuck.
 
 ## Kept out of your records
+
+Everything below covers all three vehicles, the M2 G87 included ("a bike" here means any of them).
 
 - **Saves:** a bike is never written to the save. When the game saves, a selected bike is stored as its donor car, and
   bike ids are removed from the unlocked list and the per-vehicle save data. If the mod is removed, the save only
@@ -82,14 +90,16 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 
 ## Log (`/game-log Bikes`)
 
-- `Bikes 0.1.0 loaded: 10 hooks; the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
-- `[Bikes] model BMW_S1000RR loaded: N triangles, wheelbase 1.44 m` (the same for SportBike).
-- `[Bikes] BMW S1000RR body: N car meshes to hide, bike at real size (...)` and
-  `[Bikes] BMW S1000RR built on the Saber (id rogue.bikes.s1000rr, stats ...)`.
-- `[Bikes] 2 bike(s) added to the garage after the N cars (garage opened)`, and
+- `Bikes x.y.z loaded: 10 hooks; the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
+- `[Bikes] model SportBike loaded (bike): N triangles, wheelbase 1.41 m` (the same for BMW_S1000RR, and
+  `loaded (car)` for BMW_M2_G87).
+- `[Bikes] Sport Bike body: N car meshes to hide, bike at real size (...)` and
+  `[Bikes] Sport Bike built on the Saber (id rogue.bikes.sportbike, stats ...)`; for the M2:
+  `[Bikes] M2 G87 body: N car meshes to hide, car model at scale S (wheelbase G vs M)`.
+- `[Bikes] 3 bike(s) added to the garage after the N cars (garage opened)`, and
   `[Bikes] bikes taken out of the garage (multiplayer)` / `(switched off)`.
-- `[Bikes] riding BMW S1000RR: bike model found, wheels follow the game's, steering follows` the first time you drive
-  one.
+- `[Bikes] driving Sport Bike: bike model, wheels follow the game's, steering follows` the first time you drive one
+  (`car or missing model` for the M2).
 - `[Bikes] this run uses a bike: it stays off the leaderboards`, `[Bikes] leaderboard upload skipped: this run used a bike`,
   `[Bikes] new run on a car: leaderboard uploads allowed again`, `[Bikes] bikes stay in the garage for now (...): a bike is
   selected or being driven`, and
@@ -109,5 +119,19 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
   - how the bike sits on each donor car;
   - the garage turntable;
   - DriverCam's driver view on a bike (it fits a cockpit to the donor car).
-- **Licences.** The two models came from Sketchfab downloads, and their author and licence are not recorded yet. They
-  are kept out of the repo (`.gitignore`) until that's checked. The S1000RR looks converted from another game's mod.
+- **Which models are in the repo:** the M2 G87 model is (the user chose to publish it, under its CC BY-NC-SA licence).
+  The two bike models stay local (`.gitignore`).
+
+## Credits
+
+- **Sport Bike:** ["Low Poly Motorcycle"](https://sketchfab.com/3d-models/low-poly-motorcycle-e03e5c442ab0492389df5a6f61a99f1f)
+  by **pyrzegeclb** on Sketchfab, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes: decimated
+  to about 3,600 triangles, wheels split out, and the colours baked onto a new texture by `Assets/build_bike.py`.
+- **BMW S1000RR:** ["BMW S1000 RR"](https://sketchfab.com/3d-models/bmw-s1000-rr-1873aed292d6465694119bd81860a0c2) by
+  **VTX** (@VTX_car) on Sketchfab, licensed [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/): a
+  hand-crafted model based on the real bike. Changes: small parts dropped, remeshed, decimated and re-textured by
+  `Assets/build_bike.py`.
+- **M2 G87:** ["2026 Zacoe BMW G87 M2 Widebody Carbon Fiber Kit"](https://sketchfab.com/3d-models/2026-zacoe-bmw-g87-m2-widebody-carbon-fiber-kit-d15e7b05cd7543b19b36bdcbc5f27b59)
+  by **Ddiaz Design** (sergiodd) on Sketchfab, licensed [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+  Changes: interior, engine and calipers removed, decimated to about 11,000 triangles and given flat colours by
+  `Assets/build_car.py`. `Assets/BMW_M2_G87.csm` is shared under the same CC BY-NC-SA 4.0 licence (non-commercial).

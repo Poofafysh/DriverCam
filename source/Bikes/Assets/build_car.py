@@ -11,8 +11,14 @@ Sketchfab, CC BY-NC-SA 4.0) from its FBX. Steps:
   (CAR_RECALC=1 recalculates them outward, which made no visible difference);
 - flat colours by part (paint, gloss black trim, carbon, underbody, glass, lights, tyre, rim, disc) from the source's
   materials; the glass is written see-through (`mat glass ... GLASS_ALPHA`); the interior gets one texture (CABIN_TEX:
-  the source's label sheet on soft-touch black plus its instrument cluster and centre screen) on its atlas UVs.
-Written as a .csm with `kind car` (Body + WheelFL/FR/RL/RR around their pivots).
+  the source's label sheet on soft-touch black plus its lit button symbols, 1024 x 1024, above a 1024 x 256 strip with a
+  clean drawn display: a dark digital cluster face (DriverCam puts its live readout there) and a navigation screen);
+  the interior keeps its atlas UVs (squeezed into the top 80 %), the curved display's faces (DISPLAY_BOX) get planar
+  UVs on the strip, because the decimated display's own UVs smeared the source's cluster / setup-menu art.
+- the steering wheel (rim, spokes, hub, paddles: the cabin's loose parts inside WHEEL_CYL around the column) is split
+  off the cabin into its own part "SteeringWheel": its pivot at the rim's fitted centre, an `a` line with the column
+  axis (toward the dash; Bikes 0.2.3 turns it as "Bikes.SteeringWheel", DriverCam 0.11.4 spins it with the steering).
+Written as a .csm with `kind car` (Body + SteeringWheel + WheelFL/FR/RL/RR around their pivots).
 blender -b --factory-startup --python build_car.py -- <fbx> <out dir> [preview prefix]
 
 Output frame (Unity, metres): +z forward, +y up, +x right; origin on the ground midway between the axles, on the centre
@@ -36,8 +42,22 @@ CABIN = "Interior_Geo"                          # the interior: seen through the
 TARGET_CABIN = 14000                            # the dash and wheel fill the driver view
 CABIN_UV = os.environ.get("CABIN_UV", "uvSet")   # the source's atlas layer (map1 is a tiling detail layer)
 CABIN_V = float(os.environ.get("CABIN_V", "1"))   # 1 = as is (checked from the driver's seat: -1 scrambles the cluster)
-CABIN_TEX = NAME + "_interior.jpg"              # the source's label sheet on a dark soft-touch base + its lit gauges / screen
+CABIN_TEX = NAME + "_interior.jpg"              # the source's label sheet on a dark soft-touch base + the drawn display strip
 GLASS_ALPHA = 0.18                              # see-through windows (the loader's `mat ... alpha`; a windscreen is two layers)
+ATLAS, STRIP = 1024, 256                        # CABIN_TEX: the 1024 atlas on top, the display strip below (1024 x 1280)
+GLYPH_ROW = 780                                 # the source's emissive sheet: button symbols from this row down (above: its
+                                                # cluster and setup-menu art, which the display faces no longer use)
+# the curved display (Unity frame, metres): faces inside this box facing the driver whose source UVs lie on the emissive
+# sheet's cluster / screen art; planar-mapped onto the strip (x DISPLAY_X -> u, y DISPLAY_Y -> v)
+DISPLAY_BOX = ((-0.60, 0.25), (0.83, 0.99), (0.33, 0.45))
+DISPLAY_X, DISPLAY_Y = (-0.545, 0.205), (0.833, 0.983)
+CLUSTER_SPLIT = -0.19                           # cluster left of this x, centre screen right of it
+SCREEN_END_X = 0.10                             # display-box faces right of this x are all screen (see write_part)
+# the steering wheel (Unity model frame, metres): a first guess of the rim centre and the column axis (toward the dash,
+# about 20 deg down); a loose cabin part goes with the wheel when all its vertices lie within WHEEL_CYL of it: radius,
+# then the axial range (behind the rim's plane = toward the dash, where the paddles sit; the column shroud reaches further)
+WHEEL_GUESS, WHEEL_AXIS = (-0.375, 0.85, 0.19), (0.0, -0.34, 0.94)
+WHEEL_CYL = (0.215, -0.06, 0.085)
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.fbx(filepath=FBX)
@@ -227,6 +247,50 @@ def reduce(o, target, covered=False):
 body = reduce(body, TARGET_BODY, covered=True)
 cabin = reduce(cabin, TARGET_CABIN)
 print(f"[car] cabin {tri_count(cabin)} tris")
+
+def split_wheel(o):
+    """The steering wheel's loose parts (rim, spokes, hub, paddles) separated from o into their own object; returns
+    (object, pivot, axis) in Blender's frame (pivot = the rim's fitted centre, axis = the rim plane's normal toward the dash)."""
+    import numpy as np
+    g = Vector((WHEEL_GUESS[0], WHEEL_GUESS[2] + oy, WHEEL_GUESS[1]))
+    ax = Vector((WHEEL_AXIS[0], WHEEL_AXIS[2], WHEEL_AXIS[1])).normalized()
+    bm = bmesh.new(); bm.from_mesh(o.data); bm.verts.ensure_lookup_table()
+    seen, picked = set(), []
+    for v0 in bm.verts:
+        if v0.index in seen: continue
+        isl, stack = [], [v0]; seen.add(v0.index)
+        while stack:
+            v = stack.pop(); isl.append(v)
+            for e in v.link_edges:
+                w = e.other_vert(v)
+                if w.index not in seen: seen.add(w.index); stack.append(w)
+        ok = True
+        for v in isl:
+            d = v.co - g; a = d.dot(ax); r = (d - ax * a).length
+            if r > WHEEL_CYL[0] or not (WHEEL_CYL[1] < a < WHEEL_CYL[2]): ok = False; break
+        if ok: picked.extend(isl)
+    assert len(picked) > 100, f"steering wheel not found ({len(picked)} vertices)"
+    # the rim: the picked vertices far from the axis; centre = their mean, axis = their plane's normal (least-variance)
+    rim = [v.co.copy() for v in picked if ((v.co - g) - ax * (v.co - g).dot(ax)).length > 0.13]
+    P = np.array([tuple(c) for c in rim]); c = P.mean(axis=0)
+    n = Vector(np.linalg.svd(P - c)[2][2].tolist()).normalized()
+    if n.dot(ax) < 0: n = -n
+    pivot = Vector(c.tolist())
+    ids = {v.index for v in picked}
+    for el in (bm.verts, bm.edges, bm.faces):
+        for x in el: x.select = False
+    for v in picked: v.select = True
+    bm.select_mode = {'VERT'}; bm.select_flush_mode()
+    bm.to_mesh(o.data); bm.free()
+    sel_only([o]); bpy.ops.object.mode_set(mode='EDIT'); bpy.ops.mesh.select_mode(type='VERT')
+    bpy.ops.mesh.separate(type='SELECTED'); bpy.ops.object.mode_set(mode='OBJECT')
+    w = next(q for q in bpy.context.selected_objects if q != o)
+    print(f"[car] steering wheel: {tri_count(w)} tris, {len(picked)} vertices, pivot (Unity) {pivot.x:.3f} {pivot.z:.3f} {pivot.y - oy:.3f}, "
+          f"axis {n.x:.3f} {n.z:.3f} {n.y:.3f} ({math.degrees(math.asin(max(-1, min(1, -n.z)))):.1f} deg down)")
+    return w, pivot, n
+
+oy = (pivots["FL"].y + pivots["RL"].y) / 2
+steer, steer_pivot, steer_axis = split_wheel(cabin)
 sel_only([body, cabin], active=body); bpy.ops.object.join(); body = bpy.context.view_layer.objects.active   # one Body mesh
 for k in list(wheels): wheels[k] = reduce(wheels[k], TARGET_WHEEL)
 os.makedirs(OUT, exist_ok=True)
@@ -234,54 +298,173 @@ os.makedirs(OUT, exist_ok=True)
 def lin2srgb(x): return 12.92 * x if x <= 0.0031308 else 1.055 * x ** (1 / 2.4) - 0.055
 
 # write: Unity frame (x, z, y), winding reversed (loops 0, 2, 1); origin midway between the axles; wheels around pivots
-oy = (pivots["FL"].y + pivots["RL"].y) / 2
 def fmt(v): return " ".join(f"{c:.5f}" for c in v)
 lines = [f"# CarSkins-style model '{NAME}' (2026 Zacoe BMW G87 M2 Widebody Carbon Fiber Kit by Ddiaz Design, Sketchfab, CC BY-NC-SA 4.0; built by build_car.py; Unity axes, metres, real size)",
          "kind car", f"name {NAME}", f"tex interior {CABIN_TEX}"]
 for t, (c, sm, met, e) in TAGS.items():
     lines.append(f"mat {t} {lin2srgb(c[0]):.4f} {lin2srgb(c[1]):.4f} {lin2srgb(c[2]):.4f} {sm:.4f} {met:.4f} {e:.4f}"
                  + (f" {GLASS_ALPHA:.2f}" if t == "glass" else ""))
+def display_art():
+    """The display strip (STRIP x ATLAS px, rows top-down, sRGB 0-1), drawn in display millimetres (the strip spans
+    DISPLAY_X x DISPLAY_Y: 750 x 150 mm, so a pixel is 0.73 x 0.59 mm and shapes are drawn in mm to stay round):
+    left the cluster, a dark digital face with thin cyan / red sweeps, the M stripes and a clean dark field where
+    DriverCam's live readout sits (Bikes.Cluster); right the centre screen, a navigation map (blocks, park, river,
+    roads, a blue route, the car's arrow, a destination pin) with a status bar, a side bar and a route card. No text."""
+    import numpy as np
+    W, H = ATLAS, STRIP
+    wmm, hmm = (DISPLAY_X[1] - DISPLAY_X[0]) * 1000, (DISPLAY_Y[1] - DISPLAY_Y[0]) * 1000
+    X = (np.arange(W) + 0.5)[None, :] * (wmm / W) * np.ones((H, 1))
+    Y = (np.arange(H) + 0.5)[:, None] * (hmm / H) * np.ones((1, W))
+    soft = 0.6                                         # edge softness, mm (about one pixel)
+    img = np.zeros((H, W, 3)); img[:] = (0.012, 0.014, 0.018)
+    def put(mask, col):
+        m = np.clip(mask, 0, 1)[..., None]; img[:] = img * (1 - m) + np.array(col) * m
+    def cover(d): return np.clip(0.5 - d / soft, 0, 1)   # d = signed distance in mm (inside < 0)
+    def rect(x0, y0, x1, y1, col, r=0.0):
+        cx, cy, hx, hy = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2 - r, (y1 - y0) / 2 - r
+        qx, qy = np.abs(X - cx) - hx, np.abs(Y - cy) - hy
+        d = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
+        put(cover(d), col)
+    def ring_rect(x0, y0, x1, y1, col, r, t):
+        cx, cy, hx, hy = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2 - r, (y1 - y0) / 2 - r
+        qx, qy = np.abs(X - cx) - hx, np.abs(Y - cy) - hy
+        d = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
+        put(cover(np.abs(d) - t / 2), col)
+    def seg_d(p, q):
+        px_, py_ = X - p[0], Y - p[1]; vx, vy = q[0] - p[0], q[1] - p[1]
+        t = np.clip((px_ * vx + py_ * vy) / max(1e-9, vx * vx + vy * vy), 0, 1)
+        return np.hypot(px_ - t * vx, py_ - t * vy)
+    def poly(pts, t, col):
+        d = np.full((H, W), 1e9)
+        for p, q in zip(pts, pts[1:]): d = np.minimum(d, seg_d(p, q))
+        put(cover(d - t / 2), col)
+    def disc(c, r, col): put(cover(np.hypot(X - c[0], Y - c[1]) - r), col)
+    def tri(a, b, c, col):
+        def side(p, q):
+            nx, ny = q[1] - p[1], -(q[0] - p[0]); l = np.hypot(nx, ny); return ((X - p[0]) * nx + (Y - p[1]) * ny) / l
+        s = np.sign((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+        d = np.maximum(np.maximum(-s * side(a, b), -s * side(b, c)), -s * side(c, a))
+        put(cover(d), col)
+    split = (CLUSTER_SPLIT - DISPLAY_X[0]) * 1000      # mm
+    # ------------------------------------------------ cluster: dark face, the readout's field, sweeps, M stripes
+    rect(2, 2, split - 3, hmm - 2, (0.020, 0.026, 0.040), r=6)
+    cx, cy = (-0.36 - DISPLAY_X[0]) * 1000, (DISPLAY_Y[1] - 0.896) * 1000   # Bikes.Cluster (DriverCam's readout)
+    rect(cx - 92, cy - 40, cx + 92, cy + 40, (0.010, 0.013, 0.022), r=8)
+    ring_rect(cx - 92, cy - 40, cx + 92, cy + 40, (0.05, 0.16, 0.22), r=8, t=0.8)
+    poly([(cx - 150, cy + 52), (cx - 118, cy - 6), (cx - 104, cy - 48)], 1.6, (0.10, 0.70, 0.95))   # speed sweep (left)
+    poly([(cx + 150, cy + 52), (cx + 118, cy - 6), (cx + 104, cy - 48)], 1.6, (0.90, 0.12, 0.16))   # rpm sweep (right)
+    poly([(cx - 60, cy + 50), (cx + 60, cy + 50)], 1.0, (0.08, 0.30, 0.42))
+    for k, col in enumerate(((0.16, 0.55, 0.95), (0.10, 0.20, 0.55), (0.90, 0.10, 0.15))):        # M stripes
+        x0 = 14 + k * 6
+        tri((x0, hmm - 14), (x0 + 4, hmm - 26), (x0 + 8, hmm - 26), col); tri((x0, hmm - 14), (x0 + 8, hmm - 26), (x0 + 4, hmm - 14), col)
+    # ------------------------------------------------ the gap between the two displays
+    rect(split - 3, 0, split + 3, hmm, (0.004, 0.004, 0.006))
+    # ------------------------------------------------ centre screen: navigation map
+    sx0, sx1, sy0, sy1 = split + 4, wmm - 3, 2, hmm - 2
+    rect(sx0, sy0, sx1, sy1, (0.035, 0.045, 0.065), r=5)
+    rect(sx0, sy0, sx1, sy0 + 12, (0.055, 0.065, 0.090), r=3)                       # status bar
+    for k in range(3): rect(sx1 - 40 + k * 11, sy0 + 4, sx1 - 32 + k * 11, sy0 + 8, (0.55, 0.58, 0.64), r=1)
+    rect(sx0 + 6, sy0 + 4, sx0 + 20, sy0 + 8, (0.20, 0.55, 0.95), r=1)
+    mx0, my0 = sx0 + 34, sy0 + 13                                                     # map
+    rect(sx0, my0, sx0 + 32, sy1, (0.045, 0.055, 0.080))                              # side bar
+    for k in range(4):
+        disc((sx0 + 16, my0 + 16 + k * 26), 6.5, (0.10, 0.75, 0.95) if k == 0 else (0.30, 0.36, 0.46))
+        disc((sx0 + 16, my0 + 16 + k * 26), 4.0, (0.045, 0.055, 0.080))
+    rect(mx0, my0, sx1, sy1, (0.090, 0.105, 0.130), r=3)
+    import random
+    rnd = random.Random(87)
+    for gx in range(int(mx0) + 4, int(sx1) - 10, 26):                                 # city blocks
+        for gy in range(int(my0) + 4, int(sy1) - 8, 22):
+            rect(gx, gy, gx + 18 + rnd.random() * 4, gy + 14 + rnd.random() * 4, (0.115, 0.13, 0.16), r=1.5)
+    rect(mx0 + 150, my0 + 70, mx0 + 230, sy1 - 4, (0.07, 0.16, 0.10), r=6)            # park
+    poly([(mx0 + 20, sy1), (mx0 + 70, my0 + 95), (mx0 + 120, my0 + 80), (mx0 + 190, my0 + 40), (sx1, my0 + 30)], 9, (0.06, 0.12, 0.24))   # river
+    for p in ([(mx0, my0 + 30), (sx1, my0 + 52)], [(mx0 + 60, my0), (mx0 + 95, sy1)], [(mx0 + 200, my0), (mx0 + 175, sy1)],
+              [(mx0, my0 + 100), (sx1, my0 + 88)], [(mx0 + 260, my0), (mx0 + 300, sy1)]):
+        poly(p, 2.2, (0.30, 0.33, 0.38))
+    poly([(mx0, my0 + 64), (mx0 + 140, my0 + 60), (sx1, my0 + 72)], 4.0, (0.48, 0.50, 0.54))          # main road
+    route = [(mx0 + 79, sy1 - 6), (mx0 + 72, my0 + 62), (mx0 + 140, my0 + 60), (mx0 + 188, my0 + 64), (mx0 + 197, my0 + 26)]
+    poly(route, 4.2, (0.15, 0.55, 1.00))
+    disc(route[-1], 4.2, (0.95, 0.20, 0.25)); disc(route[-1], 1.6, (1, 1, 1))       # destination
+    a = (mx0 + 79, sy1 - 22)                                                           # the car
+    tri((a[0], a[1] - 9), (a[0] - 6, a[1] + 6), (a[0] + 6, a[1] + 6), (0.15, 0.55, 1.00))
+    tri((a[0], a[1] - 6), (a[0] - 3.8, a[1] + 4), (a[0] + 3.8, a[1] + 4), (1, 1, 1))
+    rect(mx0 + 6, my0 + 4, mx0 + 74, my0 + 26, (0.045, 0.055, 0.080), r=3)           # route card
+    rect(mx0 + 11, my0 + 9, mx0 + 18, my0 + 21, (0.15, 0.55, 1.00), r=1.5)
+    rect(mx0 + 23, my0 + 9, mx0 + 66, my0 + 13, (0.70, 0.73, 0.78), r=1)
+    rect(mx0 + 23, my0 + 17, mx0 + 52, my0 + 20, (0.38, 0.42, 0.48), r=1)
+    return np.clip(img, 0, 1)
+
 def cabin_texture():
-    """CABIN_TEX: the source's interior base-colour sheet (white with dark labels and AO) times a dark soft-touch grey,
-    plus its emissive sheet (instrument cluster, centre screen, button symbols) added at full strength, so the gauges read
-    in the base colour without an emission shader. 1024 px, same UV layout as the source's (map1)."""
+    """CABIN_TEX, 1024 x 1280: on top the source's interior base-colour sheet (white with dark labels and AO) times a
+    dark soft-touch grey, plus its emissive button symbols (GLYPH_ROW down) added at full strength, same UV layout as
+    the source's (uvSet; write_part squeezes it into the top 80 %); below it the display strip (display_art)."""
     import numpy as np
     src = os.path.dirname(FBX)
     def px(fn):
-        im = bpy.data.images.load(os.path.join(src, fn)); im.scale(1024, 1024)
-        a = np.empty(1024 * 1024 * 4, dtype=np.float32); im.pixels.foreach_get(a); return a.reshape(-1, 4)
-    d = px("InteriorA_DiffuseAOSO.png"); e = px("BMW_M2G87TNR_2023_InteriorA_Emissive.png")
-    out = np.ones_like(d)
-    out[:, :3] = np.clip(d[:, :3] * 0.20 + e[:, :3] * e[:, 3:4], 0, 1)   # 0.20: dark grey, readable in the game's dim cabin light
-    img = bpy.data.images.new("cabin", 1024, 1024); img.pixels.foreach_set(out.ravel())
+        im = bpy.data.images.load(os.path.join(src, fn)); im.scale(ATLAS, ATLAS)
+        a = np.empty(ATLAS * ATLAS * 4, dtype=np.float32); im.pixels.foreach_get(a); return a.reshape(ATLAS, ATLAS, 4)
+    d = px("InteriorA_DiffuseAOSO.png"); e = px("BMW_M2G87TNR_2023_InteriorA_Emissive.png")   # rows bottom-up
+    keep = (np.arange(ATLAS) < ATLAS - GLYPH_ROW)[:, None, None]                  # bottom-up rows of the glyph area
+    atlas = np.clip(d[..., :3] * 0.20 + e[..., :3] * e[..., 3:4] * keep, 0, 1)   # 0.20: dark grey, readable in the game's dim cabin light
+    out = np.ones((ATLAS + STRIP, ATLAS, 4), dtype=np.float32)
+    out[STRIP:, :, :3] = atlas
+    out[:STRIP, :, :3] = display_art()[::-1]                                      # top-down drawing -> bottom-up rows
+    img = bpy.data.images.new("cabin", ATLAS, ATLAS + STRIP); img.pixels.foreach_set(out.ravel())
     img.filepath_raw = os.path.join(OUT, CABIN_TEX); img.file_format = 'JPEG'
     bpy.context.scene.render.image_settings.quality = 90; img.save()
 
-def write_part(name, o, pivot=None):
+def write_part(name, o, pivot=None, axis=None):
     me = o.data; me.calc_loop_triangles()
     uv = me.uv_layers[CABIN_UV].data if CABIN_UV in me.uv_layers else None   # the interior's atlas coordinates
     lines.append(f"o {name}")
     if pivot is not None: lines.append(f"p {pivot.x:.5f} {pivot.z:.5f} {pivot.y - oy:.5f}")
+    if axis is not None: lines.append(f"a {axis.x:.5f} {axis.z:.5f} {axis.y:.5f}")   # the spin axis (Unity frame)
     by_tag = {}
     for lt in me.loop_triangles:
         m = me.materials[lt.material_index] if lt.material_index < len(me.materials) else None
         by_tag.setdefault(m.name[4:] if m and m.name.startswith("tag_") else "carbon", []).append(lt)
     n = 0
+    top = STRIP / (ATLAS + STRIP)                     # the atlas sits above the display strip in CABIN_TEX
+    def unity(li):
+        v = me.vertices[me.loops[li].vertex_index].co
+        return (v.x, v.z, v.y - oy) if pivot is None else None
+    def is_display(lt):
+        """A face of the curved display: in DISPLAY_BOX, facing the driver, its source UVs on the emissive sheet's
+        cluster / screen art (not the bezel's corner texel or the slivers with UVs out of the sheet)."""
+        if pivot is not None or uv is None or lt.normal.y > -0.85: return False   # Blender -y = Unity -z (toward the driver)
+        c = [unity(li) for li in lt.loops]
+        m = [sum(p[k] for p in c) / 3 for k in range(3)]
+        if not all(lo <= m[k] <= hi for k, (lo, hi) in enumerate(DISPLAY_BOX)): return False
+        if m[0] > SCREEN_END_X: return True   # the screen's right end: decimated housing faces on a black texel cut a
+                                              # dark wedge into the screen; on the strip they show the same map
+        return all(0 <= uv[li].uv.x <= 1 and 0 <= (1 - uv[li].uv.y) * ATLAS <= GLYPH_ROW for li in lt.loops)
+    def atlas_v(v):
+        if v < 0 or v > 1: v -= math.floor(v)         # the source's tiling UVs: the texel they showed before the strip
+        return top + (1 - top) * v
+    shown = 0
     for t, lts in by_tag.items():
         lines.append(f"m {t}")
         for lt in lts:
+            disp = t == "interior" and is_display(lt)
+            shown += disp
             pts = []
             for li in (lt.loops[0], lt.loops[2], lt.loops[1]):
                 v = me.vertices[me.loops[li].vertex_index].co.copy()
                 v = v - pivot if pivot is not None else Vector((v.x, v.y - oy, v.z))
                 nn = me.corner_normals[li].vector.normalized() if hasattr(me, "corner_normals") else me.vertices[me.loops[li].vertex_index].normal
                 p = fmt((v.x, v.z, v.y)) + " " + fmt((nn.x, nn.z, nn.y))
-                if t == "interior" and uv is not None: p += f" {uv[li].uv.x:.5f} {CABIN_V * uv[li].uv.y:.5f}"
+                if disp:   # planar on the display strip: Unity x -> u, Unity y -> v
+                    du = (v.x - DISPLAY_X[0]) / (DISPLAY_X[1] - DISPLAY_X[0])
+                    dv = (v.z - DISPLAY_Y[0]) / (DISPLAY_Y[1] - DISPLAY_Y[0])
+                    p += f" {min(0.999, max(0.001, du)):.5f} {top * min(0.995, max(0.005, dv)):.5f}"
+                elif t == "interior" and uv is not None: p += f" {uv[li].uv.x:.5f} {atlas_v(CABIN_V * uv[li].uv.y):.5f}"
                 pts.append(p)
             lines.append(("u " if t == "interior" and uv is not None else "f ") + " ".join(pts)); n += 1
+    if pivot is None: print(f"[car] {shown} display faces on the drawn display strip")
     return n
 cabin_texture()
 tris = write_part("Body", body)
+tris += write_part("SteeringWheel", steer, steer_pivot, steer_axis)
 for k in ("FL", "FR", "RL", "RR"): tris += write_part("Wheel" + k, wheels[k], pivots[k])
 open(os.path.join(OUT, NAME + ".csm"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
 print(f"[car] {NAME}: {tris} triangles (body {tri_count(body)}, wheels {', '.join(str(tri_count(w)) for w in wheels.values())}); "

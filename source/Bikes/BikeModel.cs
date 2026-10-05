@@ -13,7 +13,8 @@ namespace Bikes
     /// - `name`, `tex tag file` (base-colour texture for that tag), `mat tag r g b smoothness metallic emission [alpha]`
     ///   (alpha under 1 = see-through glass: an alpha-blended URP Particles/Unlit material, a shader variant the game ships;
     ///   plain opaque Lit if that shader isn't loaded);
-    /// - parts: `o part`, `p x y z` (a wheel's pivot, its triangles written around it), `m tag`, `f` / `u` triangles
+    /// - parts: `o part`, `p x y z` (a wheel's pivot, its triangles written around it), `a x y z` (0.2.3: a part's spin
+    ///   axis, the car's `SteeringWheel`: along its column toward the dash), `m tag`, `f` / `u` triangles
     ///   (3 x position + normal [+ uv]).
     /// Body = one mesh with a submesh per tag; each wheel is its own mesh. Meshes, materials and textures are
     /// built once, shared by every bike body that uses them, and freed on unload (DestroyAll).
@@ -29,6 +30,10 @@ namespace Bikes
         public bool Car;
         /// <summary>Car models: FL / FR / RL / RR -> (pivot, mesh, materials).</summary>
         public readonly Dictionary<string, (Vector3 pivot, Mesh mesh, Material[] mats)> Wheels = new Dictionary<string, (Vector3, Mesh, Material[])>();
+        /// <summary>Car models (0.2.3): the steering wheel, around its pivot (rim centre) with its column axis; null mesh = part of the body.</summary>
+        public Mesh SteeringWheel;
+        public Material[] SteeringWheelMats;
+        public Vector3 SteeringPivot, SteeringAxis;
 
         private static readonly Dictionary<string, BikeModel> s_cache = new Dictionary<string, BikeModel>();
         private static readonly List<UnityEngine.Object> s_owned = new List<UnityEngine.Object>();
@@ -65,7 +70,7 @@ namespace Bikes
         {
             public string Name;
             public bool HasPivot;
-            public Vector3 Pivot;
+            public Vector3 Pivot, Axis;
             public readonly Dictionary<string, (List<Vector3> v, List<Vector3> n, List<Vector2> uv)> ByTag = new Dictionary<string, (List<Vector3>, List<Vector3>, List<Vector2>)>();
             public readonly List<string> Order = new List<string>();
         }
@@ -90,6 +95,7 @@ namespace Bikes
                     case "mat": mats[t[1]] = (new Color(F(t, 2), F(t, 3), F(t, 4), t.Length > 8 ? Mathf.Clamp01(F(t, 8)) : 1f), F(t, 5), F(t, 6), F(t, 7)); break;
                     case "o": part = new Part { Name = t[1] }; parts.Add(part); break;
                     case "p": if (part != null) { part.HasPivot = true; part.Pivot = new Vector3(F(t, 1), F(t, 2), F(t, 3)); } break;
+                    case "a": if (part != null) part.Axis = new Vector3(F(t, 1), F(t, 2), F(t, 3)); break;
                     case "m": tag = t[1]; break;
                     case "f":
                     case "u":
@@ -126,6 +132,10 @@ namespace Bikes
                 if (p.Name == "WheelF") { model.WheelF = mesh; model.WheelFMats = arr; model.PivotF = p.Pivot; }
                 else if (p.Name == "WheelR") { model.WheelR = mesh; model.WheelRMats = arr; model.PivotR = p.Pivot; }
                 else if (p.HasPivot && p.Name.StartsWith("Wheel", StringComparison.Ordinal) && p.Name.Length == 7) model.Wheels[p.Name.Substring(5)] = (p.Pivot, mesh, arr);
+                else if (p.HasPivot && p.Name == "SteeringWheel" && p.Axis.sqrMagnitude > 0.5f)
+                {
+                    model.SteeringWheel = mesh; model.SteeringWheelMats = arr; model.SteeringPivot = p.Pivot; model.SteeringAxis = p.Axis.normalized;
+                }
                 else if (!p.HasPivot) { model.Body = mesh; model.BodyMats = arr; }
             }
             if (car)

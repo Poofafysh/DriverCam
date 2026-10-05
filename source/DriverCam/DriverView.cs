@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Game.Runtime.Cameras;
 using UnityEngine;
 
@@ -45,6 +45,7 @@ internal static class DriverView
     static CameraControllerInGame _ctrl;
     static Vector3 _head;
     static bool _active, _onBike;   // _onBike: a Bikes motorcycle (BikeLink): no cockpit, mirrors or car seat
+    static bool _carCabin;          // CarCabin is built for a Bikes car model (the M2 G87)
 
     public static void Apply(CameraControllerInGame ctrl)
     {
@@ -57,6 +58,8 @@ internal static class DriverView
                 Cockpit.SetVisible(false);
                 MirrorView.SetActive(false);
                 DriverLink.SetView(false);
+                MotionBlurGuard.Set(false);
+                CarCabin.Unturn();   // 0.11.4: the M2's wheel turns only in the driver view; straight again outside it
                 return;
             }
 
@@ -81,13 +84,32 @@ internal static class DriverView
             // 0.11.2: a Bikes motorcycle shows only the bike and its rider, the M2 G87 only its own cabin (the donor's
             // cockpit, built or not, stays hidden: no wheel, gauges or mirror cameras). A car skips this block, so its path below is unchanged.
             _onBike = BikeLink.On(body);
+            MotionBlurGuard.Set(_onBike);   // the blur smears a cabin / rider that moves with the camera (MotionBlurGuard)
             if (_onBike)
             {
                 Cockpit.SetVisible(false);
-                MirrorView.SetActive(false);
-                DriverLink.SetView(false);
+                if (BikeLink.IsCar)
+                {
+                    // 0.11.3: the M2's own cabin gets DriverCam's mirrors, cluster readout and Driver seat data (CarCabin)
+                    CarCabin.Enter(BikeLink.CarRoot, body);
+                    _carCabin = true;
+                }
+                else
+                {
+                    if (_carCabin) { CarCabin.Leave(); _carCabin = false; }
+                    MirrorView.SetActive(false);
+                    DriverLink.SetView(false);
+                }
                 ApplyPose();
                 return;
+            }
+            if (_carCabin)
+            {
+                // back from a car model on this body (Bike.DriverView switched off): CarCabin took the gauges and mirrors,
+                // so the cockpit is built again
+                CarCabin.Leave();
+                _carCabin = false;
+                _measuredVersion = -1;
             }
             _head = HeadInBodyFrame();
 
@@ -165,14 +187,20 @@ internal static class DriverView
     /// <summary>
     /// The camera on a Bikes motorcycle: at the rider's eye (BikeLink.Eye), the upright body frame (with the head
     /// following the shake by HeadFollowsShake as in a car) rolled by Bike.CameraLean of the bike's lean, then the same
-    /// pitch, look-into-turn and HeadLook as in a car. The cockpit, DriverLink and mirrors are left alone.
+    /// pitch, look-into-turn and HeadLook as in a car. The cockpit is left alone; a car model (the M2) then gets
+    /// CarCabin.Pose (its mirrors, cluster readout and the Driver plugin's seat data).
     /// </summary>
     static void ApplyBikePose(Transform body, Camera cam)
     {
         if (!BikeLink.Alive) return;   // the bike body went between Apply and this pose: the next Apply sorts it out
-        BodyFrame(out _, out var shakenRot);
+        BodyFrame(out var shakenPos, out var shakenRot);
         float follow = Mathf.Clamp01(Plugin.HeadFollowsShake.Value);
-        var frameRot = Quaternion.Slerp(body.rotation, shakenRot, follow);
+        // 0.11.3: in a car model the frame is the model's own rotation (Bikes.Car, under the game's visual body, which it
+        // rolls, pitches and smooths after the rigidbody), read here in OnBeforeRender with the eye from Bikes.Eye: the
+        // camera is rigid in the cabin (the donor's hidden body mesh, shakenRot, need not move with Bikes.Car)
+        var cabin = BikeLink.CarRoot;
+        var cabinRot = cabin != null ? cabin.rotation : shakenRot;
+        var frameRot = Quaternion.Slerp(body.rotation, cabinRot, follow);
         var eye = BikeLink.Eye(frameRot);
         float roll = BikeLink.Roll(frameRot);
         float headYaw = 0f, headPitch = 0f;
@@ -180,6 +208,7 @@ internal static class DriverView
         var lookRot = frameRot * Quaternion.Euler(0f, 0f, roll) * Quaternion.Euler(Plugin.Pitch.Value - headPitch, _turn * Plugin.LookIntoTurn.Value + headYaw, 0f);
         cam.transform.SetPositionAndRotation(eye, lookRot);
         cam.nearClipPlane = Plugin.NearClip.Value;
+        if (_carCabin && BikeLink.IsCar) CarCabin.Pose(shakenPos, shakenRot, cabinRot, eye, cam, _turn);   // mirrors, readout, Driver seat, wheel spin
     }
 
     /// <summary>The body frame as currently rendered: the body mesh's pose with its rest offset removed.</summary>
@@ -319,6 +348,8 @@ internal static class DriverView
         _body = null;
         _active = false;
         _onBike = false;
+        if (_carCabin) { CarCabin.Leave(); _carCabin = false; }
+        MotionBlurGuard.Restore();
         BikeLink.Reset();
         Cockpit.SetVisible(false);
         MirrorView.SetActive(false);

@@ -561,6 +561,35 @@ def build_body(B, info, lod):
     return mb
 
 
+# Driver 0.4.2: a slimmer driver. Each body vertex moves toward its bones' axes (perpendicular to the bone only, so
+# heights and joints stay where they are; the skeleton, weights and sockets are unchanged and the clips still fit) by
+# the weighted factor of its bones; bones not listed keep 1. The helmet and visor shrink about the helmet centre.
+SLIM = {"spine_01": 0.95, "spine_02": 0.90, "spine_03": 0.87, "neck_01": 0.86, "head": 0.90,
+        "clavicle_l": 0.84, "clavicle_r": 0.84, "upperarm_l": 0.85, "upperarm_r": 0.85,
+        "lowerarm_l": 0.94, "lowerarm_r": 0.94, "lowerarm_twist_01_l": 0.95, "lowerarm_twist_01_r": 0.95,
+        "pelvis": 0.97}
+HELMET_SLIM = 0.92
+
+
+def slim_body(mb, B):
+    for i, (c, w) in enumerate(zip(mb.co, mb.w)):
+        tot = sum(w.values())
+        if tot <= 0: continue
+        move = Vector((0, 0, 0))
+        for b, x in w.items():
+            f = SLIM.get(b, 1.0)
+            if f == 1.0: continue
+            h, t = B[b]["head"], B[b]["tail"]; a = (t - h).normalized()
+            d = c - h; perp = d - a * d.dot(a)                         # off the bone's axis, not along it
+            move -= perp * (1 - f) * (x / tot)
+        mb.co[i] = c + move
+
+
+def slim_helmet(mb):
+    HC = Vector((0, 0.004, 1.628))
+    for i, c in enumerate(mb.co): mb.co[i] = HC + (c - HC) * HELMET_SLIM
+
+
 def build_helmet(lod):
     L0 = lod == 0
     mbH = MB(helmet_uv); mbV = MB(helmet_uv)
@@ -1049,9 +1078,11 @@ def main(outdir, do_fbx=True):
     objs = {}
     for lod in (0, 1):
         mb = build_body(B, info, lod)
+        slim_body(mb, B)
         objs["body%d" % lod] = mb_to_object(mb, "Body_LOD%d" % lod, arm_ob, [m_suit], order,
                                             sharp_parts=(PART["boot_l"], PART["boot_r"]), sharp_angle=55)
         mh, mv = build_helmet(lod)
+        slim_helmet(mh); slim_helmet(mv)
         objs["helmet%d" % lod] = mb_to_object(mh, "Helmet_LOD%d" % lod, arm_ob, [m_helm], ["head"], sharp_parts=(21,), sharp_angle=40)
         objs["visor%d" % lod] = mb_to_object(mv, "Visor_LOD%d" % lod, arm_ob, [m_visor], ["head"])
     for k in ("body1", "helmet1", "visor1"): objs[k].hide_render = True; objs[k].hide_set(True)

@@ -38,8 +38,14 @@ namespace Bikes
             public float[] Rider;     // seat xyz, right grip xyz, right peg xyz, hip height above the seat, knee half-width (bike frame)
             public bool Car;          // a car model (four wheels on the donor's spin pivots, no lean)
             public float[] Eye;       // a car model: the driver's eye in its cabin, xyz (model frame, metres): the "Bikes.Eye" node (DriverCam)
+            // a car model's cabin sockets for DriverCam (model frame, metres), each x y z, nx ny nz (the surface's normal toward
+            // the driver), w h: "Bikes.MirrorC" / "Bikes.MirrorL" / "Bikes.MirrorR" (the mirror glass: centre, size) and
+            // "Bikes.Cluster" (the instrument cluster: where DriverCam's digital readout goes, w = its width)
+            public float[] MirrorC, MirrorL, MirrorR, Cluster;
             public int IntId;
             public float Speed, Accel, Handling, Durability;
+            // > 0: Speed is worked out when built so the game's top speed shows this on the HUD (SpeedFactorFor); Speed is the fallback
+            public float TopMph;
             public Vehicle_SO So, Donor;
             public string Failed;
         }
@@ -53,9 +59,16 @@ namespace Bikes
                        Speed = 0.85f, Accel = 0.95f, Handling = 0.85f, Durability = 0.35f,
                        Rider = new[] { 0f, 0.90f, -0.20f, 0.33f, 0.92f, 0.40f, 0.18f, 0.38f, -0.40f, 0.10f, 0.20f } },
             new Bike { Key = "M2G87", Model = "BMW_M2_G87", Title = "M2 G87", Id = "rogue.bikes.m2g87", IntId = 9003,
-                       Speed = 0.82f, Accel = 0.80f, Handling = 0.85f, Durability = 0.65f, Car = true,
-                       // left-hand drive: steering wheel centre about (-0.37, 0.84, 0.21), seat cushion 0.42, headrest z -0.56
-                       Eye = new[] { -0.37f, 1.12f, -0.40f } },
+                       // top speed 200 on the HUD (mph; 322 km/h), every other stat at the game's maximum
+                       Speed = 1f, TopMph = 200f, Accel = 1f, Handling = 1f, Durability = 1f, Car = true,
+                       // left-hand drive: steering wheel centre about (-0.375, 0.85, 0.19), seat cushion 0.42, headrest z -0.56
+                       Eye = new[] { -0.37f, 1.12f, -0.40f },
+                       // measured from BMW_M2_G87.csm (the mirrors' glass faces, the curved display's cluster half), 3-4 mm
+                       // toward the driver so DriverCam's surfaces sit just in front of the model's own
+                       MirrorC = new[] { -0.009f, 1.175f, 0.197f, -0.21f, 0.01f, -0.98f, 0.225f, 0.058f },
+                       MirrorL = new[] { -0.919f, 0.991f, 0.297f, 0.21f, 0.09f, -0.97f, 0.150f, 0.090f },
+                       MirrorR = new[] { 0.919f, 0.991f, 0.297f, -0.21f, 0.09f, -0.97f, 0.150f, 0.090f },
+                       Cluster = new[] { -0.36f, 0.897f, 0.402f, 0.0f, 0.19f, -0.98f, 0.17f, 0.07f } },
         };
 
         internal static bool Injected { get; private set; }
@@ -214,12 +227,58 @@ namespace Bikes
             so.UniqueInt = new UniqueInt(b.IntId);
             so.unlockedByDefault = false;
             so.vehicleName = b.Title;
+            float speed = b.TopMph > 0f ? SpeedFactorFor(b.TopMph, b.Speed, b.Title) : b.Speed;
             var st = so.baseStats;
-            st.maxSpeedFactor = b.Speed; st.accelerationFactor = b.Accel; st.handlingFactor = b.Handling; st.durabilityFactor = b.Durability;
+            st.maxSpeedFactor = speed; st.accelerationFactor = b.Accel; st.handlingFactor = b.Handling; st.durabilityFactor = b.Durability;
             so.baseStats = st;
             so.vehicleBody = body;
             b.So = so; b.Donor = donor;
-            Plugin.Log.LogInfo($"[Bikes] {b.Title} built on the {donor.VehicleName} (id {b.Id}, stats {b.Speed:0.00}/{b.Accel:0.00}/{b.Handling:0.00}/{b.Durability:0.00})");
+            Plugin.Log.LogInfo($"[Bikes] {b.Title} built on the {donor.VehicleName} (id {b.Id}, stats {speed:0.000}/{b.Accel:0.00}/{b.Handling:0.00}/{b.Durability:0.00})");
+        }
+
+        // The HUD speedometer (VehicleVisuals.Update) shows floor(VehicleMovement.CurrentSpeed * GetMultiplierNonLogical):
+        // m/s x 2.237 x 1.1 in mph (x 3.6 x 1.1 in km/h). At full throttle with no boost the speed settles on
+        // VehicleMovement.OriginalMaxSpeed = VehicleStats.MaxSpeed = VehicleStatsRange.GetMaxSpeed(factor) / 3.6, the range
+        // being VehicleContainerSO.StatsRange (km/h). GetMaxSpeed clamps the factor to 0..1, so a factor above 1 gains nothing.
+        private const float MphPerMps = 2.237f * 1.1f, KphPerMps = 3.6f * 1.1f;
+
+        /// <summary>
+        /// The base speed factor whose top speed shows `mph` on the HUD: aims at mph + 0.5 (the middle of the floored
+        /// reading), bisecting the game's own GetMaxSpeed; the linear formula on the serialized range if that call fails.
+        /// </summary>
+        internal static float SpeedFactorFor(float mph, float fallback, string title)
+        {
+            float wantKph = (mph + 0.5f) / MphPerMps * 3.6f;
+            VehicleStatsRange r;
+            try { r = GeneralReferencesData.Instance?.VehicleContainer?.StatsRange; }
+            catch (Exception e) { Plugin.Log.LogWarning($"[Bikes] {title}: no stats range ({e.Message}); speed factor {fallback:0.000}"); return fallback; }
+            if (r == null) { Plugin.Log.LogWarning($"[Bikes] {title}: no stats range; speed factor {fallback:0.000}"); return fallback; }
+            float f; string how;
+            try
+            {
+                float lo = 0f, hi = 1f;
+                if (r.GetMaxSpeed(1f) < wantKph) f = 1f;
+                else if (r.GetMaxSpeed(0f) >= wantKph) f = 0f;
+                else
+                {
+                    for (int i = 0; i < 40; i++) { float m = 0.5f * (lo + hi); if (r.GetMaxSpeed(m) < wantKph) lo = m; else hi = m; }
+                    f = hi;
+                }
+                how = "game's GetMaxSpeed";
+            }
+            catch (Exception e)
+            {
+                var v = r.maxSpeedStatRange;   // GetMaxSpeed = max(50, x + (y - x) * clamp01(f))
+                f = v.y > v.x ? Mathf.Clamp01((wantKph - v.x) / (v.y - v.x)) : fallback;
+                how = $"linear formula ({e.Message})";
+            }
+            float kph;
+            try { kph = r.GetMaxSpeed(f); } catch { var v = r.maxSpeedStatRange; kph = Mathf.Max(50f, v.x + (v.y - v.x) * f); }
+            float mps = kph / 3.6f;
+            Plugin.Log.LogInfo($"[Bikes] {title}: speed factor {f:0.0000} by the {how} -> {kph:0.0} stat km/h = {Mathf.Floor(mps * MphPerMps)} mph / {Mathf.Floor(mps * KphPerMps)} km/h on the HUD (target {mph:0} mph)");
+            if (Mathf.Floor(mps * MphPerMps) < mph)
+                Plugin.Log.LogWarning($"[Bikes] {title}: the game's stat range tops out below {mph:0} mph (factor capped at 1; the game clamps factors above 1)");
+            return f;
         }
 
         private static VehicleSkinHolder BuildBody(Bike b, Vehicle_SO donor, BikeModel model)
@@ -285,7 +344,8 @@ namespace Bikes
         /// <summary>
         /// A car model, CarSkins-style. It's scaled so its wheelbase matches the donor's and placed with its front axle on
         /// the donor's front axle. The body sits under the body node as "Bikes.Car", with an empty "Bikes.Eye" child at the
-        /// driver's eye in the model's cabin (DriverCam). Each wheel goes under the donor's spin
+        /// driver's eye in the model's cabin, and empty cabin sockets "Bikes.MirrorC/L/R" and "Bikes.Cluster" (Socket; DriverCam's
+        /// mirror surfaces and digital readout). Each wheel goes under the donor's spin
         /// pivot (it spins and steers with it), turned to the body's frame and scaled like the body.
         /// </summary>
         private static VehicleSkinHolder FinishCar(Bike b, VehicleSkinHolder holder, BikeModel model, Transform bodyNode,
@@ -307,6 +367,25 @@ namespace Bikes
                 eye.transform.SetParent(root.transform, false);
                 eye.transform.localPosition = new Vector3(b.Eye[0], b.Eye[1], b.Eye[2]);
             }
+            Socket(root.transform, "Bikes.MirrorC", b.MirrorC);
+            Socket(root.transform, "Bikes.MirrorL", b.MirrorL);
+            Socket(root.transform, "Bikes.MirrorR", b.MirrorR);
+            Socket(root.transform, "Bikes.Cluster", b.Cluster);
+            if (model.SteeringWheel != null)
+            {
+                // 0.2.3: the steering wheel on its own pivot at the rim centre, +z along the column toward the dash (rest pose);
+                // DriverCam turns this node about its z with the steering. The mesh (written around the pivot in the model's
+                // axes) sits under it with the inverse rest rotation, so it looks as modelled until the node turns.
+                var up = Vector3.ProjectOnPlane(Vector3.up, model.SteeringAxis);
+                var rest = Quaternion.LookRotation(model.SteeringAxis, up.sqrMagnitude > 1e-4f ? up : Vector3.up);
+                var sw = new GameObject("Bikes.SteeringWheel");
+                sw.transform.SetParent(root.transform, false);
+                sw.transform.localPosition = model.SteeringPivot;
+                sw.transform.localRotation = rest;
+                var mesh = new GameObject("Bikes.SteeringWheelMesh");
+                AddRenderer(mesh, sw.transform, Vector3.zero, model.SteeringWheel, model.SteeringWheelMats);
+                mesh.transform.localRotation = Quaternion.Inverse(rest);
+            }
             float world = s * bodyNode.lossyScale.x;
             foreach (var k in new[] { "FL", "FR", "RL", "RR" })
             {
@@ -324,8 +403,60 @@ namespace Bikes
                 r.sharedMaterials = w.mats;
                 r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
             }
-            Plugin.Log.LogInfo($"[Bikes] {b.Title} body: {carMeshes} car meshes to hide, car model at scale {s:0.000} (wheelbase {gWb:0.00} vs {mWb:0.00})");
+            int layer = MatchLayer(holder.transform);
+            Plugin.Log.LogInfo($"[Bikes] {b.Title} body: {carMeshes} car meshes to hide, car model at scale {s:0.000} (wheelbase {gWb:0.00} vs {mWb:0.00}); " +
+                               $"steering wheel {(model.SteeringWheel != null ? "turns" : "part of the body (static)")}; on the car's layer {layer}");
             return holder;
+        }
+
+        /// <summary>
+        /// An empty cabin socket under the car model (no mesh): at the surface's centre, its +z away from the driver (into
+        /// the surface), +y up along it, and its localScale (w, h, 1) = the surface's size in model metres. DriverCam reads
+        /// the name, pose and scale; nothing else does.
+        /// </summary>
+        private static void Socket(Transform root, string name, float[] s)
+        {
+            if (s == null || s.Length < 8) return;
+            var go = new GameObject(name);
+            go.transform.SetParent(root, false);
+            go.transform.localPosition = new Vector3(s[0], s[1], s[2]);
+            var fwd = new Vector3(-s[3], -s[4], -s[5]);
+            go.transform.localRotation = Quaternion.LookRotation(fwd, Vector3.up);
+            go.transform.localScale = new Vector3(s[6], s[7], 1f);
+        }
+
+        /// <summary>
+        /// 0.2.3: a car model (Bikes.Car and its wheels) or a bike (Bikes.Lean) on the layer of the donor's own body mesh (the first car mesh). The
+        /// game's velocity motion blur (its URP renderer feature MotionBlurVelocityFeature) draws a mask of the vehicle's
+        /// layer(s) and skips those pixels; a car model left on the Default layer was blurred along the car's speed, which
+        /// in the driver view smeared its cabin across the screen. DriverCam's cockpit and the Driver plugin use the body's layer too.
+        /// </summary>
+        /// Called on the template and again when a car model body is first driven (Runner.Find), in case the game moves the
+        /// player's car to another layer. Returns the layer (-1: no car model or no car mesh under this body).
+        internal static int MatchLayer(Transform skin)
+        {
+            if (skin == null) return -1;
+            var rs = skin.GetComponentsInChildren<Renderer>(true);
+            int layer = -1;
+            for (int i = 0; i < rs.Length && layer < 0; i++)
+                if (rs[i] != null && IsCarMesh(rs[i], skin)) layer = rs[i].gameObject.layer;
+            if (layer < 0) return -1;
+            var all = skin.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < all.Length; i++)
+            {
+                var t = all[i];
+                if (t == null) continue;
+                string n = t.gameObject.name;
+                if (n == "Bikes.Car" || n == "Bikes.Lean") SetLayer(t, layer);   // a car model / a bike (and anything parented under it)
+                else if (n.StartsWith("Bikes.Wheel", StringComparison.Ordinal) && n.Length == 13) t.gameObject.layer = layer;   // Bikes.WheelFL..RR
+            }
+            return layer;
+        }
+
+        private static void SetLayer(Transform t, int layer)
+        {
+            t.gameObject.layer = layer;
+            for (int i = 0; i < t.childCount; i++) SetLayer(t.GetChild(i), layer);
         }
 
         private static void AddRenderer(GameObject go, Transform parent, Vector3 pos, Mesh mesh, Material[] mats)

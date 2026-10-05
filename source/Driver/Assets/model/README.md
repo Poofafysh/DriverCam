@@ -1,7 +1,11 @@
 # Driver character (Driver plugin, `rogue.driver`)
 
 Original, fully scripted character: no game meshes, no sample or third-party content. Everything here is rebuilt
-by `build_driver.py`; the `.blend` is a git-ignored working file.
+by `build_driver.py`; the `.blend` is a git-ignored working file. Since Driver 0.4.2 the body is slimmed after it is
+built (`SLIM`: each vertex moves toward its bones' axes, perpendicular to the bone, per bone factor; `HELMET_SLIM`
+scales the helmet and visor about its centre), so the skeleton, weights, sockets and clips are unchanged. Rebuild into a
+scratch folder (`--out`) and copy `driver.drm` only: `driver_anims.dra` written by this script has only its own
+three clips (`fbx_to_dra.py` adds the 12 Unreal clips).
 
 ## Build
 

@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.2.1** (see-through glass and a cabin for the M2; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.2.3** (see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -37,10 +37,26 @@ Lean, Grip and Braking")
   - the M2 is about 50,000 triangles (each wheel about 3,900, with rounded tyres) in flat colours (paint, gloss black trim, carbon, underbody, glass, lights, tyres,
     rims), built by `Assets/build_car.py`. Its windows are see-through (a model's `mat` line can end in an alpha value)
     and it has its interior (about 14,000 triangles: dash, steering wheel, seats, headliner) with one texture,
-    `BMW_M2_G87_interior.jpg` (soft-touch black, labels, the digital instrument cluster and centre screen). An empty
-    `Bikes.Eye` node under `Bikes.Car` marks the driver's eye in that cabin (left-hand drive, model metres
-    -0.37, 1.12, -0.40); DriverCam's driver view (0.11.2) sits there and shows only the M2's own cabin, without the
-    donor car's cockpit.
+    `BMW_M2_G87_interior.jpg` (1024 x 1280: soft-touch black, labels and lit button symbols on top; below, a drawn
+    display strip for the curved display: a dark digital cluster face and a navigation map screen, planar-mapped onto
+    the display's faces, 0.2.2). An empty `Bikes.Eye` node under `Bikes.Car` marks the driver's eye in that cabin
+    (left-hand drive, model metres -0.37, 1.12, -0.40); DriverCam's driver view (0.11.2) sits there and shows only the
+    M2's own cabin, without the donor car's cockpit.
+  - 0.2.2: empty cabin sockets for DriverCam under `Bikes.Car` (`Garage.Socket`; position = the surface's centre
+    3-4 mm toward the driver, +z into the surface, `localScale` (w, h, 1) = its size in model metres, measured from
+    `BMW_M2_G87.csm`): `Bikes.MirrorC` (rear-view mirror glass, 0.225 x 0.058), `Bikes.MirrorL` / `Bikes.MirrorR`
+    (door mirror glass, 0.15 x 0.09) and `Bikes.Cluster` (the instrument cluster: where DriverCam 0.11.3 puts its live
+    digital speed / rpm readout, 0.17 wide). Nothing else reads them.
+  - 0.2.3: the M2's steering wheel (rim, spokes, hub, paddles; about 900 triangles) is its own part `SteeringWheel` in
+    `BMW_M2_G87.csm` (split off the cabin by `build_car.py`; a part's `a x y z` line is its spin axis), on its own node
+    `Bikes.SteeringWheel` under `Bikes.Car`: at the rim centre (model metres -0.373, 0.859, 0.194), +z along the column
+    toward the dash (about 25 degrees down), the mesh under it as `Bikes.SteeringWheelMesh`. Bikes leaves it straight;
+    DriverCam 0.11.4's driver view turns it with the steering (and the Driver plugin's hands follow the rim).
+  - 0.2.3: the car model (`Bikes.Car` and its wheels) and a bike (`Bikes.Lean`, with anything under it) sit on the layer
+    of the donor's own body mesh (`Garage.MatchLayer`, on the template and again when one is first driven). The game's
+    velocity motion blur (its renderer feature `MotionBlurVelocityFeature`, the in-game Motion Blur setting) blurs every
+    pixel along the car's speed except a mask drawn from the vehicle layer; on the Default layer the M2's cabin, screen and
+    wheel were smeared diagonally across DriverCam's driver view.
 
 ## For the rider (Driver plugin)
 
@@ -103,12 +119,13 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
   `loaded (car)` for BMW_M2_G87).
 - `[Bikes] Sport Bike body: N car meshes to hide, bike at real size (...)` and
   `[Bikes] Sport Bike built on the Saber (id rogue.bikes.sportbike, stats ...)`; for the M2:
-  `[Bikes] M2 G87 body: N car meshes to hide, car model at scale S (wheelbase G vs M)`.
+  `[Bikes] M2 G87 body: N car meshes to hide, car model at scale S (wheelbase G vs M); steering wheel turns; on the car's
+  layer L` (`part of the body (static)` with a model from before 0.2.3).
 - Only if the game's transparent shader is missing: `[Bikes] no transparent shader: BMW_M2_G87 glass glass drawn opaque`.
 - `[Bikes] 3 bike(s) added to the garage after the N cars (garage opened)`, and
   `[Bikes] bikes taken out of the garage (multiplayer)` / `(switched off)`.
-- `[Bikes] driving Sport Bike: bike model, wheels follow the game's, steering follows` the first time you drive one
-  (`car or missing model` for the M2).
+- `[Bikes] driving Sport Bike: bike model, wheels follow the game's, steering follows, layer L` the first time you drive
+  one (`car or missing model` for the M2; L = the layer the model was put on, -1 = no car mesh found to copy it from).
 - `[Bikes] this run uses a bike: it stays off the leaderboards`, `[Bikes] leaderboard upload skipped: this run used a bike`,
   `[Bikes] new run on a car: leaderboard uploads allowed again`, `[Bikes] bikes stay in the garage for now (...): a bike is
   selected or being driven`, and

@@ -95,6 +95,9 @@ internal static class MirrorView
         return mat;
     }
 
+    /// <summary>The glass' width / height before GlassMaterial first makes the mirror's texture (CarCabin's mirror quads).</summary>
+    public static void SetAspect(string tag, float aspect) => Get(tag).Settings.Aspect = Mathf.Clamp(aspect, 0.5f, 8f);
+
     public static void SetGlass(string tag, Renderer glass)
     {
         var m = Get(tag);

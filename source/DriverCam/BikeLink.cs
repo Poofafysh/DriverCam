@@ -14,7 +14,8 @@ namespace DriverCam;
 ///   being built; never per frame.
 /// - the M2 G87, Bikes' car model, is a "Bikes.Car" node instead (the model, scaled to the donor's wheelbase,
 ///   with its own cabin: dash, wheel, seats, see-through glass). It's treated like a bike (IsCar): no donor cockpit,
-///   mirrors, gauges, HideCarBody or outline strip, so only the M2's own cabin shows; the eye is Bikes' "Bikes.Eye" node
+///   HideCarBody or outline strip, so only the M2's own cabin shows (0.11.3: plus CarCabin's mirrors, cluster readout and
+///   Driver seat data on Bikes' cabin sockets); the eye is Bikes' "Bikes.Eye" node
 ///   under Bikes.Car (the driver's eye in that cabin), else the same point estimated here; no horizon roll.
 /// - the eye: the Driver plugin's rider when it rides the bike (its "Driver_Helmet" node under Bikes.Lean sits on the
 ///   head bone; the eye is Driver's eye_c socket on that bone, so the camera moves with the rider's tuck, hang-off and
@@ -22,7 +23,8 @@ namespace DriverCam;
 ///   "rogue.bikes.rider.&lt;Key&gt;", float[11], seat xyz first) or, without it, the S1000RR's seat.
 /// - the horizon: the camera rolls with Bike.CameraLean of the bike's lean (0 = level horizon, the default).
 /// While on a bike DriverView shows no cockpit (so no wheel, gauges or mirror cameras), skips the car's seat / eye and
-/// DriverLink, and DriverCamBehaviour skips HideCarBody and the outline strip. Everything comes back by itself on a game car.
+/// DriverLink (a car model: CarCabin's mirrors, readout and DriverLink.PublishCar instead), and DriverCamBehaviour skips
+/// HideCarBody and the outline strip. Everything comes back by itself on a game car.
 /// Read only towards the game and the other plugins.
 /// </summary>
 internal static class BikeLink
@@ -45,6 +47,9 @@ internal static class BikeLink
 
     /// <summary>True while On and the vehicle is Bikes' car model (M2 G87): its own cabin, no lean.</summary>
     internal static bool IsCar => _isCar;
+
+    /// <summary>Bikes' car model root ("Bikes.Car") while IsCar, else null.</summary>
+    internal static Transform CarRoot => _isCar ? _lean : null;
 
     /// <summary>The bike frame is still there (checked before each pose: OnBeforeRender runs after Apply's check).</summary>
     internal static bool Alive => _lean != null && !_lean.WasCollected;
@@ -99,7 +104,7 @@ internal static class BikeLink
             if (_logged != clog)
             {
                 _logged = clog;
-                Plugin.Logger.LogInfo($"Bikes car {_key}: driver view in its own cabin, without the donor car's cockpit, mirrors, gauges or HideCarBody; eye at {_seatFrom}.");
+                Plugin.Logger.LogInfo($"Bikes car {_key}: driver view in its own cabin, without the donor car's cockpit or HideCarBody (mirrors and cluster readout on Bikes' sockets, CarCabin); eye at {_seatFrom}.");
             }
             return;
         }

@@ -181,11 +181,12 @@ namespace Bikes
                 }
             }
             _leanBase = _lean != null ? _lean.localRotation : Quaternion.identity;
+            int layer = Garage.MatchLayer(skin);   // 0.2.3: on the car's layer, so the game's velocity blur skips it (Garage.MatchLayer)
             if (!_loggedRide)
             {
                 _loggedRide = true;
                 Plugin.Log.LogInfo($"[Bikes] driving {veh.VehicleSO.VehicleName}: {(_lean != null ? "bike" : "car or missing")} model, " +
-                                   $"wheels {(_wheelF != null && _carSpinF != null ? "follow the game's" : "static")}, steering {(_steerF != null && _carSteerF != null ? "follows" : "static")}");
+                                   $"wheels {(_wheelF != null && _carSpinF != null ? "follow the game's" : "static")}, steering {(_steerF != null && _carSteerF != null ? "follows" : "static")}, layer {layer}");
             }
             Garage.HideCar(skin);
         }

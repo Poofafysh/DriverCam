@@ -5,7 +5,7 @@ DriverCam's steering wheel and turn it with you, the right foot works the pedal,
 DriverCam's driver view you look down at your own body, arms and gloves on the wheel. On one of the Bikes plugin's
 motorcycles the driver rides it instead (0.3.0), and since 0.4.0 it moves the way riders do in the RIDE games.
 
-Current version: **0.4.1** (0.4.1: fixes 0.4.0 failing to load: a Runner method with an `out` struct parameter broke IL2CPP injection).
+Current version: **0.4.2** (a slimmer driver: narrower shoulders, thinner upper arms, less torso girth, a slimmer neck and a smaller helmet; same skeleton, sockets and clips. In Bikes' M2 G87 the driver sits in the M2's own seat with its hands on the M2's wheel, from DriverCam 0.11.3's seat data. 0.4.1: fixes 0.4.0 failing to load: a Runner method with an `out` struct parameter broke IL2CPP injection).
 
 ## What it changes
 

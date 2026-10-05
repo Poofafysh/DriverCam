@@ -70,7 +70,32 @@ mirrors were drawn around the bike, with the eye at the car's seat. Now, with `B
   outline strip skipped (they would hide the M2), so only the M2's own dash, wheel and seats show. The eye is Bikes'
   `Bikes.Eye` node under `Bikes.Car` (the driver's eye in that cabin, left-hand drive: 0.37 m left of centre, 1.12 m up,
   0.40 m behind the axle midpoint, model metres, scaled with the model), else that same point estimated by DriverCam.
-  No horizon roll; `Bike.EyeUp` / `Bike.EyeForward` shift it. Driver's seat data isn't published there either.
+  No horizon roll; `Bike.EyeUp` / `Bike.EyeForward` shift it. The camera's frame is `Bikes.Car`'s own rotation and
+  the eye `Bikes.Eye`, both read in `Application.onBeforeRender` (0.11.3), so the camera is rigid in the cabin even
+  though the game rolls, pitches and smooths the visual body after the rigidbody (with `Driver.HeadFollowsShake` 1, the
+  default).
+- **The M2's cabin parts (0.11.3, `CarCabin.cs`):** built once per M2 body from Bikes' empty sockets under `Bikes.Car`
+  (Bikes 0.2.2): a flat mirror glass on `Bikes.MirrorC` / `Bikes.MirrorL` / `Bikes.MirrorR` drawn by the same
+  mirror cameras, settings and cost rules as a cockpit's (`MirrorView`); on `Bikes.Cluster` the Vector W8's digital
+  readout (`cockpit_Vektor.dcm` part `RL_Digital`: 3 speed digits in the HUD's unit and 18 rpm bars, its own km/h /
+  mph face atlas, self-lit) registered with `Gauges`, so it shows the real speed and EngineAudio's RPM (else the
+  built-in engine model); and the M2's seat (cushion top 0.42 m), eye and steering wheel (rim centre -0.375, 0.85, 0.19,
+  radius 0.175 m, column tilted 20 degrees; model metres, scaled with the model) published for the Driver plugin
+  (`DriverLink.PublishCar`). 0.11.4: with Bikes 0.2.3 the M2's wheel is its own node `Bikes.SteeringWheel` (rim centre
+  -0.373, 0.859, 0.194, column about 25 degrees down); the driver view turns it about the column exactly like a cockpit
+  wheel (`-turn x View.SteerAngle`, the same smoothed steering) and publishes that spin and lock, so the Driver plugin's
+  hands follow the rim; it is put straight again outside the driver view and on leaving. Without the node (Bikes 0.2.2)
+  the wheel is part of the body mesh and the published spin is 0. Leaving the M2 (car
+  change, view off, `Bike.DriverView` off) removes them and takes the seat data back (`rogue.drivercam` [1] and [2] =
+  0) so it never stands for the donor car. Without the sockets (Bikes 0.2.1) there are no mirrors or readout.
+- **Motion blur (0.11.3, `MotionBlurGuard.cs`):** on a bike or in the M2 the driver view switches off every loaded
+  VolumeProfile's active MotionBlur override (one scan on entering, never per frame) and switches them back on when the
+  view leaves the Bikes vehicle, F6 goes off or DriverCam unloads: URP's blur reprojects with the camera's motion as if
+  the world stood still. That was a wrong guess for the M2's smear (it kept smearing): the cause was the game's own
+  velocity blur (its URP renderer feature `MotionBlurVelocityFeature`, the in-game Motion Blur setting), which blurs
+  every pixel along the car's speed, fully for near pixels, except a mask drawn from the vehicle layer(s). DriverCam's
+  cockpit and the Driver plugin use the car body's layer, so a normal car's cabin never smeared; Bikes' M2 model sat on
+  the Default layer. Fixed in Bikes 0.2.3 (the model goes on the car's layer); DriverCam's camera is unchanged.
 - **The eye:** when Driver rides the bike, the eye is Driver's `eye_c` socket on the rider's head bone (found through
   its `Driver_Helmet` node under `Bikes.Lean`, looked up at most once a second while missing). So the camera follows the
   tuck, the hang-off and the head. Without Driver's rider, it's an estimate in the bike frame: the seat point from Bikes'
@@ -87,8 +112,12 @@ mirrors were drawn around the bike, with the eye at the car's seat. Now, with `B
 - **Log:** `Bikes motorcycle <Key>: driver view without the car's cockpit, mirrors, gauges or HideCarBody; eye at the
   rider's head (...)` once per bike, and `Bikes motorcycle <Key>: eye at the Driver rider's head.` (or `... an estimate
   from Bikes' seat socket.`) when the eye source changes. In the M2: `Bikes car M2G87: driver view in its own cabin,
-  without the donor car's cockpit, mirrors, gauges or HideCarBody; eye at Bikes' eye socket.` (or `... an estimate of
-  the M2's seat.`).
+  without the donor car's cockpit or HideCarBody (mirrors and cluster readout on Bikes' sockets, CarCabin); eye at Bikes' eye socket.` (or `... an estimate of
+  the M2's seat.`). In the M2 (0.11.3) once per body: `Bikes car cabin: 3 of 3 mirrors on Bikes' mirror sockets;
+  cluster: the W8's digital readout (RL_Digital, 17 cm wide in model units); steering wheel turns with the steering
+  (Bikes.SteeringWheel); driver seat, eye and wheel published for the Driver plugin.` (0.11.4; `steering wheel fixed in
+  the body (Bikes 0.2.3 or newer turns it)` with an older Bikes) and once per entry: `Driver view on a Bikes vehicle: switched off N motion blur override(s) (back on
+  when the view leaves it).` (or `no motion blur in the scene's profiles`).
 
 | Setting | Default | What |
 |---|---|---|

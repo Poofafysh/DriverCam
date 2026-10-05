@@ -18,7 +18,7 @@ public class DriverCamBehaviour : MonoBehaviour
     // OnGUI only uses GUI.* (no GUILayout / GUI.Window), so skip Unity's extra Layout pass of OnGUI every frame
     void Awake() => useGUILayout = false;
 
-    void OnDestroy() => DriverLink.Uninstall();   // the Driver plugin's AppDomain data goes off with DriverCam
+    void OnDestroy() { DriverLink.Uninstall(); MotionBlurGuard.Restore(); }   // the Driver plugin's AppDomain data goes off with DriverCam; motion blur back on
 
     CameraModeSO _previousMode;
     bool _wasActive;
@@ -64,6 +64,9 @@ public class DriverCamBehaviour : MonoBehaviour
 
         if (ctrl == null)
         {
+            // 0.11.3: the scene went with the view on (quit to menu, level unload): the M2 cabin's seat data and the
+            // motion blur switch end here too (DriverView.Reset -> CarCabin.Leave, MotionBlurGuard.Restore)
+            if (_wasActive) DriverView.Reset();
             _wasActive = false;
             EditMode.Update(false);
             return;

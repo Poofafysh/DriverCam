@@ -14,6 +14,8 @@ namespace DriverCam;
 ///   [15] rim radius   [16] wheel spin, degrees (-turn * SteerAngle)   [17..19] driver seat cushion top centre
 ///   [20..22] driver seat back, front-bottom point   [23] SteerAngle   [24] Driver.Pitch   [25] Driver.LookIntoTurn
 /// [1] is 0 for the procedural (non-model) cockpit: no steering wheel or seat to publish.
+/// In a Bikes car model (the M2 G87) CarCabin publishes the model's own seat / eye / wheel instead (PublishCar), and
+/// takes it back ([1] and [2] = 0) when it leaves the car model, so it never stands for the donor car.
 /// </summary>
 internal static class DriverLink
 {
@@ -33,26 +35,60 @@ internal static class DriverLink
     /// <summary>Once per pose while the driver view is active: everything in the shaken body frame (shakenPos / shakenRot).</summary>
     internal static void Publish(Vector3 shakenPos, Quaternion shakenRot, Vector3 eye, float turn)
     {
+        var pivot = Cockpit.WheelPivot;
+        bool valid = pivot != null && Cockpit.HasDriverSeat;
+        Vector3 cushion = default, back = default;
+        if (valid) Cockpit.DriverSeatWorld(out cushion, out back);
+        float steer = Plugin.SteerAngle.Value;
+        _carModel = false;
+        Write(shakenPos, shakenRot, eye, valid, valid ? pivot.position : default, valid ? pivot.rotation : Quaternion.identity,
+              valid ? RimRadius * pivot.lossyScale.x : 0f, cushion, back, -turn * steer, steer);
+    }
+
+    /// <summary>
+    /// 0.11.3: the same data for a Bikes car model's own cabin (CarCabin, the M2 G87): world points and the wheel's world
+    /// rotation (unspun), its rim radius in metres, and its spin and lock (0.11.4: -turn x SteerAngle and SteerAngle as
+    /// for a cockpit wheel when Bikes 0.2.3's turning Bikes.SteeringWheel is there; both 0 for a wheel fixed in the body).
+    /// Valid for the car id (the donor's, as the Driver plugin names the car) only until InvalidateCar.
+    /// </summary>
+    internal static void PublishCar(Vector3 shakenPos, Quaternion shakenRot, Vector3 eyeWorld, Vector3 wheelPos, Quaternion wheelRot,
+                                    float rim, Vector3 cushion, Vector3 back, float spin, float steer)
+    {
+        var inv = Quaternion.Inverse(shakenRot);
+        _carModel = true;
+        Write(shakenPos, shakenRot, inv * (eyeWorld - shakenPos), true, wheelPos, wheelRot, rim, cushion, back, spin, steer);
+    }
+
+    /// <summary>Left a car model (CarCabin.Leave): its seat must not stand for the donor car, so [1] and [2] go off.</summary>
+    internal static void InvalidateCar()
+    {
+        if (!_carModel) return;
+        _carModel = false;
+        Shared[1] = Shared[2] = 0f;
+        Shared[3] += 1f;
+    }
+
+    static bool _carModel;   // the last write was a car model's cabin (PublishCar)
+
+    static void Write(Vector3 shakenPos, Quaternion shakenRot, Vector3 eye, bool valid, Vector3 wheelPos, Quaternion wheelRot,
+                      float rim, Vector3 cushion, Vector3 back, float spin, float steer)
+    {
         if (!_installed) Install();
         var car = Cockpit.CarId;
         if (!ReferenceEquals(car, _car)) { _car = car; AppDomain.CurrentDomain.SetData(CarKey, car); }
         var inv = Quaternion.Inverse(shakenRot);
         bool changed = false;
         Set(5, eye, ref changed);
-        var pivot = Cockpit.WheelPivot;
-        bool valid = pivot != null && Cockpit.HasDriverSeat;
         if (valid)
         {
-            Set(8, inv * (pivot.position - shakenPos), ref changed);
-            var r = inv * pivot.rotation;
+            Set(8, inv * (wheelPos - shakenPos), ref changed);
+            var r = inv * wheelRot;
             Set(11, r.x, ref changed); Set(12, r.y, ref changed); Set(13, r.z, ref changed); Set(14, r.w, ref changed);
-            Set(15, RimRadius * pivot.lossyScale.x, ref changed);
-            Cockpit.DriverSeatWorld(out var cushion, out var back);
+            Set(15, rim, ref changed);
             Set(17, inv * (cushion - shakenPos), ref changed);
             Set(20, inv * (back - shakenPos), ref changed);
         }
-        float steer = Plugin.SteerAngle.Value;
-        Shared[16] = -turn * steer;
+        Shared[16] = spin;
         Set(23, steer, ref changed);
         Set(24, Plugin.Pitch.Value, ref changed);
         Set(25, Plugin.LookIntoTurn.Value, ref changed);

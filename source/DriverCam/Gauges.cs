@@ -10,7 +10,8 @@ namespace DriverCam;
 /// Working gauges: turns the cockpit's needles and rewrites the digital readout from the car's real speed (in the game
 /// HUD's unit, with its numbers) and the engine RPM (EngineAudio's, else GaugeRpm). Fed by the gauge parts of the
 /// .dcm (`n` / `dg` / `db` lines, Cockpit.BuildFromModel registers them) and run from Cockpit.UpdatePose, once a
-/// frame, only while the driver view shows the modelled cockpit. Per frame: a few transform rotations; the digital
+/// frame, only while the driver view shows the modelled cockpit (0.11.3: or, in a Bikes car model, the W8 readout CarCabin
+/// builds on Bikes' cluster socket and registers here, run from CarCabin.Pose). Per frame: a few transform rotations; the digital
 /// panel's UVs are written only when the shown number or the lit bar count changes, into an array made at build time.
 /// Read only towards the game. 3 errors switch it off for the session with every needle back at rest.
 /// </summary>
@@ -136,6 +137,7 @@ internal static class Gauges
                 _faceMph = mph;
                 _faceApplied = true;
                 Cockpit.SetGaugeFace(mph);
+                CarCabin.SetGaugeFace(mph);   // a Bikes car model's readout (no-op otherwise)
                 foreach (var q in _quads) q.LastValue = int.MinValue;
             }
         }

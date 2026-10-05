@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
+using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.Injection;
 using UnityEngine;
-using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
 namespace Sandbox
@@ -13,16 +13,16 @@ namespace Sandbox
     /// <summary>[Scenery] settings and the one call Plugin.Load makes (SceneryHost.Init).</summary>
     internal static class SceneryHost
     {
-        internal static ConfigEntry<bool> Enabled, SimpleBlocks, HideLights;
+        internal static ConfigEntry<bool> Enabled, HideLights;
         internal static ConfigEntry<float> BudgetMs;
 
         internal static void Init(ConfigFile config, BasePlugin plugin)
         {
             Enabled = config.Bind("Scenery", "StripBuildings", true,
-                "In Sandbox mode, hide the buildings, trees, props and ads around the roads for frame rate. The road, sidewalks, curbs, walls, ground and traffic cones stay.");
-            SimpleBlocks = config.Bind("Scenery", "SimpleBlocks", true,
-                "Put a plain block where each building stood (one mesh and one draw call per tile, no shadows), so the city keeps its shape. Off = open ground.");
-            HideLights = config.Bind("Scenery", "HideLights", true, "Also switch off the street and building lights of the hidden scenery (about 100 per tile).");
+                "In Sandbox mode, remove everything around the roads that isn't part of the road itself: buildings, trees, props, ads, walls, fences, cones, water. " +
+                "Only the road, sidewalks, curbs, the ground, guardrails, railings, barriers, bridges, tunnels and street lights stay. Their colliders go too (given back when the sandbox race ends).");
+            HideLights = config.Bind("Scenery", "HideLights", true,
+                "Also switch off the lights of the removed scenery (building and prop lights, about 100 per tile). Street, tunnel and bridge lights stay on.");
             BudgetMs = config.Bind("Scenery", "BudgetMs", 2f, new ConfigDescription("Milliseconds per frame spent stripping a newly loaded tile (spread over frames, no stutter).",
                 new AcceptableValueRange<float>(0.5f, 10f)));
             ClassInjector.RegisterTypeInIl2Cpp<SceneryRunner>();
@@ -31,34 +31,31 @@ namespace Sandbox
     }
 
     /// <summary>
-    /// Sandbox scenery: strips each road tile down to what the car needs and what is cheap to draw.
+    /// Sandbox scenery: strips each road tile down to the road and what is built around it.
     ///
     /// The game builds a race from additive tile scenes (LevelGenerator.SpawnTilesCoroutine, all loaded during the loading
-    /// screen, unloaded at race end). Each tile has a "Road Network" (the road mesh PresetRoad, RoadGroundCollider and the
-    /// invisible guardrail walls, layers Street 11 / Guardrail 15) and a "Biomes" group whose active biome holds the
-    /// buildings, trees, props, ads, lamps and lights. Buildings and props carry no colliders (only the traffic cones do),
-    /// so switching their renderers off changes nothing the car can hit. Static batching is off in this game, so every
-    /// hidden renderer is one draw call (and often a shadow caster) saved: 500-1,300 per tile.
+    /// screen, unloaded at race end). Each tile has a "Road Network" (the road mesh PresetRoad, RoadGroundCollider, the
+    /// invisible guardrail walls on layers Street 11 / Guardrail 15, and WideRoads' fx_Wide* pieces) and a "Biomes" group
+    /// whose active biome holds the buildings, trees, props, ads, lamps and lights. "Road Network" is never touched here.
     ///
     /// Per tile (polled once a second while Sandbox is active, at most one new tile opened per poll, work spread over frames
-    /// by BudgetMs):
-    /// - kept: everything outside "Biomes"; inside it anything whose own name or a parent's matches a Keep word: road,
-    ///   sidewalk / walkway / kerb / curb surfaces, the ground meshes (Ground_Easy/Normal/Hard/Pro, Moss_Plane), walls,
-    ///   guardrails, railings, barriers, fences, barricades, bollards, cement blocks, bus stops, tunnels, bridges, cliffs,
-    ///   bricks, gates, planters, floors, water and riversides (CurbFeel's surface and hard words plus the bridge pieces),
-    ///   traffic cones (coneV*, the only props with colliders), and anything on the Street / Guardrail / WeatherBlocker layers;
-    /// - hidden: every other renderer under Biomes with Renderer.forceRenderingOff = true. Its `enabled` flag is left alone,
-    ///   so CurbFeel (which reads enabled renderers for its walls) sees the same tile whatever the order, and LODGroups keep
-    ///   working; with HideLights the Lights under Biomes too, except tunnel and bridge lights;
-    /// - SimpleBlocks: one combined mesh of plain boxes, one per hidden building (LOD0 or a single-LOD renderer named like a
-    ///   building, its own name or its parent's), using its world bounds (read before hiding; boxes larger than 120 m across
-    ///   are skipped, and so is any box that comes within 13 m of the tile's road path, the PathWaypoints children, since a
-    ///   building's bounding box can reach over the road), no colliders, no shadows, one shared dark grey material; a root named "fx_SandboxBlocks" in the tile scene
-    ///   (fx_ is a CurbFeel ignore word, so it never becomes a wall) that goes when the tile unloads (its mesh is destroyed
-    ///   by us). A tile that fails is left as it is and logged, without switching the feature off.
-    /// Everything is given back (renderers and lights on, blocks destroyed) when Sandbox ends or StripBuildings is switched
-    /// off, and on unload. Unity calls used: SceneManager.sceneCount / GetSceneAt / MoveGameObjectToScene, Scene.isLoaded /
-    /// handle / GetRootGameObjects, GetComponentsInChildren, Renderer.forceRenderingOff / bounds, Light.enabled, Mesh, Material.
+    /// by BudgetMs), everything under "Biomes":
+    /// - kept: anything whose own name or a parent's (up to "Biomes") matches a road word: road, sidewalk / walkway / kerb /
+    ///   curb surfaces, sides_, base_h, the ground meshes (Ground_Easy/Normal/Hard/Pro, Moss_Plane), guardrails, railings,
+    ///   rail generators, barriers, bridges, tunnels, and street lights (light / lamp / pole), plus anything on the Street /
+    ///   Guardrail / WeatherBlocker layers (11 / 15 / 28);
+    /// - hidden: every other renderer, with Renderer.forceRenderingOff = true. Its `enabled` flag is left alone, so CurbFeel
+    ///   (which reads enabled renderers) sees the same tile whatever the order, and LODGroups keep working;
+    /// - colliders off: every enabled non-trigger Collider on a hidden object (Collider.enabled = false), except ground
+    ///   (names with ground / moss / floor / terrain, layer 11, or a TerrainCollider), so the car can't hit invisible things;
+    /// - HideLights: Light components under Biomes switched off, except street lights (a parent named light / lamp / pole, or
+    ///   the light's own object named lamp / pole / streetlight) and tunnel / bridge lights.
+    /// A leftover "fx_SandboxBlocks" root from older versions (stand-in building blocks) is destroyed when the tile is opened.
+    /// Wide-road tiles (WideRoads.Owns) are never stripped here; one stripped before WideRoads took it over is given back
+    /// first (ReleaseTile). A tile that fails is left as far as it got and logged, without switching the feature off.
+    /// Everything is given back (renderers, colliders and lights on) when Sandbox ends or StripBuildings is switched off, and
+    /// on unload. Unity calls used: SceneManager.sceneCount / GetSceneAt, Scene.isLoaded / handle / GetRootGameObjects,
+    /// GetComponentsInChildren, Renderer.forceRenderingOff, Collider.enabled / isTrigger, Light.enabled, Object.Destroy.
     /// </summary>
     public class SceneryRunner : MonoBehaviour
     {
@@ -67,39 +64,31 @@ namespace Sandbox
         private static readonly string[] Keep =
         {
             "road", "sidewalk", "walkway", "kerb", "curb", "sides_", "base_h", "ground_easy", "ground_normal", "ground_hard",
-            "ground_pro", "moss_plane", "guardrail", "guard_rail", "railing", "railgenerator", "barrier", "wall", "retaining",
-            "fence", "barricade", "bollard", "cementblock", "bus_stop", "tunnel", "bridge", "cliff", "i_brick", "grey_brick",
-            "metal_gate", "side_pole", "treeplanter", "planter_p", "floor", "riverside_", "water", "ramp", "collider",
+            "ground_pro", "moss_plane", "guardrail", "guard_rail", "railing", "railgenerator", "barrier", "bridge", "tunnel",
+            "light", "lamp", "pole",
         };
-        private static readonly string[] BuildingWords = { "residential", "c_bd", "c_store", "i_bd", "silo", "house", "building" };
+        private static readonly string[] Ground = { "ground", "moss", "floor", "terrain" };
         private const int LayerStreet = 11, LayerGuardrail = 15, LayerWeather = 28;
-        // a block whose footprint comes closer than this to the road path is dropped: a building's bounding box (an L-shaped
-        // block, a long terrace along a bend) can reach over the road, so its box would cover the road (half width 10 m + sidewalk)
-        private const float RoadClearance = 13f;
 
         private sealed class Tile
         {
             public int Handle;
             public string Name;
-            public Scene Scene;
             public Renderer[] Renderers;
+            public Collider[] Colliders;
             public Light[] Lights;
-            public int Next;
+            public int Next, NextCol;
             public bool Done;
+            public int Kept, StreetLights, OldBlocks;
             public readonly List<Renderer> Hidden = new List<Renderer>();
+            public readonly List<Collider> ColOff = new List<Collider>();
             public readonly List<Light> Off = new List<Light>();
-            public readonly List<Vector3> BoxMin = new List<Vector3>(), BoxMax = new List<Vector3>();
-            public GameObject Blocks;
-            public Mesh BlockMesh;
-            public Transform[] Waypoints;   // the tile's road path (PathWaypoints children): blocks near it are dropped
-            public int Dropped, BoxCount;
         }
 
         private readonly Dictionary<int, Tile> _tiles = new Dictionary<int, Tile>();
         private readonly HashSet<int> _notTile = new HashSet<int>(), _seen = new HashSet<int>();
         private readonly List<int> _gone = new List<int>();
         private readonly Stopwatch _sw = new Stopwatch();
-        private Material _blockMat;
         private float _nextPoll;
         private bool _wasOn, _broken;
         private int _errors;
@@ -109,9 +98,12 @@ namespace Sandbox
             if (_broken) return;
             try
             {
-                bool on = Plugin.Active && SceneryHost.Enabled != null && SceneryHost.Enabled.Value;
+                bool on = Plugin.Active && SceneryHost.Enabled != null && Multiplayer.Strip(SceneryHost.Enabled.Value);   // the host's value in a sandbox MP run
                 if (!on) { if (_wasOn) RestoreAll(Plugin.Active ? "StripBuildings off" : "Sandbox ended"); _wasOn = false; return; }
                 _wasOn = true;
+                bool paused = false;
+                try { paused = Game.Runtime.GameState.IsGamePaused; } catch { }
+                if (paused) return;   // pause menu open: no writes (a restore above still runs)
                 float now = Time.unscaledTime;
                 if (now >= _nextPoll) { _nextPoll = now + 1f; Poll(); }
                 Work();
@@ -131,7 +123,7 @@ namespace Sandbox
         private void OnDestroy()
         {
             try { RestoreAll("plugin unloaded"); } catch { /* shutting down */ }
-            if (_blockMat != null) { try { Destroy(_blockMat); } catch { /* shutting down */ } _blockMat = null; }
+            if (_instance == this) _instance = null;
         }
 
         // ------------------------------------------------------------------ find tiles
@@ -148,14 +140,15 @@ namespace Sandbox
                 int h = scene.handle;
                 _seen.Add(h);
                 if (_tiles.ContainsKey(h) || _notTile.Contains(h) || opened) continue;
-                var tile = Open(scene);   // at most one new tile per poll: its renderer list is a one-off hitch
+                if (WideRoads.Owns(h)) continue;   // a wide-road tile: WideRoads hides it (re-checked each poll, never stripped here)
+                var tile = Open(scene);   // at most one new tile per poll: its component lists are a one-off hitch
                 opened = true;
                 if (tile != null) _tiles[h] = tile; else _notTile.Add(h);
             }
-            // scenes that unloaded: a tile's renderers went with it; our block mesh is ours to destroy
+            // scenes that unloaded: their renderers, colliders and lights went with them
             _gone.Clear();
             foreach (var kv in _tiles) if (!_seen.Contains(kv.Key)) _gone.Add(kv.Key);
-            foreach (int h in _gone) { var t = _tiles[h]; DestroyBlocks(t); _tiles.Remove(h); }
+            foreach (int h in _gone) _tiles.Remove(h);
             if (_isGone == null) _isGone = IsGone;
             _notTile.RemoveWhere(_isGone);
             if (opened) _nextPoll = 0f;   // more scenes may wait: open the next one next frame, not in a second
@@ -164,17 +157,36 @@ namespace Sandbox
         private Predicate<int> _isGone;
 
         private bool IsGone(int handle) => !_seen.Contains(handle);
-        private void Awake() { _isGone = IsGone; }
+        private void Awake() { _isGone = IsGone; _instance = this; }
 
-        /// <summary>A road tile = a loaded scene with a root (or child) named "Biomes". Collects its renderers and lights once.</summary>
+        private static SceneryRunner _instance;
+
+        /// <summary>
+        /// WideRoads is about to take this tile over: give back what Scenery hid there (renderers, colliders, lights) and
+        /// forget it, so the two never undo each other's changes. Poll skips the tile from then on (WideRoads.Owns). Main
+        /// thread only.
+        /// </summary>
+        internal static void ReleaseTile(int handle)
+        {
+            var self = _instance;
+            if (self == null || !self._tiles.TryGetValue(handle, out var t)) return;
+            Give(t, out int r, out int c, out int l);
+            self._tiles.Remove(handle);
+            Plugin.Log.LogInfo($"[Sandbox] scenery: tile {t.Name} handed to wide roads ({r} renderers, {c} colliders and {l} lights given back first)");
+        }
+
+        /// <summary>A road tile = a loaded scene with a root (or child) named "Biomes". Collects its renderers, colliders and lights once.</summary>
         private static Tile Open(Scene scene)
         {
             var roots = scene.GetRootGameObjects();
             Transform biomes = null;
-            for (int i = 0; i < roots.Length && biomes == null; i++)
+            int oldBlocks = 0;
+            for (int i = 0; i < roots.Length; i++)
             {
                 var r = roots[i];
                 if (r == null) continue;
+                if (r.name == "fx_SandboxBlocks") { Destroy(r); oldBlocks++; continue; }   // stand-in blocks of Scenery 0.1.x (hot reload)
+                if (biomes != null) continue;
                 if (r.name == "Biomes") biomes = r.transform;
                 else
                 {
@@ -183,61 +195,13 @@ namespace Sandbox
                 }
             }
             if (biomes == null) return null;   // not a road tile (the game scene, menus, UI)
-            Transform path = null;
-            // the path lives under "Road Network": the Biomes subtree (1,000+ transforms) is never walked
-            for (int i = 0; i < roots.Length && path == null; i++) if (roots[i] != null) path = FindDeep(roots[i].transform, "PathWaypoints", 4, biomes);
-            Transform[] wps = null;
-            if (path != null)
-            {
-                var list = new List<Transform>(path.childCount);
-                for (int i = 0; i < path.childCount; i++)
-                {
-                    var c = path.GetChild(i);
-                    if (c != null && c.gameObject.name.StartsWith("EasyRoad_PathWaypoint", StringComparison.Ordinal)) list.Add(c);
-                }
-                wps = list.ToArray();
-            }
             return new Tile
             {
-                Handle = scene.handle, Name = scene.name, Scene = scene,
+                Handle = scene.handle, Name = scene.name, OldBlocks = oldBlocks,
                 Renderers = biomes.GetComponentsInChildren<Renderer>(false),
+                Colliders = biomes.GetComponentsInChildren<Collider>(false),
                 Lights = biomes.GetComponentsInChildren<Light>(false),
-                Waypoints = wps,
             };
-        }
-
-        private static Transform FindDeep(Transform t, string name, int depth, Transform skip)
-        {
-            if (t == skip) return null;
-            if (t.gameObject.name == name) return t;
-            if (depth <= 0) return null;
-            for (int i = 0; i < t.childCount; i++)
-            {
-                var f = FindDeep(t.GetChild(i), name, depth - 1, skip);
-                if (f != null) return f;
-            }
-            return null;
-        }
-
-        /// <summary>Road path points every 2.5 m or less (the waypoints sit about 10 m apart), read when the blocks are built (the tile is placed by then).</summary>
-        private static List<Vector3> PathPoints(Tile t)
-        {
-            var pts = new List<Vector3>();
-            if (t.Waypoints == null) return pts;
-            Vector3 prev = default; bool have = false;
-            foreach (var w in t.Waypoints)
-            {
-                if (w == null) continue;
-                Vector3 p = w.position;
-                if (have)
-                {
-                    float dx = p.x - prev.x, dz = p.z - prev.z;
-                    int steps = (int)Math.Ceiling(Math.Sqrt(dx * dx + dz * dz) / 2.5);
-                    for (int k = 1; k < steps; k++) { float f = (float)k / steps; pts.Add(new Vector3(prev.x + dx * f, 0f, prev.z + dz * f)); }
-                }
-                pts.Add(p); prev = p; have = true;
-            }
-            return pts;
         }
 
         // ------------------------------------------------------------------ strip, a slice per frame
@@ -259,7 +223,7 @@ namespace Sandbox
                 }
                 catch (Exception e)
                 {
-                    t.Done = true;   // this tile stays as far as it got; the others carry on
+                    t.Done = true;   // this tile stays as far as it got (and is still given back); the others carry on
                     Plugin.Log.LogWarning($"[Sandbox] scenery: tile {t.Name} left as it is after an error: {e.Message}");
                 }
                 if (_sw.Elapsed.TotalMilliseconds > budget) return;
@@ -272,33 +236,52 @@ namespace Sandbox
             while (t.Next < t.Renderers.Length)
             {
                 var r = t.Renderers[t.Next++];
-                if (r != null && !r.forceRenderingOff && !Keeps(r.transform, r.gameObject.layer))
+                if (r != null && !r.forceRenderingOff)
                 {
-                    if (SceneryHost.SimpleBlocks.Value && IsBuilding(r.transform))
+                    if (Keeps(r.transform, r.gameObject.layer)) t.Kept++;
+                    else
                     {
-                        var b = r.bounds;   // read before hiding
-                        Vector3 lo = b.min, hi = b.max;
-                        float w = hi.x - lo.x, d = hi.z - lo.z, h = hi.y - lo.y;
-                        if (w < 120f && d < 120f && w >= 3f && d >= 3f && h >= 3f) { t.BoxMin.Add(lo); t.BoxMax.Add(hi); }   // buildings, not props
+                        r.forceRenderingOff = true;   // `enabled` untouched: CurbFeel and LODGroups see the same renderer
+                        t.Hidden.Add(r);
                     }
-                    r.forceRenderingOff = true;   // `enabled` untouched: CurbFeel and LODGroups see the same renderer
-                    t.Hidden.Add(r);
                 }
                 if ((t.Next & 31) == 0 && _sw.Elapsed.TotalMilliseconds > budget) return false;
             }
-            if (SceneryHost.HideLights.Value)
+            while (t.NextCol < t.Colliders.Length)
+            {
+                var c = t.Colliders[t.NextCol++];
+                if (c != null && c.enabled && !c.isTrigger)
+                {
+                    var tr = c.transform;
+                    int layer = c.gameObject.layer;
+                    if (!IsGround(tr, layer) && !Keeps(tr, layer) && c.GetIl2CppType().Name != "TerrainCollider")
+                    {
+                        c.enabled = false;
+                        t.ColOff.Add(c);
+                    }
+                }
+                if ((t.NextCol & 31) == 0 && _sw.Elapsed.TotalMilliseconds > budget) return false;
+            }
+            if (Multiplayer.HideLights(SceneryHost.HideLights.Value))
                 foreach (var l in t.Lights)
-                    if (l != null && l.enabled && !Lit(l.transform)) { l.enabled = false; t.Off.Add(l); }
-            if (SceneryHost.SimpleBlocks.Value) BuildBlocks(t);
-            int blocks = t.Blocks == null ? 0 : t.BoxCount;
+                {
+                    if (l == null || !l.enabled) continue;
+                    if (Lit(l.transform)) { t.StreetLights++; continue; }
+                    l.enabled = false;
+                    t.Off.Add(l);
+                }
             t.Done = true;
-            t.Renderers = Array.Empty<Renderer>(); t.Lights = Array.Empty<Light>();   // let the arrays go
-            Plugin.Log.LogInfo($"[Sandbox] scenery: tile {t.Name}: {t.Hidden.Count} renderers hidden, {t.Off.Count} lights off, {blocks} blocks" +
-                               (t.Waypoints == null ? " (no road path found: no blocks dropped)" : $", {t.Dropped} dropped near the road"));
+            t.Renderers = Array.Empty<Renderer>(); t.Colliders = Array.Empty<Collider>(); t.Lights = Array.Empty<Light>();   // let the arrays go
+            Plugin.Log.LogInfo($"[Sandbox] scenery: tile {t.Name}: {t.Hidden.Count} renderers hidden ({t.Kept} road renderers kept), {t.ColOff.Count} colliders off, " +
+                               $"{t.Off.Count} lights off ({t.StreetLights} street / tunnel / bridge lights kept)" +
+                               (t.OldBlocks > 0 ? $", {t.OldBlocks} old block set(s) removed" : ""));
             return true;
         }
 
-        /// <summary>Tunnel and bridge lights stay on (the tunnels and bridges themselves are kept).</summary>
+        /// <summary>
+        /// Lights that stay on: tunnel and bridge lights, and street lights: a parent named light / lamp / pole, or the light's
+        /// own object named lamp / pole / streetlight (its own name alone is not enough when it is just "Point Light").
+        /// </summary>
         private static bool Lit(Transform t)
         {
             for (int depth = 0; t != null && depth < 6; depth++, t = t.parent)
@@ -306,12 +289,13 @@ namespace Sandbox
                 string n = t.gameObject.name;
                 if (n == "Biomes") break;
                 n = n.ToLowerInvariant();
-                if (n.Contains("tunnel") || n.Contains("bridge")) return true;
+                if (n.Contains("tunnel") || n.Contains("bridge") || n.Contains("lamp") || n.Contains("pole") || n.Contains("streetlight") || n.Contains("street_light")) return true;
+                if (depth > 0 && n.Contains("light")) return true;
             }
             return false;
         }
 
-        /// <summary>Keep road, sidewalk, curb, ground, walls and other hard things (by own or parent name, up to the biome), and collision layers.</summary>
+        /// <summary>Keep the road and what is built around it (by own or parent name, up to the biome), and the collision layers.</summary>
         private static bool Keeps(Transform t, int layer)
         {
             if (layer == LayerStreet || layer == LayerGuardrail || layer == LayerWeather) return true;
@@ -320,128 +304,46 @@ namespace Sandbox
                 string n = t.gameObject.name;
                 if (n == "Biomes") break;
                 n = n.ToLowerInvariant();
-                if (n.StartsWith("conev", StringComparison.Ordinal)) return true;   // traffic cones (colliders), not light cones
                 for (int i = 0; i < Keep.Length; i++) if (n.Contains(Keep[i])) return true;
             }
             return false;
         }
 
-        /// <summary>A building's mesh (its own name or its parent's, e.g. "geo1." children), top LOD only, so it gets one block.</summary>
-        private static bool IsBuilding(Transform t)
+        /// <summary>Ground colliders stay on whatever their renderer does: the car may drive or land on them.</summary>
+        private static bool IsGround(Transform t, int layer)
         {
-            if (IsBuildingName(t.gameObject.name)) return true;
+            if (layer == LayerStreet) return true;
+            string n = t.gameObject.name.ToLowerInvariant();
+            for (int i = 0; i < Ground.Length; i++) if (n.Contains(Ground[i])) return true;
             var p = t.parent;
-            if (p == null || !IsBuildingName(p.gameObject.name)) return false;
-            string own = t.gameObject.name.ToLowerInvariant();
-            return own.IndexOf("_lod", StringComparison.Ordinal) < 0 || own.IndexOf("_lod0", StringComparison.Ordinal) >= 0;
-        }
-
-        private static bool IsBuildingName(string name)
-        {
-            string n = name.ToLowerInvariant();
-            bool word = false;
-            for (int i = 0; i < BuildingWords.Length && !word; i++) word = n.Contains(BuildingWords[i]);
-            if (!word) return false;
-            int lod = n.IndexOf("_lod", StringComparison.Ordinal);
-            return lod < 0 || n.IndexOf("_lod0", StringComparison.Ordinal) >= 0;
-        }
-
-        // ------------------------------------------------------------------ simple blocks: one mesh per tile
-
-        private void BuildBlocks(Tile t)
-        {
-            if (!t.Scene.isLoaded) { t.BoxMin.Clear(); t.BoxMax.Clear(); return; }   // unloaded meanwhile
-            // drop boxes that reach the road: a path point inside the footprint grown by RoadClearance
-            var path = PathPoints(t);
-            if (path.Count > 0)
+            if (p != null && p.gameObject.name != "Biomes")
             {
-                for (int b = t.BoxMin.Count - 1; b >= 0; b--)
-                {
-                    Vector3 lo = t.BoxMin[b], hi = t.BoxMax[b];
-                    float x0 = lo.x - RoadClearance, x1 = hi.x + RoadClearance, z0 = lo.z - RoadClearance, z1 = hi.z + RoadClearance;
-                    for (int k = 0; k < path.Count; k++)
-                    {
-                        Vector3 p = path[k];
-                        if (p.x > x0 && p.x < x1 && p.z > z0 && p.z < z1) { t.BoxMin.RemoveAt(b); t.BoxMax.RemoveAt(b); t.Dropped++; break; }
-                    }
-                }
+                n = p.gameObject.name.ToLowerInvariant();
+                for (int i = 0; i < Ground.Length; i++) if (n.Contains(Ground[i])) return true;
             }
-            int n = t.BoxMin.Count;
-            t.BoxCount = n;
-            if (n == 0) return;
-            var mat = BlockMaterial();   // first: a missing shader throws before anything is created
-            var verts = new Vector3[n * 20];   // 5 faces (no bottom) x 4
-            var norms = new Vector3[n * 20];
-            var tris = new int[n * 30];
-            for (int b = 0; b < n; b++)
-            {
-                Vector3 lo = t.BoxMin[b], hi = t.BoxMax[b];
-                int v = b * 20, i = b * 30;
-                Face(verts, norms, tris, ref v, ref i, new Vector3(lo.x, hi.y, lo.z), new Vector3(lo.x, hi.y, hi.z), new Vector3(hi.x, hi.y, hi.z), new Vector3(hi.x, hi.y, lo.z), Vector3.up);
-                Face(verts, norms, tris, ref v, ref i, new Vector3(lo.x, lo.y, hi.z), new Vector3(hi.x, lo.y, hi.z), new Vector3(hi.x, hi.y, hi.z), new Vector3(lo.x, hi.y, hi.z), Vector3.forward);
-                Face(verts, norms, tris, ref v, ref i, new Vector3(hi.x, lo.y, lo.z), new Vector3(lo.x, lo.y, lo.z), new Vector3(lo.x, hi.y, lo.z), new Vector3(hi.x, hi.y, lo.z), Vector3.back);
-                Face(verts, norms, tris, ref v, ref i, new Vector3(hi.x, lo.y, hi.z), new Vector3(hi.x, lo.y, lo.z), new Vector3(hi.x, hi.y, lo.z), new Vector3(hi.x, hi.y, hi.z), Vector3.right);
-                Face(verts, norms, tris, ref v, ref i, new Vector3(lo.x, lo.y, lo.z), new Vector3(lo.x, lo.y, hi.z), new Vector3(lo.x, hi.y, hi.z), new Vector3(lo.x, hi.y, lo.z), Vector3.left);
-            }
-            var mesh = new Mesh { name = "Sandbox.Blocks." + t.Name };
-            if (verts.Length > 65000) mesh.indexFormat = IndexFormat.UInt32;
-            mesh.vertices = verts;
-            mesh.normals = norms;
-            mesh.triangles = tris;
-            mesh.RecalculateBounds();
-            mesh.UploadMeshData(true);
-            mesh.hideFlags = HideFlags.DontUnloadUnusedAsset;
-            var go = new GameObject("fx_SandboxBlocks");   // "fx_": a CurbFeel ignore word, never read as a wall
-            t.Blocks = go; t.BlockMesh = mesh;               // tracked at once: a throw below can't leak them
-            go.AddComponent<MeshFilter>().sharedMesh = mesh;
-            var mr = go.AddComponent<MeshRenderer>();
-            mr.sharedMaterial = mat;
-            mr.shadowCastingMode = ShadowCastingMode.Off;
-            mr.receiveShadows = false;
-            SceneManager.MoveGameObjectToScene(go, t.Scene);   // unloads with the tile
-            t.BoxMin.Clear(); t.BoxMax.Clear();
-        }
-
-        // a quad a, b, c, d listed clockwise as seen from outside (Unity's front-face order): triangles a-b-c and a-c-d
-        private static void Face(Vector3[] verts, Vector3[] norms, int[] tris, ref int v, ref int i, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 n)
-        {
-            verts[v] = a; verts[v + 1] = b; verts[v + 2] = c; verts[v + 3] = d;
-            norms[v] = n; norms[v + 1] = n; norms[v + 2] = n; norms[v + 3] = n;
-            tris[i] = v; tris[i + 1] = v + 1; tris[i + 2] = v + 2;
-            tris[i + 3] = v; tris[i + 4] = v + 2; tris[i + 5] = v + 3;
-            v += 4; i += 6;
-        }
-
-        private Material BlockMaterial()
-        {
-            if (_blockMat != null) return _blockMat;
-            var sh = Shader.Find("Universal Render Pipeline/Simple Lit");
-            if (sh == null) sh = Shader.Find("Universal Render Pipeline/Lit");
-            if (sh == null) throw new InvalidOperationException("no URP lit shader for the blocks");
-            _blockMat = new Material(sh) { name = "Sandbox.Blocks", hideFlags = HideFlags.DontUnloadUnusedAsset };
-            _blockMat.SetColor("_BaseColor", new Color(0.22f, 0.23f, 0.26f, 1f));   // dark: the city's lights and fog made light grey read as white
-            return _blockMat;
-        }
-
-        private void DestroyBlocks(Tile t)
-        {
-            if (t.Blocks != null) { try { Destroy(t.Blocks); } catch { /* went with the scene */ } }
-            if (t.BlockMesh != null) { try { Destroy(t.BlockMesh); } catch { /* shutting down */ } }
-            t.Blocks = null; t.BlockMesh = null;
+            return false;
         }
 
         // ------------------------------------------------------------------ give everything back
 
+        private static void Give(Tile t, out int r, out int c, out int l)
+        {
+            r = 0; c = 0; l = 0;
+            foreach (var x in t.Hidden) { try { if (x != null) { x.forceRenderingOff = false; r++; } } catch { /* gone */ } }
+            foreach (var x in t.ColOff) { try { if (x != null) { x.enabled = true; c++; } } catch { /* gone */ } }
+            foreach (var x in t.Off) { try { if (x != null) { x.enabled = true; l++; } } catch { /* gone */ } }
+            t.Hidden.Clear(); t.ColOff.Clear(); t.Off.Clear();
+        }
+
         private void RestoreAll(string why)
         {
-            int r = 0, l = 0;
+            int r = 0, c = 0, l = 0;
             foreach (var t in _tiles.Values)
             {
-                foreach (var x in t.Hidden) { try { if (x != null) { x.forceRenderingOff = false; r++; } } catch { /* gone */ } }
-                foreach (var x in t.Off) { try { if (x != null) { x.enabled = true; l++; } } catch { /* gone */ } }
-                DestroyBlocks(t);
+                Give(t, out int tr, out int tc, out int tl);
+                r += tr; c += tc; l += tl;
             }
-            if (_tiles.Count > 0) Plugin.Log.LogInfo($"[Sandbox] scenery restored ({why}): {r} renderers and {l} lights back on in {_tiles.Count} tiles");
+            if (_tiles.Count > 0) Plugin.Log.LogInfo($"[Sandbox] scenery restored ({why}): {r} renderers, {c} colliders and {l} lights back on in {_tiles.Count} tiles");
             _tiles.Clear();
         }
     }

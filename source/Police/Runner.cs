@@ -74,7 +74,11 @@ namespace Police
         private const float StartGrace = 3f;                                  // seconds at the start of a chase in which the meter can't fall
         private const float PenaltyKeepSeconds = 3f;
         // chase driving (0.7.0)
-        private const float DriveSnapSeconds = 0.1f, DriveLimit = 7.5f, DriveRate = 4.5f, DriveLookAhead = 260f;
+        private const float DriveSnapSeconds = 0.1f, DriveRate = 4.5f, DriveLookAhead = 260f;
+        // 0.8.2: how far across chasers may drive = the outermost lane centre of the live road (road width / 2 - half a
+        // 5 m lane): 7.5 m on the game's 20 m roads, 12.5 m on Sandbox's 30 m / 6-lane road; read once a second
+        private const float StockDriveLimit = 7.5f;
+        private float DriveLimit = StockDriveLimit, _nextDriveLimit;
         private const int MaxSuspects = 4;   // you + up to 3 remote players (0.8.0)
 
         private enum Outcome { None, Escaped, Caught }
@@ -1101,6 +1105,12 @@ namespace Police
                 _others[0] = new PlanOther { Road = _dp.Distance, Lo = Mathf.Min(_dp.Lane, soon), Hi = Mathf.Max(_dp.Lane, soon), Speed = youV };
                 othersN = Players.FillOthers(_others, 1, null, now);
                 remotesN = CopyRemotes(othersN);
+            }
+            if (now >= _nextDriveLimit)
+            {
+                _nextDriveLimit = now + 1f;
+                float w = GameApi.RoadWidthOk ? GameApi.RoadWidth() : -1f;
+                DriveLimit = w > 0f ? Mathf.Clamp(w * 0.5f - 2.5f, 5f, 20f) : StockDriveLimit;
             }
             for (int k = 0; k < _suspects.Count; k++)
             {

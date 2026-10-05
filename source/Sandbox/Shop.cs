@@ -99,7 +99,7 @@ namespace Sandbox
         private static void MoreSlots(ref int __result)
         {
             if (!Plugin.InSandboxRun) return;
-            int extra = Math.Max(0, Math.Min(15, Plugin.ExtraSlots.Value));
+            int extra = Math.Max(0, Math.Min(15, Multiplayer.Slots(Plugin.ExtraSlots.Value)));   // the host's value in a sandbox MP run
             __result += extra;
             if (!_loggedSlots && extra > 0) { _loggedSlots = true; Plugin.Log.LogInfo($"[Sandbox] mod slots: {__result} ({extra} extra in sandbox runs)"); }
         }
@@ -116,7 +116,7 @@ namespace Sandbox
                 Pickers.RemoveAll(p => p == null);
                 PruneDestroyed();
                 Pickers.Add(__instance);
-                Apply(__instance, Plugin.ActiveNow() && Plugin.AllCardsPicker.Value);
+                Apply(__instance, Plugin.ActiveNow() && Multiplayer.Picker(Plugin.AllCardsPicker.Value));   // the host's value in a sandbox MP run
             }
             catch (Exception e) { Plugin.Log.LogWarning($"[Sandbox] all-cards picker: {e.Message}"); }
         }

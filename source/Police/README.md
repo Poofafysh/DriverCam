@@ -5,7 +5,7 @@ faster than they're going, cutting close, or crashing, near-missing or drifting 
 you're already being chased and it joins in as backup. Get away and you've escaped. Get busted and you lose a few
 seconds off the race timer. Chases score in their own category, **PURSUIT**.
 
-Current version: **0.8.0** (preview)
+Current version: **0.8.2** (preview)
 
 Design doc (claude.ai): "Police Pursuit - v1 Concept" (revised). The police only react to what you do. Nothing
 escalates at random, there are no heat levels, and nothing carries over from one race to the next. **Multiplayer
@@ -48,7 +48,7 @@ the game mode can't be read, the plugin does nothing.
    traffic pace. **Chase driving (0.7.0, `Chase.Drive`):** each chaser is driven like a daredevil, by the same gap
    planner. It heads for your lane, passes traffic through the gaps (across lanes too), takes corners at full speed
    (the game's curve slow-down is held off) and only brakes for a car it can't get round. It **never steers into
-   you**: the daredevils' never-hit rules apply. When the chase ends it gets its home lane back. With `Drive = false`
+   you**: the daredevils' never-hit rules apply. When the chase ends it gets its home lane back. Chasers use every lane of the live road (0.8.2: the road's width is read once a second, so Sandbox's 30 m / 6-lane road works too; 7.5 m either side on the game's 20 m roads). With `Drive = false`
    (or if the lane fields are missing from the game) chasers keep the game's traffic driving and queue behind traffic
    in their lane. A patrol you crash into is wrecked and can't chase; a unit that crashes during a chase leaves it at
    once (`UNIT WRECKED`). **During a

@@ -7,7 +7,7 @@ namespace Sandbox
 {
     /// <summary>
     /// Refreshes <see cref="Plugin.Active"/> 4 times a second (scene name compares, never per frame), shows / hides the
-    /// shop's all-cards picker when that changes, puts a pending road-length change back, and draws the SANDBOX tag
+    /// shop's all-cards picker when that changes, puts a pending road-length change back, gives the maps (width, wide road, hidden scenery) back when the sandbox race ends, and draws the SANDBOX tag
     /// (top-left, uGUI canvas sorting 470): "SANDBOX" while racing, "SANDBOX - Not uploaded (sandbox)" on the results
     /// screens (GameState.LevelCompleted / LevelFailed). Nothing here writes to the game while paused except hiding the tag.
     /// </summary>
@@ -50,11 +50,12 @@ namespace Sandbox
                 {
                     _wasActive = active;
                     if (active) Shop.NewRun();
+                    else WideRoads.RestoreEverything("left the sandbox race");
                     Plugin.Log.LogInfo(active
-                        ? $"[Sandbox] sandbox race: free cards, {10 + Plugin.ExtraSlots.Value} mod slots, road x{Plugin.LengthMultiplier.Value:0.#}, records guarded"
+                        ? $"[Sandbox] sandbox race: free cards, {10 + Plugin.ExtraSlots.Value} mod slots, road x{Plugin.LengthMultiplier.Value:0.#}{WideRoads.Describe()}, records guarded"
                         : "[Sandbox] left the sandbox race");
                 }
-                bool picker = active && Plugin.AllCardsPicker.Value;
+                bool picker = active && Multiplayer.Picker(Plugin.AllCardsPicker.Value);   // the multiplayer run's setting when one is on (Multiplayer.cs checks this call)
                 if (picker != _pickerShown) { _pickerShown = picker; Shop.ApplyPickers(picker); }
                 UpdateTag(active);
             }
@@ -152,6 +153,7 @@ namespace Sandbox
         {
             try { if (_pickerShown) { _pickerShown = false; Shop.ApplyPickers(false); } } catch { }
             try { RoadLength.Restore(); } catch { }
+            try { WideRoads.RestoreEverything("sandbox runner stopped"); } catch { }
             try { DestroyTag(); } catch { }
         }
 

@@ -23,7 +23,7 @@ namespace Police
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.police";
-        public const string Version = "0.8.0";
+        public const string Version = "0.8.2";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, LogEvents, Markers, NoticeNearMiss, NoticeDrift;

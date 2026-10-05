@@ -13,7 +13,9 @@ namespace Sandbox
     /// postfix puts the original back, and the Runner puts it back on the next frame if the postfix never ran (an
     /// exception inside the game's method), so the asset is never left changed. The race timer follows the real path
     /// length by itself (TimerManager.InitializeTimer). RoadPathGenerator.GeneratePath (0x7B2260, runs once after every
-    /// tile scene has loaded) is postfixed only to log how long the longer road took to load.
+    /// tile scene has loaded) is postfixed to log how long the longer road took to load and to start the wide-road build;
+    /// the GetRandomTiles prefix also sets each race's road width first (WideRoads.Apply). Length is host-only in multiplayer:
+    /// clients load the host's tile list (LevelGenerator.GenerateMultiplayerLevelAsClient), so they get the same road.
     /// </summary>
     internal static class RoadLength
     {
@@ -22,6 +24,9 @@ namespace Sandbox
         private static bool _pending;
         private static readonly Stopwatch Load = new Stopwatch();
         private static float _mult;
+
+        /// <summary>The GetRandomTiles / GeneratePath hooks are in place (the sandbox map needs both).</summary>
+        internal static bool TilesHooked, PathHooked;
 
         internal static int Install(Harmony h)
         {
@@ -33,6 +38,7 @@ namespace Sandbox
                 // harmony-target: LevelGeneratorTileSelector.GetRandomTiles
                 h.Patch(tiles, prefix: new HarmonyMethod(typeof(RoadLength), nameof(BeforeTiles)),
                                postfix: new HarmonyMethod(typeof(RoadLength), nameof(AfterTiles)));
+                TilesHooked = true;
                 n++;
             }
             catch (Exception e) { Plugin.Log.LogWarning($"[Sandbox] road length not installed (roads keep their length): {e.Message}"); return n; }
@@ -42,6 +48,7 @@ namespace Sandbox
                 if (path == null) throw new MissingMethodException("RoadPathGenerator", "GeneratePath");
                 // harmony-target: RoadPathGenerator.GeneratePath
                 h.Patch(path, postfix: new HarmonyMethod(typeof(RoadLength), nameof(AfterPath)));
+                PathHooked = true;
                 n++;
             }
             catch (Exception e) { Plugin.Log.LogWarning($"[Sandbox] road load timing not installed: {e.Message}"); }
@@ -50,11 +57,15 @@ namespace Sandbox
 
         private static void BeforeTiles(RunRaceSO currentRace)
         {
+            // wide roads first: the race's width is set before any tile, racer, traffic car or obstacle exists
+            try { WideRoads.Apply(Plugin.TilePickNow()); } catch (Exception e) { Plugin.Log.LogWarning($"[Sandbox] maps: {e.Message}"); }
             try
             {
                 Restore();   // never stack on a value a failed call left behind
-                if (currentRace == null || !Plugin.ActiveNow()) return;
-                float mult = Math.Max(1f, Math.Min(5f, Plugin.LengthMultiplier.Value));
+                if (currentRace == null || !Plugin.TilePickNow()) return;   // also the first race of a run, picked in the main menu
+                float mult = Multiplayer.Length(Plugin.LengthMultiplier.Value);   // the multiplayer run's (host's) when one is on
+                if (float.IsNaN(mult)) mult = 1f;
+                mult = Math.Max(1f, Math.Min(5f, mult));
                 if (mult <= 1.001f) return;
                 _race = currentRace;
                 _original = currentRace.desiredDurationSeconds;
@@ -90,6 +101,7 @@ namespace Sandbox
 
         private static void AfterPath(RoadPathGenerator __instance)
         {
+            WideRoads.AfterPath(__instance);   // catches its own errors
             try
             {
                 if (!Load.IsRunning) return;

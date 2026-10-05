@@ -39,6 +39,7 @@ namespace Police
         internal static bool ResultsOk { get; private set; }   // per-race results row (RogueShared.ModScoreRows)
         internal static bool VictoryOk { get; private set; }   // Victory screen row (RogueShared.ModScoreRows)
         internal static bool RunOk { get; private set; }       // run position (stage, race): run total reset
+        internal static bool RoadWidthOk { get; private set; } // the live road width (chasers use every lane: Sandbox's wide roads)
 
         private static void CheckScore(Assembly asm, List<string> missing)
         {
@@ -52,6 +53,7 @@ namespace Police
             ResultsOk = results;
             VictoryOk = victory;
             RunOk = Has(asm, "Game.Runtime.Manager.RunWorldManager", missing, "currentStageIndex", "currentRaceIndex");
+            RoadWidthOk = Has(asm, "Game.Runtime.Manager.RunWorldManager", missing, "CurrentRoadWidth");
         }
 
         // untyped (see the class comment in GameApi.cs): _pursuit = our provider, _pursuitOwner = the score manager whose list holds it
@@ -252,6 +254,21 @@ namespace Police
 
         private static MonoBehaviour _world;   // RunWorldManager
         private static float _nextWorldSearch;
+
+        /// <summary>The live road width in metres (RunWorldManager.CurrentRoadWidth), or -1 if unknown. Only when RoadWidthOk.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal static float RoadWidth()
+        {
+            if (_world == null)
+            {
+                if (Time.unscaledTime < _nextWorldSearch) return -1f;
+                _nextWorldSearch = Time.unscaledTime + 2f;   // never a scene search every tick
+                _world = UnityEngine.Object.FindFirstObjectByType<RunWorldManager>();
+                if (_world == null) return -1f;
+            }
+            float w = ((RunWorldManager)_world).CurrentRoadWidth;
+            return w > 0f && !float.IsNaN(w) ? w : -1f;
+        }
 
         /// <summary>The run's position: stage and race index (both 0 = the first race of a new run). Only when RunOk.</summary>
         [MethodImpl(MethodImplOptions.NoInlining)]

@@ -37,6 +37,7 @@
     <Reference Include="Assembly-CSharp"><HintPath>$(GameDir)\BepInEx\interop\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.UI"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.UIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.TextMeshPro"><HintPath>$(GameDir)\BepInEx\interop\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>

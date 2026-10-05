@@ -26,7 +26,10 @@ namespace Sandbox
     /// come back.
     ///
     /// Leaderboard prefixes skip while the stored run is a sandbox run in any single-player scene (the upload belongs to
-    /// the run that just ended); every other prefix skips only in a single-player game scene of a sandbox run, so claiming
+    /// the run that just ended), and in any scene while an agreed multiplayer sandbox run is on or was the latest
+    /// multiplayer run, until the next run starts (Multiplayer.LeaderboardBlocked). Every other prefix skips only in a
+    /// sandbox race: a single-player game scene of a sandbox run (Plugin.GuardNow / GuardFast), or the multiplayer race
+    /// scene / the host's tile pick of an agreed multiplayer sandbox run (Multiplayer.GuardNow / GuardFast), so claiming
     /// mission / level rewards in the main menu after a sandbox run still works. Each skip is logged once per run.
     /// Installed by hand so a missing method can't break loading; a failure is recorded and the SANDBOX button stays off.
     /// </summary>
@@ -99,9 +102,15 @@ namespace Sandbox
             catch { /* logging only */ }
         }
 
-        /// <summary>Leaderboards: the stored run is a sandbox run and this is not multiplayer (any scene: the upload belongs to the run that ended).</summary>
+        /// <summary>A sandbox race: single-player (Plugin.GuardNow) or an agreed multiplayer sandbox run (Multiplayer.cs).</summary>
+        private static bool G() => Plugin.GuardNow() || Multiplayer.GuardNow();
+        /// <summary>The same for per-frame guards (cached scene checks).</summary>
+        private static bool GF() => Plugin.GuardFast() || Multiplayer.GuardFast();
+
+        /// <summary>Leaderboards: the stored run is a sandbox run and this is not multiplayer (any scene: the upload belongs to the run that ended), or the latest multiplayer run was sandbox.</summary>
         private static bool LbBlocked()
         {
+            if (Multiplayer.LeaderboardBlocked()) return true;
             if (!Plugin.RunIsSandbox.Value) return false;
             try { return !Game.Runtime.GameState.IsMultiplayerMode; } catch { return true; }
         }
@@ -122,13 +131,13 @@ namespace Sandbox
 
         private static bool SkipAchievement(ref bool __result)
         {
-            if (!Plugin.GuardNow()) return true;
+            if (!G()) return true;
             __result = false; Once("achievement (AchievementManager.CompleteAchievement)"); return false;
         }
 
         private static bool SkipMission(ref bool __result)
         {
-            if (!Plugin.GuardNow()) return true;
+            if (!G()) return true;
             __result = false; Once("mission completion (MissionManager.CompleteMission)"); return false;
         }
 
@@ -137,34 +146,34 @@ namespace Sandbox
         /// later. Per-frame in sandbox runs (ScoreDurationObjective / ComboChainActionCountObjective.OnUpdate call
         /// SetCompleted every frame while their condition holds), so it uses the cached check (GuardFast), not a scene-name read.
         /// </summary>
-        private static bool SkipObjective() { if (!Plugin.GuardFast()) return true; Once("mission / achievement objective (AObjective.SetCompleted)"); return false; }
+        private static bool SkipObjective() { if (!GF()) return true; Once("mission / achievement objective (AObjective.SetCompleted)"); return false; }
 
         private static bool SkipXp(ref bool __result)
         {
-            if (!Plugin.GuardNow()) return true;
+            if (!G()) return true;
             __result = false; Once("XP (PlayerProgressionManager.AddExpPoints)"); return false;
         }
 
-        private static bool SkipCredits() { if (!Plugin.GuardNow()) return true; Once("credits (PlayerProgressionManager.AddCredits)"); return false; }
+        private static bool SkipCredits() { if (!G()) return true; Once("credits (PlayerProgressionManager.AddCredits)"); return false; }
         private static bool SkipSpendCredits(ref bool __result)
         {
-            if (!Plugin.GuardNow()) return true;
+            if (!G()) return true;
             __result = true; Once("credits spent (PlayerProgressionManager.TrySpendCredits): free in a sandbox run, nothing spent"); return false;
         }
 
         /// <summary>Also runs for PlayerProgressionManager.OnLevelCompleted (same native body, same boss check).</summary>
-        private static bool SkipBossProgress() { if (!Plugin.GuardNow()) return true; Once("boss progress (PlayerProgressionManager.CheckBossCompletion / OnLevelCompleted)"); return false; }
+        private static bool SkipBossProgress() { if (!G()) return true; Once("boss progress (PlayerProgressionManager.CheckBossCompletion / OnLevelCompleted)"); return false; }
 
-        private static bool SkipCardSoldStat() { if (!Plugin.GuardNow()) return true; Once("card sold count (ACardSO.IncreaseCardSoldStat)"); return false; }
-        private static bool SkipCardDestroyedStat() { if (!Plugin.GuardNow()) return true; Once("card destroyed count (ACardSO.IncreaseCardDestroyedStat)"); return false; }
-        private static bool SkipCardUnlock() { if (!Plugin.GuardNow()) return true; Once("card unlock (CardEquipmentManager.UnlockCard)"); return false; }
-        private static bool SkipCardPermanent() { if (!Plugin.GuardNow()) return true; Once("permanent card (CardEquipmentManager.AcquireCardPermanently)"); return false; }
-        private static bool SkipBuyAll() { if (!Plugin.GuardNow()) return true; Once("buy-all cards (CardEquipmentManager.BuyAllCardsDebug)"); return false; }
-        private static bool SkipVehicleUnlock() { if (!Plugin.GuardNow()) return true; Once("vehicle unlock (VehicleGarageManager.UnlockVehicle)"); return false; }
-        private static bool SkipVinylUnlock() { if (!Plugin.GuardNow()) return true; Once("vinyl unlock (VehicleGarageManager.UnlockVinyl)"); return false; }
-        private static bool SkipPartUnlock() { if (!Plugin.GuardNow()) return true; Once("part unlock (VehicleGarageManager.UnlockPart)"); return false; }
-        private static bool SkipTitleUnlock() { if (!Plugin.GuardNow()) return true; Once("driver title unlock (VehicleGarageManager.UnlockDriverTitle)"); return false; }
-        private static bool SkipGameStat() { if (!Plugin.GuardNow()) return true; Once("game statistics (GameStatisticsManager)"); return false; }
-        private static bool SkipRaceStat() { if (!Plugin.GuardNow()) return true; Once("race / run statistics and high scores (RaceStatisticsManager)"); return false; }
+        private static bool SkipCardSoldStat() { if (!G()) return true; Once("card sold count (ACardSO.IncreaseCardSoldStat)"); return false; }
+        private static bool SkipCardDestroyedStat() { if (!G()) return true; Once("card destroyed count (ACardSO.IncreaseCardDestroyedStat)"); return false; }
+        private static bool SkipCardUnlock() { if (!G()) return true; Once("card unlock (CardEquipmentManager.UnlockCard)"); return false; }
+        private static bool SkipCardPermanent() { if (!G()) return true; Once("permanent card (CardEquipmentManager.AcquireCardPermanently)"); return false; }
+        private static bool SkipBuyAll() { if (!G()) return true; Once("buy-all cards (CardEquipmentManager.BuyAllCardsDebug)"); return false; }
+        private static bool SkipVehicleUnlock() { if (!G()) return true; Once("vehicle unlock (VehicleGarageManager.UnlockVehicle)"); return false; }
+        private static bool SkipVinylUnlock() { if (!G()) return true; Once("vinyl unlock (VehicleGarageManager.UnlockVinyl)"); return false; }
+        private static bool SkipPartUnlock() { if (!G()) return true; Once("part unlock (VehicleGarageManager.UnlockPart)"); return false; }
+        private static bool SkipTitleUnlock() { if (!G()) return true; Once("driver title unlock (VehicleGarageManager.UnlockDriverTitle)"); return false; }
+        private static bool SkipGameStat() { if (!G()) return true; Once("game statistics (GameStatisticsManager)"); return false; }
+        private static bool SkipRaceStat() { if (!G()) return true; Once("race / run statistics and high scores (RaceStatisticsManager)"); return false; }
     }
 }

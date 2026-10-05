@@ -77,6 +77,7 @@ namespace Sandbox
             bool was = Plugin.RunIsSandbox.Value;
             if (was != sandbox) Plugin.RunIsSandbox.Value = sandbox;   // saved to rogue.sandbox.cfg
             Guards.NewRun();
+            if (!sandbox) WideRoads.Restore();   // the game's road width back for a normal run
             Plugin.Recompute();
             if (sandbox || was) Plugin.Log.LogInfo($"[Sandbox] {(sandbox ? "SANDBOX run" : "normal run (sandbox off)")}: {why}");
         }
@@ -173,7 +174,7 @@ namespace Sandbox
                 if (__result == null) return;
                 bool mp = false;
                 try { mp = Game.Runtime.GameState.IsMultiplayerMode; } catch { }
-                AddMark(__result.timestampTicks, Plugin.RunIsSandbox.Value && !mp);
+                AddMark(__result.timestampTicks, (Plugin.RunIsSandbox.Value && !mp) || (mp && Multiplayer.SessionOn));   // Multiplayer.cs: a multiplayer sandbox run
             }
             catch (Exception e) { Plugin.Log.LogWarning($"[Sandbox] snapshot mark: {e.Message}"); }
         }

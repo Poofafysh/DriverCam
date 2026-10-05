@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using BepInEx;
+using BepInEx.Unity.IL2CPP;
 using UnityEngine;
 using FM = RogueShared.FastMath;
 
@@ -75,6 +76,14 @@ namespace Driver
         private IntPtr _parentPtr;
         private Vec _barsPivot;
         private string _noRideLogged, _bikeOffLogged;
+
+        // 0.4.0 ride style: the controller, the gear read with the animation triggers, Bikes' MaxLean (its config, read-only)
+        private readonly RideBody _ride = new RideBody();
+        private bool _rideLive;
+        private int _gear = -1;
+        private float _maxLean = 50f;
+        private string _maxLeanFrom = "default";
+        private string _rideState;
 
         private void Awake()
         {
@@ -150,14 +159,15 @@ namespace Driver
         private void AnimTick(float now)
         {
             if (_anim == null) return;
-            bool on = Plugin.AnimEnabled.Value && _fitted && _rig.Alive && _rig.Visible;
+            bool on = (Plugin.AnimEnabled.Value || RideOn) && _fitted && _rig.Alive && _rig.Visible;
             if (!on) { StopAnim(); return; }
             if (Time.timeScale <= 0f || now < _nextAnimRead) return;
             _nextAnimRead = now + 1f / 15f;
             _animLive = true;
             GameApi.ReadAnim(out int gear, out int hits, out int won, out float speed);
-            _speed = speed;
-            string ev = _anim.Events(gear, hits, won, Plugin.ShiftHand.Value && _solver.KnobMode != 0, Plugin.Celebrate.Value, true);
+            _speed = speed; _gear = gear;
+            bool clips = Plugin.AnimEnabled.Value;   // off: only the ride style's speed and gear are read
+            string ev = _anim.Events(gear, hits, won, clips && Plugin.ShiftHand.Value && _solver.KnobMode != 0, clips && Plugin.Celebrate.Value, clips);
             if (ev != null && (Plugin.LogEvents.Value || ev.StartsWith("celebrate", StringComparison.Ordinal)))
                 Plugin.Log.LogInfo($"[Driver] {ev}" + (ev.StartsWith("shift", StringComparison.Ordinal) ? (_solver.KnobMode == 1 ? " (hand to the knob)" : " (shift clip arm)") : ""));
         }
@@ -167,8 +177,12 @@ namespace Driver
             if (!_animLive) return;
             _animLive = false;
             if (_anim != null) _anim.Reset();
-            _speed = -1f;
+            _speed = -1f; _gear = -1;
+            _ride.Reset(); _rideLive = false; _rideState = null;
         }
+
+        /// <summary>The ride-style rider is on: a bike, [Bike] Enabled (bike mode) and [Bike] RideStyle.</summary>
+        private bool RideOn => _bikeMode && Plugin.RideStyle.Value;
 
         private void LoadModel()
         {
@@ -347,6 +361,7 @@ namespace Driver
 
         private void ResolveBike()
         {
+            BikesMaxLean();
             var b = BikeSeat.For(_bikeKey);
             if (_bikeSeat != null && b.Same(_bikeSeat)) return;
             _solver.FitBike(b);
@@ -356,10 +371,33 @@ namespace Driver
             {
                 Plugin.Log.LogInfo($"[Driver] riding {_bikeKey}: rider on the bike (sockets from {b.Source}), hang-off {(Plugin.HangOff.Value ? "on" : "off")}, " +
                                    $"grips {(_bars != null ? "turn with Bikes.Bars" : "fixed (the bike's bars don't turn)")}");
+                Plugin.Log.LogInfo(Plugin.RideStyle.Value
+                    ? $"[Driver] {_bikeKey}: ride style {Plugin.Style.Value} (tuck {OnOff(Plugin.Tuck.Value)}, leg out {OnOff(Plugin.LegDangle.Value)}, knee down {OnOff(Plugin.KneeDown.Value)}, " +
+                      $"look into corners {OnOff(Plugin.LookIntoCorner.Value)}, foot down {(Plugin.FootDown.Value ? Plugin.FootDownSide.Value.ToString().ToLowerInvariant() : "off")}, " +
+                      $"brake fingers {(Plugin.BrakeFingers.Value >= 4 ? 4 : 2)}; Bikes MaxLean {_maxLean:0} deg from {_maxLeanFrom}){(GameApi.SpeedOk ? "" : "; no speed: no tuck, leg out or foot down")}"
+                    : $"[Driver] {_bikeKey}: ride style off ([Bike] RideStyle): the 0.3.0 rider");
                 Plugin.Log.LogInfo($"Driver: {_bikeKey} seat from bike-{b.Source}, scale 1.00, reach short {_solver.ShortCm:0.0} cm" +
                                    (_solver.ShortCm > 0.3f ? $" ({_solver.StretchShortCm:0.0} cm with the arms stretched up to 12%)" : "") +
                                    $" (knees {_solver.KneeGapCm:0} cm apart)");
             }
+        }
+
+        private static string OnOff(bool b) => b ? "on" : "off";
+
+        /// <summary>Bikes' [Look] MaxLean from its config through the chainloader (read-only; the knee-down and leg-out
+        /// thresholds scale with it), 50 when Bikes or the setting isn't there. Twice a second while on a bike.</summary>
+        private void BikesMaxLean()
+        {
+            float v = 50f; string from = "default (Bikes' MaxLean not found)";
+            try
+            {
+                var plugins = IL2CPPChainloader.Instance != null ? IL2CPPChainloader.Instance.Plugins : null;
+                if (plugins != null && plugins.TryGetValue("rogue.bikes", out var info) && info != null && info.Instance is BasePlugin bp &&
+                    bp.Config != null && bp.Config.TryGetEntry<float>("Look", "MaxLean", out var e) && float.IsFinite(e.Value))
+                { v = Math.Clamp(e.Value, 15f, 65f); from = "rogue.bikes.cfg"; }
+            }
+            catch (Exception) { /* Bikes' config unreadable: the default */ }
+            _maxLean = v; _maxLeanFrom = from;
         }
 
         /// <summary>Driver_Root under Bikes.Lean at the bike origin (once per build / bike).</summary>
@@ -488,6 +526,7 @@ namespace Driver
             float k = 1f - MathF.Exp(-12f * dt);
             _throttle += (FM.Clamp01(th) - _throttle) * k;
             _brake += (FM.Clamp01(br) - _brake) * k;
+            _turn += (FM.Clamp(_turnInput, -1f, 1f) - _turn) * (1f - MathF.Exp(-10f * dt));
             HeadLook(out float yaw, out float pitch);
             var q = Quat.From(_lean.localRotation);
             // lean = Bikes' roll about the lean frame's own forward axis (its yaw part, 0 or 180 deg, taken out)
@@ -500,8 +539,27 @@ namespace Driver
             var bq = bars ? Quat.From(_bars.localRotation) : Quat.Identity;
             AnimIn ain = AnimOff;
             if (_animLive && Plugin.AnimEnabled.Value) { _anim.Step(dt, _brake, _speed < 0f ? 99f : _speed); ain = _anim.Out; }
-            _solver.FrameBike(lean, Plugin.HangOff.Value, bars, bq, _barsPivot, yaw, pitch, Time.time, in ain);
+            if (_animLive && Plugin.RideStyle.Value)
+            {
+                var sense = new RideSense { Speed = _speed < 0f ? -1f : MathF.Abs(_speed), Lean = lean, Steer = _turn, Throttle = _throttle, Brake = _brake, Gear = _gear };
+                var opt = new RideOptions
+                {
+                    HangOff = Plugin.HangOff.Value, Tuck = Plugin.Tuck.Value, LegDangle = Plugin.LegDangle.Value, KneeDown = Plugin.KneeDown.Value,
+                    LookIntoCorner = Plugin.LookIntoCorner.Value, FootDown = Plugin.FootDown.Value, Style = Plugin.Style.Value,
+                    BrakeFingers = Plugin.BrakeFingers.Value, FootSide = Plugin.FootDownSide.Value == FootSide.Right ? 1 : -1, MaxLean = _maxLean,
+                };
+                _ride.Step(dt, in sense, in opt);
+                _rideLive = true;
+                if (Plugin.LogEvents.Value && !ReferenceEquals(_ride.State, _rideState))
+                {
+                    _rideState = _ride.State;
+                    Plugin.Log.LogInfo($"[Driver] ride: {_rideState} ({MathF.Abs(_speed):0} m/s, lean {lean:0} deg, throttle {_throttle:0.0}, brake {_brake:0.0})");
+                }
+            }
+            else if (_rideLive) { _ride.Reset(); _rideLive = false; _rideState = null; }
+            _solver.FrameBike(lean, Plugin.HangOff.Value, bars, bq, _barsPivot, yaw, pitch, Time.time, in ain, in _ride.Out);
             _rig.WriteBones(_solver.FrameBones);
+            if (_solver.FingersDirty) _rig.WriteBones(_solver.FingerBones);
             if (_rig.Cpu) _rig.CpuSkin(_solver.Scale);
         }
 

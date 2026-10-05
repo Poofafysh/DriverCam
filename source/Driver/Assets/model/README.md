@@ -12,7 +12,14 @@ blender -b DIR/driver.blend --python preview.py -- <previewdir> none --cockpit <
 python drm_io.py driver.drm driver_anims.dra     # format check, ends with RESULT: OK
 python anim_clips.py --ride                      # (re)writes ride_sportbike into driver_anims.dra, every other clip kept
 blender -b driver.blend --python preview_ride.py -- <previewdir> [--csm <dir with the Bikes .csm models>]
+blender -b driver.blend --python preview_ride.py -- <previewdir> --poses <poses.json>   # poses solved by the plugin's code
 ```
+
+`--poses` renders poses that were solved somewhere else. Each one is a JSON entry `{name, key, lean, state, lp, lq}`,
+with the local position and rotation per bone in `driver.drm` order, in Unity root space. That's how the Driver 0.4.0
+ride-style behaviours were checked: the plugin's own `RideBody` and `Solver.FrameBike` run offline through each
+scenario, then each pose is rendered on the stand-in bike with a ground plane and a chase view from behind. The ride
+style is procedural and has no clips of its own, so `anim_clips.py` and `driver_anims.dra` are unchanged.
 
 ## Sport-bike riding pose (`ride_sportbike`, Driver 0.3.0)
 

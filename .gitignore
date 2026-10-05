@@ -54,3 +54,8 @@ source/Bikes/Assets/*.csm
 source/Bikes/Assets/*_basecolor.*
 # M2 G87 (CC BY-NC-SA 4.0, credited in source/Bikes/README.md): the user chose to publish it
 !source/Bikes/Assets/BMW_M2_G87.csm
+
+# local-only: personal report notes and the old wide-map test tiles (built from game waypoints); never pushed
+MORNING_NOTES_*.md
+POLICE_DAREDEVIL_REVIEW_*.md
+source/Sandbox/Assets/

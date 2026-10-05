@@ -2,7 +2,12 @@
 The pose comes from driver_anims.dra and is fitted with anim_clips.ride_fit / ride_frame, the same steps as the
 plugin's Solver.FitBike / FrameBike (without the clip layers). Workbench renders, one sheet per scenario.
 
-    blender -b driver.blend --python preview_ride.py -- <outdir> [--dra driver_anims.dra] [--csm <dir with *.csm>]
+    blender -b driver.blend --python preview_ride.py -- <outdir> [--dra driver_anims.dra] [--csm <dir with *.csm>] [--poses <json>]
+
+--poses renders poses solved elsewhere instead of the built-in scenarios: a JSON list of {"name", "key" (BIKES key),
+"lean" (deg, + = left), "state", "lp": [[x, y, z] per bone], "lq": [[x, y, z, w] per bone]} in driver.drm's bone order
+and Unity root space (e.g. the plugin's own Solver.FrameBike + RideBody run offline, Driver 0.4.0 ride style). Those
+sheets add a ground plane and swap the top view for a RIDE-style chase view from behind.
 
 --csm adds the real bike model (Bikes' BMW_S1000RR.csm / SportBike.csm, read-only, never written) as a second check of
 the sockets. Each sheet: side, 3/4 front, front, top. Prints per scenario the IK shortfalls, knee and elbow
@@ -21,6 +26,7 @@ argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUT = argv[0]; os.makedirs(OUT, exist_ok=True)
 DRA = argv[argv.index("--dra") + 1] if "--dra" in argv else os.path.join(HERE, "driver_anims.dra")
 CSM = argv[argv.index("--csm") + 1] if "--csm" in argv else None
+POSES = argv[argv.index("--poses") + 1] if "--poses" in argv else None
 C = Matrix(((-1, 0, 0), (0, 0, 1), (0, -1, 0)))          # Blender -> Unity
 CT = C.transposed()
 W, H = 420, 420
@@ -201,6 +207,56 @@ def sheet(name, key, lean=0.0, hang=True, real=None):
            rep["arm_l"][1], rep["arm_r"][1], "SUSPECT" if worst > 1.0 else "ok", im.filepath_raw))
     bpy.data.objects.remove(stand, do_unlink=True)
 
+
+def ground():
+    """A world-fixed ground plane (it doesn't lean with the bike)."""
+    o = bpy.data.objects.get("ride_ground")
+    if o is None:
+        bm = bmesh.new(); bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=3.0)
+        me = bpy.data.meshes.new("ride_ground"); bm.to_mesh(me); bm.free()
+        me.materials.append(mat("ground", (0.82, 0.82, 0.78)))
+        o = bpy.data.objects.new("ride_ground", me); sc.collection.objects.link(o)
+    return o
+
+
+POSE_VIEWS = [VIEWS[0], VIEWS[1], VIEWS[2],
+              ((0.0, 1.9, -3.4), (0, 0.8, 0.3), 45)]   # chase: from behind and above, as RIDE's default camera
+
+
+def sheet_pose(e):
+    """One pose from --poses: the given local pose on the stand-in, leaned, ground plane, chase view."""
+    key = e.get("key", "S1000RR"); lean = float(e.get("lean", 0.0))
+    stand = make_standin(key)
+    for o in bpy.data.objects:
+        if o.name.startswith("bike_") or o.name.endswith(".csm"): o.hide_render = o is not stand
+    g = ground(); g.hide_render = False
+    Lm = lean_matrix(lean)
+    stand.matrix_world = Lm
+    lp = [tuple(v) for v in e["lp"]]; lq = [tuple(v) for v in e["lq"]]
+    if len(lp) != len(names) or len(lq) != len(names): raise SystemExit("RESULT: FAIL pose %s has %d bones, the model %d" % (e["name"], len(lp), len(names)))
+    wp = set_pose(lp, lq, Lm)
+    img = np.ones((H * 2, W * 2, 4), dtype=np.float32)
+    sh = A.vsub(A.qrot(A.qaxis((0, 0, 1), lean), (0, 0.85, 0)), (0, 0.85, 0))
+    for k, (loc, tg, lens) in enumerate(POSE_VIEWS):
+        cam(A.vadd(loc, sh), A.vadd(tg, sh), lens)
+        r, c_ = divmod(k, 2)
+        img[(1 - r) * H:(2 - r) * H, c_ * W:(c_ + 1) * W] = tile()
+    im = bpy.data.images.new("pose_" + e["name"], W * 2, H * 2, alpha=True)
+    im.pixels[:] = img.ravel(); im.filepath_raw = os.path.join(OUT, "pose_%s.png" % e["name"]); im.file_format = "PNG"; im.save()
+    # lowest joint in the world (the lean applied about the ground origin)
+    q = A.qaxis((0, 0, 1), lean)
+    low = min(A.qrot(q, wp[i])[1] for i, n in enumerate(names) if n.startswith(("calf", "foot", "ball", "lowerarm", "hand")))
+    print("CHECK pose %-30s lean %6.1f  state %-24s  lowest limb joint %.2f m  -> %s" % (e["name"], lean, e.get("state", ""), low, im.filepath_raw))
+    bpy.data.objects.remove(stand, do_unlink=True)
+    g.hide_render = True
+
+
+if POSES:
+    import json
+    for e in json.load(open(POSES)): sheet_pose(e)
+    if os.path.exists(tmp): os.remove(tmp)
+    print("RESULT: OK")
+    raise SystemExit(0)
 
 real = {}
 if CSM:

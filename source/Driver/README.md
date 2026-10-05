@@ -3,9 +3,9 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a 3D racing driver sits in your car. The driver's hands hold
 DriverCam's steering wheel and turn it with you, the right foot works the pedal, and the head follows HeadLook. In
 DriverCam's driver view you look down at your own body, arms and gloves on the wheel. On one of the Bikes plugin's
-motorcycles the driver rides it instead (0.3.0).
+motorcycles the driver rides it instead (0.3.0), and since 0.4.0 it moves the way riders do in the RIDE games.
 
-Current version: **0.3.0**.
+Current version: **0.4.0**.
 
 ## What it changes
 
@@ -134,6 +134,63 @@ When your vehicle is one of the Bikes plugin's motorcycles (BMW S1000RR, Sport B
   the real bike model as an option.
 - **Limit.** The knees sit about 0.53 m high, below the tank's knee pads. That's the geometry: the given pegs are only
   0.12 m behind the seat point, and the ball of the foot is on the peg.
+- **Fingers** (0.4.0): the fingers wrap the grips (they were straight in 0.3.0), whatever the ride style.
+
+## Ride style (0.4.0)
+
+`Bike.RideStyle` (on by default) makes the rider behave the way players and reviewers describe the riders of Milestone's
+RIDE 4 and RIDE 5, with real track technique filling the gaps. All the motion is our own: procedural layers on our own
+skeleton (`RideStyle.cs` decides, `SolverBike.cs` poses). Nothing is taken from those games: no animations, models or
+code. `Bike.RideStyle` off gives the 0.3.0 rider.
+
+Every input is something Driver already reads: the speed (`VehicleMovement.CurrentSpeed`, 15 times a second), the
+bike's lean (`Bikes.Lean`'s roll) and how fast it changes, the steering (the game's turn input), the throttle, the
+brake and the gear. Every layer is eased, so nothing jumps.
+
+| Behaviour | When | What the rider does |
+|---|---|---|
+| **Foot down** (`FootDown`, `FootDownSide`) | below 1.5 m/s (and still down while revving at a standstill) | in 0.4 s, the left foot (or the right) goes to the ground beside and ahead of the peg, with the knee nearly straight. The hips shift 3 cm and the pelvis rolls 5° toward it. The foot goes back on the peg in 0.3 s as you pull away |
+| **Launch** | throttle over 50% from a standstill | in 0.2 s the torso goes 12° further over the tank, and it eases back by 15 m/s |
+| **Tuck** (`Tuck`) | above 28 m/s (100 km/h), throttle over 60%, lean under 12°, no brake | in 0.7 s the rider goes flat behind the screen: the torso 26° lower, the hips 4 cm back, the elbows tucked down and in, and the head up to see over the screen. As in RIDE 4, the rider **sits up in 0.25 s** the moment the throttle drops under 20%, the brake comes on, the lean passes 15° or the speed falls under 24 m/s |
+| **Hard braking** | brake over 50% above 15 m/s (off under 35%) | in 0.15 s the rider sits up 20° and slides 4 cm back, and the arms straighten to brace. It relaxes in 0.3 s |
+| **Leg out** (`LegDangle`) | brake over 40% above 20 m/s, lean under 30% of Bikes' `MaxLean` | in 0.25 s the inside leg leaves its peg and hangs out, down and forward, swaying a little. The inside is the side you steer to, or else the side of the lean, or else the side of the last corner. The leg goes back on the peg in 0.2 s past 30% of `MaxLean` or under 20% brake |
+| **Hang-off** (`HangOff`) | from the lean 0.35 s ahead (the lean plus its rate) | the hips slide up to 15 cm to the inside on a spring capped at 0.6 m/s. A side change takes about 0.6 s, and you can see it happen, as in RIDE 5. The upper body follows 0.1 s behind, and the inside knee opens |
+| **Chicane** | the lean changes side | the hips lift up to 3 cm as they cross the seat, and the head turns to the new side first |
+| **Knee down / elbow drop** (`KneeDown`) | past 80% of `MaxLean` | the inside knee opens 8 cm wider toward the tarmac, and the inside elbow drops (Balanced 70%, ShouldersOut fully, OldSchool not at all) |
+| **Style** (`Style`) | in corners | how far the upper body leans in beyond the hips past 30° of lean. Balanced: up to 12°. ShouldersOut: up to 22°. OldSchool: 6°, the hips only 60% across, the knee half out and no elbow drop |
+| **Look into the corner** (`LookIntoCorner`) | steering, or the lean 0.35 s ahead | before the body moves, the head turns up to 26° and rolls 7° toward the inside, easing in over about 0.3 s. The shoulders follow by 20%. HeadLook adds on top |
+| **Head level** | always | the head's tilt in the world is half the bike's lean, however far the upper body leans in. In 0.3.0 the head rolled 30% of the lean back toward the horizon, on top of the torso's tilt |
+| **Exit drive** | throttle over 50% while the lean falls | the torso goes 5° further forward and the elbows partly in, until the tuck takes over |
+| **Gear** | a gear change | the left foot taps the shifter in 0.22 s: the toe goes up and 3 cm higher on an upshift, and down on a downshift. A downshift while braking also pulls the clutch with two fingers for 0.2 s |
+| **Brake fingers** (`BrakeFingers`) | brake on | in 0.1 s, 2 (or 4) right fingers go from the grip to the lever, and they pull it in with the brake |
+| **Throttle hand** | always | the right hand rolls back on the grip with the throttle, by up to 22° |
+| **Bob** | always | the torso pitches up to 4° and slides about 1 cm as you speed up and slow down, plus a bob of a few millimetres at speed |
+
+- **Left out.** There are no wheelie or stoppie reactions, because Bikes doesn't pitch the bike. The crash jolt is the
+  existing `crash_jolt` clip.
+- **With `Anim.Enabled` off**, the ride style still works, because it reads the speed and the gear for itself. The
+  clips (idle, look, jolt, celebrate) don't play.
+- **With the ride style on**, the bike rider doesn't use the `brake_brace` clip, because the rider's own sit-up
+  replaces it.
+- **MaxLean.** The knee-down and leg-out thresholds scale with Bikes' `[Look] MaxLean`. Driver reads it, read-only,
+  from Bikes' config through the BepInEx chainloader, twice a second while you ride. If Bikes' setting isn't there, it
+  uses 50°.
+- **First person.** DriverCam's driver view shows the body without the head. The tuck, the lever fingers, the
+  throttle hand and the arms show there. The head lead and the head tilt show only in the chase views, because Driver
+  doesn't move the camera.
+- **Cost.** The controller and the whole rider solve take about 30 µs a frame (measured offline), with no allocations.
+  The lever fingers (18 bones) are written on top of the usual bones, but only on frames when they move.
+- **Measured offline.** The plugin's own `RideBody` and `FrameBike` were driven through each scenario at 60 fps on the
+  S1000RR:
+  - The hands stay on the grips: 0.0 cm, or 0.6 cm at full ShouldersOut knee-down.
+  - The tuck lowers the eyes 14 cm.
+  - Braking sits the torso up from 49° to 37° from vertical.
+  - The ball joint of the planted foot ends 5 cm above the ground, so the sole is on the ground. Bikes tipping the
+    bike at a standstill would close that gap.
+  - At a 45° lean, the inside knee is 8 cm off the ground.
+  - In a chicane from +35° to −35°, the hips take about 0.7 s to go from side to side.
+- **Previews.** `Assets/model/preview_ride.py --poses <json>` renders poses solved by the plugin's own code, with a
+  ground plane and a chase view from behind.
 
 ## In game
 
@@ -152,6 +209,15 @@ is paused, the driver holds its last pose.
 | `Anim.Celebrate` | true | the fist pump when you complete a level |
 | `Bike.Enabled` | true | on a Bikes motorcycle the driver rides it (shown in every view); off = seated in the hidden donor car |
 | `Bike.HangOff` | true | hang off in corners (hips up to 15 cm inside, upper body up to 12° more past 30° of lean) |
+| `Bike.RideStyle` | true | the RIDE-style rider (0.4.0, above); off = the 0.3.0 rider |
+| `Bike.Style` | Balanced | Balanced, ShouldersOut or OldSchool: how far the upper body leans in, the hip slide, the knee and the elbow |
+| `Bike.Tuck` | true | tuck behind the screen at speed on the throttle; sit up when you lift off, brake or lean |
+| `Bike.LegDangle` | true | the inside leg off its peg under hard braking |
+| `Bike.KneeDown` | true | the knee wider and the inside elbow down past 80% of Bikes' MaxLean |
+| `Bike.LookIntoCorner` | true | the head leads into corners (adds to HeadLook) |
+| `Bike.FootDown` | true | a foot on the ground below 1.5 m/s |
+| `Bike.FootDownSide` | Left | which foot goes down |
+| `Bike.BrakeFingers` | 2 | fingers on the brake lever (2 or 4) |
 | `Look.Outline` | false | the game's cartoon outline (off by default: in driver view an outline hull this close to the camera can fill the screen) (a copy of your car's outline material); applies the next time the driver is built |
 | `Debug.LogEvents` | false | log camera-mode changes, re-fits, show / hide, object builds and animation events |
 | `Debug.ForceCpuSkin` | false | skin on the CPU instead of the GPU (used automatically when the self-test fails) |
@@ -173,7 +239,8 @@ is paused, the driver holds its last pose.
   | `GameApi.cs` | the only file that touches game types; checked by name at load |
   | `RigFile.cs` | `.drm` / `.dra` reader, plain C#; every index is checked |
   | `Solver.cs` | the fit, the IK and the clip layers, in plain maths (`Maths.cs`), about 15-100 µs a frame |
-  | `SolverBike.cs` | the bike rider: `BikeSeat` (sockets per model), `FitBike` / `FrameBike` (legs, grips, hang-off) |
+  | `SolverBike.cs` | the bike rider: `BikeSeat` (sockets per model), `FitBike` / `FrameBike` (legs, grips, hang-off, the ride-style layers, lever fingers) |
+  | `RideStyle.cs` | the ride-style controller (`RideBody`): speed, lean, steering, pedals and gear into eased body layers (`RideOut`) |
   | `Anim.cs` | clip sampler (`ClipSampler`), the frame inputs (`AnimIn`) and the game events to clip times (`AnimEvents`) |
   | `SeatSource.cs` | the seat sources |
   | `DriverRig.cs` | the Unity objects |
@@ -209,7 +276,7 @@ is paused, the driver holds its last pose.
 ## Log (`/game-log Driver`)
 
 - At startup:
-  - `Driver x.y.z loaded: a driver in your car (driver view <on|off>, chase view <on|off>, animations <on|off>, bike rider <on with hang-off|on|off>).`
+  - `Driver x.y.z loaded: a driver in your car (driver view <on|off>, chase view <on|off>, animations <on|off>, bike rider <on with hang-off|on|off>, ride style <Balanced|ShouldersOut|OldSchool|off>).`
   - `[Driver] game check OK: camera controller, car body<, pedals>`
   - `[Driver] animation triggers: gear <yes|no>, speed <yes|no>, collisions <yes|no>, level completed <yes|no>` (a warning listing what is
     missing when one is not found; only that animation is off)
@@ -232,6 +299,9 @@ is paused, the driver holds its last pose.
   - `[Driver] car changed to <Car> (a Bikes motorcycle: <Key>)` (or `[Driver] car <Car> is a Bikes motorcycle (<Key>)` when the
     bike node showed up a second after the body)
   - `[Driver] riding <Key>: rider on the bike (sockets from table|bikes|table (unknown model: S1000RR sockets)), hang-off <on|off>, grips <fixed (the bike's bars don't turn)|turn with Bikes.Bars>`
+  - `[Driver] <Key>: ride style <Balanced|ShouldersOut|OldSchool> (tuck <on|off>, leg out <on|off>, knee down <on|off>, look into corners <on|off>, foot down <left|right|off>, brake fingers <2|4>; Bikes MaxLean <n> deg from <rogue.bikes.cfg|default (Bikes' MaxLean not found)>)`.
+    When the game's speed can't be read, the line ends `; no speed: no tuck, leg out or foot down`. With the ride
+    style off: `[Driver] <Key>: ride style off ([Bike] RideStyle): the 0.3.0 rider`.
   - `Driver: <Key> seat from bike-<source>, scale 1.00, reach short 0.0 cm (knees 40 cm apart)`
   - `[Driver] <Key>: rider off ([Bike] Enabled): the driver sits in the donor car's seat`, and (a warning)
     `[Driver] <Key>: driver_anims.dra has no ride_sportbike pose: no rider (the driver sits in the donor car's seat)`
@@ -250,3 +320,4 @@ is paused, the driver holds its last pose.
   - `[Driver] new body for <Car>`
   - `[Driver] shift <n> -> <m> (hand to the knob | shift clip arm)`
   - `[Driver] crash jolt (hits <n>)`
+  - On a bike, each time the rider's state changes: `[Driver] ride: <cruise|standstill (foot down)|launch|tuck|hard braking|braking, leg out|knee down|hang-off> (<speed> m/s, lean <n> deg, throttle <x>, brake <x>)`

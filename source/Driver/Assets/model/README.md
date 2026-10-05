@@ -10,7 +10,29 @@ blender -b --factory-startup --python build_driver.py -- [--out DIR] [--no-fbx]
 blender -b DIR/driver.blend --python preview.py -- <previewdir> [standing seated hands eye lod1 detail handortho]
 blender -b DIR/driver.blend --python preview.py -- <previewdir> none --cockpit <cockpit_X.dcm> <X.cfg>
 python drm_io.py driver.drm driver_anims.dra     # format check, ends with RESULT: OK
+python anim_clips.py --ride                      # (re)writes ride_sportbike into driver_anims.dra, every other clip kept
+blender -b driver.blend --python preview_ride.py -- <previewdir> [--csm <dir with the Bikes .csm models>]
 ```
+
+## Sport-bike riding pose (`ride_sportbike`, Driver 0.3.0)
+
+`ride_sportbike` is a base pose like `seated_base`: one frame, every bone's local rotation and the pelvis position
+(flags 4). It isn't keyframed in Unreal. `anim_clips.py` solves it in plain Python, in Unity space, from the A-pose
+(`ride_clip`) on the Bikes plugin's S1000RR sockets (`BIKES`):
+
+- **Torso (`RIDE_SPORTBIKE`):** the pelvis is tilted 26° forward and the spine is pitched 52° from vertical
+  (spread 40/30/30). The neck stays 24° forward and the head looks 6° down, so the chin is over the tank. The
+  shoulders reach 8° forward.
+- **Fit:** the hip joints go 0.10 m above the seat. The balls of the feet go on the pegs with the heel up, and the
+  knees are swung out to ±0.20 m. The hands go on the grips with the palm down and the elbows out.
+
+`ride_fit` / `ride_frame` are the same steps and numbers as the plugin's `Solver.FitBike` / `FrameBike`
+(`SolverBike.cs`), including hang-off. An offline run of the C# solver matches them to the millimetre.
+
+`build_driver.py` writes the pose next to `seated_base` and `breathe_add`, and `fbx_to_dra.py` keeps it.
+`preview_ride.py` renders the pose on each bike, upright and hanging off at 25° and 40°, on a stand-in built from
+the sockets. With `--csm`, it also uses the real bike model (read-only), and it prints the shortfalls and the knee and
+elbow positions.
 
 ## Animation clips
 
@@ -66,8 +88,9 @@ the plugin uses: eye, wheel and seat, then the reach order (grip angle, clavicle
 | `build_driver.py` | the mesh, UVs, atlases, armature and weights, LOD0/LOD1, the seated solve and the export |
 | `drm_io.py` | `.drm` / `.dra` writer, reader and checker (plain Python); the format is in its docstring |
 | `preview.py` | renders and an overlap report for the seated pose |
-| `driver.drm`, `driver_anims.dra` | runtime model and clips (`seated_base`, `breathe_add` + the 12 clips below) |
-| `anim_clips.py` | the 12 clips as original keyframes (plain Python), shared by every tool below |
+| `driver.drm`, `driver_anims.dra` | runtime model and clips (`seated_base`, `breathe_add`, `ride_sportbike` + the 12 clips below) |
+| `anim_clips.py` | the 12 clips as original keyframes (plain Python), shared by every tool below; the `ride_sportbike` pose and the bike-rider solve (`--ride`) |
+| `preview_ride.py` | Blender: renders of `ride_sportbike` on a stand-in bike from the Bikes sockets (optionally the real `.csm`) |
 | `ue_anims.py` | Unreal Engine 5.8 (headless): AnimSequences on the imported skeleton, FBX export |
 | `fbx_to_dra.py` | Blender (headless): the FBX exports to `driver_anims.dra`, with a round-trip check |
 | `preview_clips.py` | Blender: contact sheets of the clips as read from `driver_anims.dra`, limb check |

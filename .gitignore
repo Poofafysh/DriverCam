@@ -50,3 +50,5 @@ source/DriverCam/Assets/interiors/**/*.dcm
 # Sketchfab-sourced car/bike models and textures (CC-BY / unverified licences): kept local, never pushed
 source/CarSkins/Assets/*.csm
 source/CarSkins/Assets/*_basecolor.*
+source/Bikes/Assets/*.csm
+source/Bikes/Assets/*_basecolor.*

@@ -17,6 +17,11 @@ namespace Driver
     /// Enabled off = everything destroyed (objects, meshes, materials, textures); paused = the last pose stays and no input
     /// is read; 3 errors = everything destroyed and the onBeforeRender delegate removed for the session; OnDestroy = same.
     /// Purely visual and local: nothing in the game is written to.
+    ///
+    /// On a Bikes motorcycle (a "Bikes.Lean" node under the body, [Bike] Enabled) the driver is a rider instead: no seat
+    /// sources, the bike model's sockets (BikeSeat), Driver_Root parented under Bikes.Lean (it leans with the bike, and is
+    /// destroyed with the bike body: rebuilt when needed), shown in every view (head-less in DriverCam's driver view),
+    /// Solver.FitBike / FrameBike. Leaving bike mode ([Bike] Enabled off, a car) unparents Driver_Root and re-fits.
     /// </summary>
     public class Runner : MonoBehaviour
     {
@@ -60,6 +65,16 @@ namespace Driver
         private static readonly AnimIn AnimOff = new AnimIn { JoltT = -1f, CelebT = -1f };
 
         private string _folder, _pluginDir, _configDir;
+
+        // 0.3.0 bike rider (Bikes plugin): the bike's lean frame, its bars (when Bikes has them), the model key
+        private Transform _lean, _bars;
+        private string _bikeKey;
+        private bool _bikeMode, _bikeRechecked;
+        private float _bodyAt;
+        private BikeSeat _bikeSeat;
+        private IntPtr _parentPtr;
+        private Vec _barsPivot;
+        private string _noRideLogged, _bikeOffLogged;
 
         private void Awake()
         {
@@ -113,13 +128,16 @@ namespace Driver
             _view = view;
             _turnInput = turn;
 
-            if (now >= _nextSeat) { _nextSeat = now + 0.5f; ResolveSeat(now); }
+            BikeMode(now);
+            if (now >= _nextSeat) { _nextSeat = now + 0.5f; if (_bikeMode) ResolveBike(); else ResolveSeat(now); }
 
+            // a car: hidden in chase views by default (opaque windows); a bike: the rider shows in every view
             bool want = _fitted && view != GameApi.View.None
-                     && (view == GameApi.View.Driver ? Plugin.ShowInDriverView.Value : Plugin.ShowInChaseView.Value);
+                     && (view == GameApi.View.Driver ? Plugin.ShowInDriverView.Value : (_bikeMode || Plugin.ShowInChaseView.Value));
             if (want && !_rig.Alive) BuildObjects();
             if (_rig.Alive)
             {
+                ParentToBike();
                 _rig.SetDriverView(view == GameApi.View.Driver);
                 if (want != _rig.Visible && Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Driver] {(want ? "shown" : "hidden")} ({view} view)");
                 _rig.SetVisible(want);
@@ -195,6 +213,10 @@ namespace Driver
             }
             if (car == null) car = body.parent != null ? body.parent.gameObject.name : body.gameObject.name;
             _layer = body.gameObject.layer;
+            _bodyAt = Time.unscaledTime; _bikeRechecked = false;
+            string prevBike = _bikeKey;
+            FindBike(body);   // a bike keeps the donor car's name in _car (DriverCam's seat data with [Bike] Enabled off)
+            Unparent();
             // the game's toon outline material (as DriverCam's Cockpit.CaptureStyle finds it)
             if (_outlineTpl == null || _outlineTpl.WasCollected)
             {
@@ -239,21 +261,130 @@ namespace Driver
                 }
             }
             if (!_haveBox) { _boxMin = new Vec(-0.95f, 0f, -2.2f); _boxMax = new Vec(0.95f, 1.35f, 2.2f); _haveBox = true; }
-            bool newCar = car != _car;
+            bool newCar = car != _car || _bikeKey != prevBike;
             _car = car;
-            _seat = null; _fitted = false;
+            _seat = null; _bikeSeat = null; _fitted = false;
             if (_rig != null)
             {
                 _rig.SetVisible(false);
                 if (_rig.Root != null && _rig.Root.layer != _layer) _rig.DestroyObjects();   // rebuilt on the new car's layer
             }
             if (Plugin.LogEvents.Value || newCar)
-                Plugin.Log.LogInfo($"[Driver] {(hadCar ? (newCar ? "car changed to" : "new body for") : "car")} {car}{(_bodyMesh == null ? " (no body mesh found: unshaken body frame)" : "")}");
+                Plugin.Log.LogInfo($"[Driver] {(hadCar ? (newCar ? "car changed to" : "new body for") : "car")} {car}{(_bikeKey != null ? $" (a Bikes motorcycle: {_bikeKey})" : _bodyMesh == null ? " (no body mesh found: unshaken body frame)" : "")}");
+        }
+
+        // ------------------------------------------------------------------------------------------ the bike (Bikes plugin)
+        /// <summary>
+        /// Bikes builds each bike on a hidden donor car: the bike model sits under "Bikes.Lean" (child of the body node,
+        /// real size, the bike frame) in a body named "Bikes.&lt;Key&gt;_Body". Looked up once per body (and once more a
+        /// second later, in case the body was still being built), never per frame.
+        /// </summary>
+        private void FindBike(Transform body)
+        {
+            _lean = null; _bars = null; _bikeKey = null;
+            var lean = FindNamed(body, "Bikes.Lean");
+            if (lean == null && body.parent != null) lean = FindNamed(body.parent, "Bikes.Lean");
+            if (lean == null) return;
+            _lean = lean;
+            _bars = FindNamed(lean, "Bikes.Bars");
+            if (_bars != null) _barsPivot = Vec.From(_bars.localPosition);
+            for (var t = lean; t != null && _bikeKey == null; t = t.parent)
+            {
+                string n = t.gameObject.name;
+                int k = n.IndexOf("_Body", StringComparison.Ordinal);
+                if (n.StartsWith("Bikes.", StringComparison.Ordinal) && k > 6) _bikeKey = n.Substring(6, k - 6);
+            }
+            if (_bikeKey == null)
+            {
+                // fallback: the frame mesh's name (Bikes' model name, e.g. "BMW_S1000RR.Body")
+                var frame = FindNamed(lean, "Bikes.Frame");
+                var mf = frame != null ? frame.GetComponent<MeshFilter>() : null;
+                string mesh = mf != null && mf.sharedMesh != null ? mf.sharedMesh.name : "";
+                _bikeKey = mesh.Contains("S1000RR") ? "S1000RR" : mesh.Contains("SportBike") ? "SportBike" : "unknown";
+            }
+        }
+
+        private static Transform FindNamed(Transform under, string name)
+        {
+            var all = under.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < all.Length; i++)
+            {
+                var t = all[i];
+                if (t != null && t.gameObject.name == name) return t;
+            }
+            return null;
+        }
+
+        /// <summary>Rider mode on / off: a bike body, [Bike] Enabled and the ride_sportbike clip. A change re-fits.</summary>
+        private void BikeMode(float now)
+        {
+            if (_lean != null && _lean.WasCollected) { _lean = null; _bars = null; }
+            if (_lean == null && !_bikeRechecked && now - _bodyAt > 1f && _body != null)
+            {
+                _bikeRechecked = true;
+                FindBike(_body);
+                if (_bikeKey != null) { Plugin.Log.LogInfo($"[Driver] car {_car} is a Bikes motorcycle ({_bikeKey})"); }
+            }
+            bool on = _lean != null && Plugin.BikeEnabled.Value && _solver.HasRide;
+            if (_lean != null && !_solver.HasRide && _noRideLogged != _bikeKey)
+            {
+                _noRideLogged = _bikeKey;
+                Plugin.Log.LogWarning($"[Driver] {_bikeKey}: driver_anims.dra has no ride_sportbike pose: no rider (the driver sits in the donor car's seat)");
+            }
+            if (_lean != null && !Plugin.BikeEnabled.Value && _bikeOffLogged != _bikeKey)
+            {
+                _bikeOffLogged = _bikeKey;
+                Plugin.Log.LogInfo($"[Driver] {_bikeKey}: rider off ([Bike] Enabled): the driver sits in the donor car's seat");
+            }
+            if (on == _bikeMode) return;
+            _bikeMode = on;
+            _seat = null; _bikeSeat = null; _fitted = false; _nextSeat = 0f;
+            StopAnim();
+            if (!on) Unparent();
+            if (_rig != null) _rig.SetVisible(false);
+            if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Driver] bike rider mode: {(on ? "on" : "off")} ({_car})");
+        }
+
+        private void ResolveBike()
+        {
+            var b = BikeSeat.For(_bikeKey);
+            if (_bikeSeat != null && b.Same(_bikeSeat)) return;
+            _solver.FitBike(b);
+            _bikeSeat = b; _seat = null; _fitted = true;
+            if (_rig != null && _rig.Alive) ApplyFit();
+            if (_logged.Add(_bikeKey + "|bike|" + b.Source))
+            {
+                Plugin.Log.LogInfo($"[Driver] riding {_bikeKey}: rider on the bike (sockets from {b.Source}), hang-off {(Plugin.HangOff.Value ? "on" : "off")}, " +
+                                   $"grips {(_bars != null ? "turn with Bikes.Bars" : "fixed (the bike's bars don't turn)")}");
+                Plugin.Log.LogInfo($"Driver: {_bikeKey} seat from bike-{b.Source}, scale 1.00, reach short {_solver.ShortCm:0.0} cm" +
+                                   (_solver.ShortCm > 0.3f ? $" ({_solver.StretchShortCm:0.0} cm with the arms stretched up to 12%)" : "") +
+                                   $" (knees {_solver.KneeGapCm:0} cm apart)");
+            }
+        }
+
+        /// <summary>Driver_Root under Bikes.Lean at the bike origin (once per build / bike).</summary>
+        private void ParentToBike()
+        {
+            if (!_bikeMode || _lean == null || _rig.RootT == null) return;
+            if (_parentPtr == _lean.Pointer) return;
+            _rig.RootT.SetParent(_lean, false);
+            _rig.RootT.localPosition = FM.V3(0f, 0f, 0f);
+            _rig.RootT.localRotation = Quat.Identity.U;
+            _rig.RootT.localScale = FM.V3(1f, 1f, 1f);
+            _parentPtr = _lean.Pointer;
+        }
+
+        private void Unparent()
+        {
+            if (_parentPtr == IntPtr.Zero) return;
+            _parentPtr = IntPtr.Zero;
+            if (_rig != null && _rig.Alive) _rig.RootT.SetParent(null, false);
         }
 
         private void ForgetCar()
         {
             _bodyPtr = IntPtr.Zero; _body = null; _bodyMesh = null; _seat = null; _fitted = false;
+            _lean = null; _bars = null; _bikeKey = null; _bikeSeat = null; _bikeMode = false; _parentPtr = IntPtr.Zero;
         }
 
         // ------------------------------------------------------------------------------------------ the seat
@@ -298,6 +429,8 @@ namespace Driver
         private void BuildObjects()
         {
             _rig.Build(_layer, _outlineTpl, _carMat, Plugin.ForceCpuSkin.Value, ref _selfTest);
+            _parentPtr = IntPtr.Zero;   // a new, unparented Driver_Root
+            ParentToBike();
             ApplyFit();
             if (Plugin.LogEvents.Value) Plugin.Log.LogInfo($"[Driver] driver objects built ({(_rig.Cpu ? "CPU" : "GPU")} skinning, layer {_layer})");
         }
@@ -316,9 +449,14 @@ namespace Driver
             if (_broken || _rig == null || !_fitted || !_rig.Visible || !_rig.Alive) return;
             try
             {
-                BodyFrame(out var pos, out var rot);
-                _rig.RootT.SetPositionAndRotation(pos.U, rot.U);
+                if (_bikeMode) { if (_parentPtr == IntPtr.Zero) return; }   // parented under Bikes.Lean: it moves with the bike
+                else
+                {
+                    BodyFrame(out var pos, out var rot);
+                    _rig.RootT.SetPositionAndRotation(pos.U, rot.U);
+                }
                 if (Time.timeScale <= 0f) return;   // paused: the last pose stays, no input read
+                if (_bikeMode) { RideFrame(); return; }
 
                 float dt = FM.Min(0.1f, Time.deltaTime);
                 _turn += (FM.Clamp(_turnInput, -1f, 1f) - _turn) * (1f - MathF.Exp(-10f * dt));   // DriverCam's own easing
@@ -339,6 +477,32 @@ namespace Driver
                 if (_rig.Cpu) _rig.CpuSkin(_solver.Scale);
             }
             catch (Exception e) { Fault(e); }
+        }
+
+        /// <summary>The rider's frame: the bike's lean (Bikes.Lean's roll about its forward axis), the bars' turn (when
+        /// Bikes has a Bikes.Bars node), HeadLook, the clip layers.</summary>
+        private void RideFrame()
+        {
+            float dt = FM.Min(0.1f, Time.deltaTime);
+            GameApi.Pedals(out float th, out float br);
+            float k = 1f - MathF.Exp(-12f * dt);
+            _throttle += (FM.Clamp01(th) - _throttle) * k;
+            _brake += (FM.Clamp01(br) - _brake) * k;
+            HeadLook(out float yaw, out float pitch);
+            var q = Quat.From(_lean.localRotation);
+            // lean = Bikes' roll about the lean frame's own forward axis (its yaw part, 0 or 180 deg, taken out)
+            var fwd = q * Vec.Fwd;
+            var rel = Quat.LookRotation(new Vec(fwd.x, 0f, fwd.z), Vec.Up).Inv * q;
+            float lean = 2f * MathF.Atan2(rel.z, rel.w) * (180f / MathF.PI);
+            if (lean > 180f) lean -= 360f; else if (lean < -180f) lean += 360f;
+            if (!float.IsFinite(lean) || MathF.Abs(lean) > 80f) lean = 0f;
+            bool bars = _bars != null && !_bars.WasCollected;
+            var bq = bars ? Quat.From(_bars.localRotation) : Quat.Identity;
+            AnimIn ain = AnimOff;
+            if (_animLive && Plugin.AnimEnabled.Value) { _anim.Step(dt, _brake, _speed < 0f ? 99f : _speed); ain = _anim.Out; }
+            _solver.FrameBike(lean, Plugin.HangOff.Value, bars, bq, _barsPivot, yaw, pitch, Time.time, in ain);
+            _rig.WriteBones(_solver.FrameBones);
+            if (_rig.Cpu) _rig.CpuSkin(_solver.Scale);
         }
 
         /// <summary>The body frame as rendered: the body mesh's pose with its rest offset removed (DriverView.BodyFrame), in plain maths.</summary>
@@ -383,7 +547,7 @@ namespace Driver
             if (_rig != null) _rig.DestroyAll();
             ForgetCar();
             StopAnim(); GameApi.ForgetAnim();
-            _car = null; _selfTest = 0; _logged.Clear();
+            _car = null; _selfTest = 0; _logged.Clear(); _noRideLogged = null; _bikeOffLogged = null;
             SeatSource.Forget();
             if (had || why != "switched off") Plugin.Log.LogInfo($"[Driver] driver removed ({why})");
         }

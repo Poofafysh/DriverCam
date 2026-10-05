@@ -13,7 +13,8 @@ in anim_clips.py (original keyframes on our own skeleton); this script only carr
 3. writes per mode (clips.json): additive = bone-local deltas against seated_base (flags 2), pose = full local
    rotations of the bones that move (flags 0), full = every bone's local rotation + pelvis position (flags 4); loops
    add flag 1 and leave out the closing key (it equals key 0);
-4. keeps seated_base and breathe_add from --keep (default: the current driver_anims.dra) at the front;
+4. keeps seated_base, breathe_add and (when there) ride_sportbike from --keep (default: the current driver_anims.dra) at
+   the front;
 5. round-trip check: every clip against anim_clips.pose() evaluated directly in Unity space; prints the largest bone
    error (degrees) per clip and ends with RESULT: OK (all < 0.5 deg, Kabsch residual < 1 mm) or FAIL.
 """
@@ -53,8 +54,8 @@ d = drm_io.read_drm(DRM)
 names = [b[0] for b in d["skel"]]; parents = [b[1] for b in d["skel"]]
 sk = A.Skel(names, parents, [b[2] for b in d["skel"]], [b[3] for b in d["skel"]])
 rest_wp, rest_wq = sk.fk(sk.rest_lp, sk.rest_lq)
-kept = [c for c in drm_io.read_dra(KEEP) if c["name"] in ("seated_base", "breathe_add")]
-if [c["name"] for c in kept] != ["seated_base", "breathe_add"]:
+kept = [c for c in drm_io.read_dra(KEEP) if c["name"] in ("seated_base", "breathe_add", "ride_sportbike")]
+if [c["name"] for c in kept][:2] != ["seated_base", "breathe_add"]:
     raise SystemExit("RESULT: FAIL %s has no seated_base + breathe_add" % KEEP)
 seat_lp, seat_lq = list(sk.rest_lp), list(sk.rest_lq)
 for (b, ch), (q, p) in zip(kept[0]["tracks"], kept[0]["frames"][0]):

@@ -2,9 +2,10 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a 3D racing driver sits in your car. The driver's hands hold
 DriverCam's steering wheel and turn it with you, the right foot works the pedal, and the head follows HeadLook. In
-DriverCam's driver view you look down at your own body, arms and gloves on the wheel.
+DriverCam's driver view you look down at your own body, arms and gloves on the wheel. On one of the Bikes plugin's
+motorcycles the driver rides it instead (0.3.0).
 
-Current version: **0.2.0**.
+Current version: **0.3.0**.
 
 ## What it changes
 
@@ -73,6 +74,67 @@ event by itself). `Anim.Enabled` off gives the 0.1 driver (breathing only).
 Measured on the shipped cockpits, the hands sit on the rim on every car except Justice. Justice's wheel is 0.75 m from
 the eye, so the hands stay about 4 cm short even with the arms stretched. The log says so.
 
+## Riding a bike (0.3.0)
+
+When your vehicle is one of the Bikes plugin's motorcycles (BMW S1000RR, Sport Bike), the driver becomes a rider.
+
+- **How a bike is recognised.** Bikes builds each bike on a hidden donor car and puts the bike model under a node
+  named `Bikes.Lean` (under the body node, in a body named `Bikes.<Key>_Body`). Driver looks for that node once per
+  car body (and once more a second later). The model key comes from the body's name, or else from the frame mesh's
+  name. Driver doesn't need Bikes' code and reads nothing from the game for this.
+- **Where the rider goes.** Driver uses the bike's sockets in the bike frame (metres, origin on the ground midway
+  between the axles, +z forward). If Bikes publishes AppDomain data `rogue.bikes.rider.<Key>`, Driver uses that
+  (`float[11]`: seat xyz, right grip xyz, right peg xyz, hip height above the seat, knee half-width). Otherwise it
+  uses its own table (the Bikes author's numbers):
+
+  | Bike | Seat | Grips | Pegs |
+  |---|---|---|---|
+  | S1000RR | (0, 0.82, -0.18) | (±0.32, 0.86, 0.38) | (±0.17, 0.36, -0.30) |
+  | Sport Bike | (0, 0.85, -0.20) | (±0.33, 0.90, 0.40) | (±0.18, 0.38, -0.32) |
+
+  An unknown model uses the S1000RR's sockets, and the log says so.
+- **The pose.** The base pose is the clip `ride_sportbike` in `driver_anims.dra`. It's solved in
+  `Assets/model/anim_clips.py`, with the same steps and numbers as the plugin. The torso is pitched forward 52°
+  (the pelvis 26°), the chin is over the tank, the eyes look up the road, and the shoulders reach forward. The rider
+  is at scale 1 (1.76 m).
+- **The fit**, once per bike:
+  - The hip joints go 0.10 m above the seat point.
+  - Each leg is placed by two-bone IK. The ball of the foot is on the peg with the heel up, and the knee is swung out
+    to ±0.20 m (against the tank).
+- **Every frame:**
+  - Both hands go onto the grips by two-bone IK. The elbows are bent and out, the palm is down and the fingers point
+    forward. An arm that is short is stretched by up to 12%.
+  - The head turns with HeadLook. It also rolls 30% of the lean back toward the horizon.
+  - The clip layers work as in a car: `idle_seated`, `look_*`, `brake_brace` and `crash_jolt`. On a bike,
+    `celebrate` is a right-hand fist pump over the shoulder (by IK), and the left hand stays on its grip. There is no
+    shift hand and no steering clip.
+- **Leaning.** `Driver_Root` is parented under `Bikes.Lean` (the bike frame, real size), so the rider leans with the
+  bike and moves with it exactly.
+- **Hang-off** (`Bike.HangOff`, on by default). Driver reads the lean from `Bikes.Lean`'s roll.
+  - The hips slide to the inside, up to 0.15 m, and are fully across at 30° of lean. The pelvis rolls 6° and the
+    upper body 3°.
+  - Past 30°, the upper body leans in up to 12° more (all of it by 45°).
+  - The inside knee opens by 0.12 m.
+- **Steering.** The bike model's bars don't turn: Bikes turns only the front wheel (`Bikes.SteerF`). So the hands stay
+  on the fixed grips. If Bikes adds a `Bikes.Bars` node (pivot on the steering axis, local rotation = the bars' turn),
+  Driver turns the grips with it, with no Driver change.
+- **Views.** On a bike, the rider shows in every view, because a bike has no body to hide it.
+  - In DriverCam's driver view the head is left out, as in a car (`Look.ShowInDriverView`).
+  - DriverCam has no bike cockpit. It fits its cockpit and eye point to the hidden donor car (the Saber by default), so
+    the camera is not at the rider's eyes. The Bikes README lists this as untested.
+  - Driver ignores DriverCam's seat data on a bike.
+- **Exit paths.** Driver_Root is a child of the bike, so it is destroyed with the bike body (death, restart, car change)
+  and rebuilt when needed. Switching to a car, or `Bike.Enabled` off, unparents it and re-fits it to the car seat. With
+  `Bike.Enabled` off, the driver sits in the donor car's seat, hidden in the chase view as in any car.
+- **Measured** (offline: the plugin's solver against the shipped `driver_anims.dra`):
+  - Both bikes: the hands are exactly on the grips (0 cm short) and the knees are 40 cm apart.
+  - S1000RR: the eyes are at 1.40 m.
+  - Full hang-off at 40°: the eyes move 0.27 m to the inside, and the hands still reach the grips.
+- **Previews.** `Assets/model/preview_ride.py` (Blender) renders the pose on a stand-in built from the sockets, with
+  the real bike model as an option.
+- **Limit.** The knees sit about 0.53 m high, below the tank's knee pads. That's the geometry: the given pegs are only
+  0.12 m behind the seat point, and the ball of the foot is on the peg.
+
 ## In game
 
 Driver has no hotkeys. Switch it on or off with `General.Enabled`, in the config file or in RogueHub. While the game
@@ -88,6 +150,8 @@ is paused, the driver holds its last pose.
 | `Anim.Enabled` | true | the animation clips above; off = breathing only (as 0.1) |
 | `Anim.ShiftHand` | true | the right hand to the gear knob on a gear change |
 | `Anim.Celebrate` | true | the fist pump when you complete a level |
+| `Bike.Enabled` | true | on a Bikes motorcycle the driver rides it (shown in every view); off = seated in the hidden donor car |
+| `Bike.HangOff` | true | hang off in corners (hips up to 15 cm inside, upper body up to 12° more past 30° of lean) |
 | `Look.Outline` | false | the game's cartoon outline (off by default: in driver view an outline hull this close to the camera can fill the screen) (a copy of your car's outline material); applies the next time the driver is built |
 | `Debug.LogEvents` | false | log camera-mode changes, re-fits, show / hide, object builds and animation events |
 | `Debug.ForceCpuSkin` | false | skin on the CPU instead of the GPU (used automatically when the self-test fails) |
@@ -109,6 +173,7 @@ is paused, the driver holds its last pose.
   | `GameApi.cs` | the only file that touches game types; checked by name at load |
   | `RigFile.cs` | `.drm` / `.dra` reader, plain C#; every index is checked |
   | `Solver.cs` | the fit, the IK and the clip layers, in plain maths (`Maths.cs`), about 15-100 µs a frame |
+  | `SolverBike.cs` | the bike rider: `BikeSeat` (sockets per model), `FitBike` / `FrameBike` (legs, grips, hang-off) |
   | `Anim.cs` | clip sampler (`ClipSampler`), the frame inputs (`AnimIn`) and the game events to clip times (`AnimEvents`) |
   | `SeatSource.cs` | the seat sources |
   | `DriverRig.cs` | the Unity objects |
@@ -144,7 +209,7 @@ is paused, the driver holds its last pose.
 ## Log (`/game-log Driver`)
 
 - At startup:
-  - `Driver x.y.z loaded: a driver in your car (driver view <on|off>, chase view <on|off>, animations <on|off>).`
+  - `Driver x.y.z loaded: a driver in your car (driver view <on|off>, chase view <on|off>, animations <on|off>, bike rider <on with hang-off|on|off>).`
   - `[Driver] game check OK: camera controller, car body<, pedals>`
   - `[Driver] animation triggers: gear <yes|no>, speed <yes|no>, collisions <yes|no>, level completed <yes|no>` (a warning listing what is
     missing when one is not found; only that animation is off)
@@ -163,6 +228,13 @@ is paused, the driver holds its last pose.
   - Without a fitted DriverCam cockpit: `[Driver] <Car>: DriverCam files not used (<reason>)`.
   - The shift hand: `[Driver] <Car>: shift hand to the gear knob (in reach | in reach with a ... deg lean | ... cm out of reach after a ... deg lean: the hand reaches toward it)`,
     `[Driver] <Car>: no gear knob in the cockpit: no shift hand` or `[Driver] <Car>: no DriverCam cockpit: the shift clip's own arm on a gear change`.
+- On a Bikes motorcycle (once per bike and socket source):
+  - `[Driver] car changed to <Car> (a Bikes motorcycle: <Key>)` (or `[Driver] car <Car> is a Bikes motorcycle (<Key>)` when the
+    bike node showed up a second after the body)
+  - `[Driver] riding <Key>: rider on the bike (sockets from table|bikes|table (unknown model: S1000RR sockets)), hang-off <on|off>, grips <fixed (the bike's bars don't turn)|turn with Bikes.Bars>`
+  - `Driver: <Key> seat from bike-<source>, scale 1.00, reach short 0.0 cm (knees 40 cm apart)`
+  - `[Driver] <Key>: rider off ([Bike] Enabled): the driver sits in the donor car's seat`, and (a warning)
+    `[Driver] <Key>: driver_anims.dra has no ride_sportbike pose: no rider (the driver sits in the donor car's seat)`
 - When a level is completed: `[Driver] celebrate (level completed)`.
 - On car changes and teardown:
   - `[Driver] car changed to <Car>`
@@ -170,6 +242,7 @@ is paused, the driver holds its last pose.
   - Errors: `[Driver] error (n/3): ...`. After 3 errors: `[Driver] switched off for this session after repeated errors (driver removed).`
 - With LogEvents on (Debug section):
   - `[Driver] camera mode '<id>' -> Driver|Hood|Chase|Other`
+  - `[Driver] bike rider mode: <on|off> (<Car>)`
   - `[Driver] shown|hidden (<view> view)`
   - `[Driver] driver objects built (<GPU|CPU> skinning, layer <n>)`
   - `[Driver] <Car>: re-fit (<source> changed), ...`

@@ -8,7 +8,8 @@ Builds (no external meshes, no sample content):
     lowerarm_twist_01/hand + 15 finger bones per side, thigh/calf/foot/ball per side), A-pose rest
   * LOD0 (real fingers) and LOD1 (mitten hands, fewer loops); helmet + visor rigid on `head`
   * palette atlases (PNG) generated here
-  * poses: rest A-pose, seated driving pose (solved with the same fit/IK rules the plugin will use), breathing layer
+  * poses: rest A-pose, seated driving pose (solved with the same fit/IK rules the plugin will use), breathing layer,
+    the sport-bike riding pose preset ride_sportbike (anim_clips.ride_clip, on the Bikes plugin's S1000RR sockets)
 Writes into DIR (default: this folder):
   driver.drm, driver_anims.dra          runtime files (see drm_io.py for the format)
   driver.fbx                            for Unreal Engine (one skeletal mesh, actions A_Pose, Seated_Drive, Seated_Breathe)
@@ -27,6 +28,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import drm_io
+import anim_clips
 
 HS = 1.1          # hand scale (toon read)
 C3 = Matrix(((-1, 0, 0), (0, 0, 1), (0, -1, 0)))
@@ -1131,7 +1133,12 @@ def main(outdir, do_fbx=True):
         d = breathe(P, seated, f / 15.0)
         bfr.append([(q_xyzw((C3 @ d[b].to_matrix() @ C3.transposed()).to_quaternion().normalized()), None) for b, _ in btr])
     clip_br = dict(name="breathe_add", fps=15.0, flags=1 | 2, tracks=btr, frames=bfr)
-    dra_size = drm_io.write_dra(os.path.join(outdir, "driver_anims.dra"), [clip_base, clip_br])
+    # sport-bike riding pose preset (plain Python in Unity space, the plugin's Solver.FitBike rules; anim_clips.py)
+    ride_sk = anim_clips.Skel([b[0] for b in skel], [b[1] for b in skel], [b[2] for b in skel], [b[3] for b in skel])
+    clip_ride, _, ride_rep = anim_clips.ride_clip(ride_sk, {n: (b, tuple(p), tuple(q)) for n, b, p, q in socks})
+    fitlog["ride"] = {k: v for k, v in ride_rep.items() if k in ("eye", "torso_deg", "arm_l", "leg_l")}
+    # (the 12 Unreal clips are added by fbx_to_dra.py, which keeps these three)
+    dra_size = drm_io.write_dra(os.path.join(outdir, "driver_anims.dra"), [clip_base, clip_br, clip_ride])
     json.dump(dict(note="Sockets for the Driver character (not bones). Unity-space bone-local frames; blender_rest_pos in "
                         "Blender metres, character facing -Y.", sockets=sj),
               open(os.path.join(outdir, "driver_sockets.json"), "w"), indent=1)

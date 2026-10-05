@@ -38,6 +38,20 @@ namespace Driver
         private readonly RigFile.Clip _breathe;
         private readonly int[] _breatheBones;
 
+        // 0.2.0 clip layers (null = not in driver_anims.dra: that layer is skipped)
+        private readonly ClipSampler _idle, _steerL, _steerR, _lookL, _lookR, _brace, _jolt, _shift, _celeb;
+        private readonly bool[] _ikArm;          // upperarm / lowerarm / lowerarm_twist_01 / hand: the IK owns them
+        private readonly Quat _knobGrip;          // the right hand's grip-socket frame on top of a gear knob (palm down)
+        private readonly Quat[] _armIk = new Quat[4], _armAlt = new Quat[4];
+        private readonly Vec[] _armIkP = new Vec[3];
+        public float JoltLength => _jolt != null ? _jolt.Length : 0f;
+        public float CelebLength => _celeb != null ? _celeb.Length : 0f;
+        public string ClipSummary { get; }
+
+        /// <summary>How far look_right turns the face at 0, 1/8 .. 8/8 of the clip (measured on the fitted base at each fit,
+        /// about 79 deg at the end): HeadLook's yaw is mapped through it onto the clip time, the rest is procedural.</summary>
+        private readonly float[] _lookTab = new float[9];
+
         /// <summary>Bones the per-frame pose changes (written every frame); the rest are written once per fit.</summary>
         public readonly int[] FrameBones;
 
@@ -46,6 +60,10 @@ namespace Driver
         private Vec _w; private Quat _wq = Quat.Identity; private float _rim = 0.185f;
         private Quat _headLevel = Quat.Identity;
         private float _lookIntoTurn;
+        /// <summary>1 = the cockpit's gear knob (root space in _knob), -1 = cockpit unknown (shift clip's arm), 0 = no shift hand.</summary>
+        public int KnobMode;
+        public float KnobShortCm, KnobLean;
+        private Vec _knob;
 
         public Solver(RigFile f)
         {
@@ -102,9 +120,39 @@ namespace Driver
                 }
             }
 
+            _ikArm = new bool[N];
+            for (int s = 0; s < 2; s++) { _ikArm[_upper[s]] = true; _ikArm[_lower[s]] = true; _ikArm[_twist[s]] = true; _ikArm[_hand[s]] = true; }
+            _idle = ClipSampler.Make(f, "idle_seated", true);
+            _steerL = ClipSampler.Make(f, "steer_left", true); _steerR = ClipSampler.Make(f, "steer_right", true);
+            _lookL = ClipSampler.Make(f, "look_left", true); _lookR = ClipSampler.Make(f, "look_right", true);
+            if (_lookL == null || _lookR == null) _lookL = _lookR = null;
+            if (_steerL == null || _steerR == null) _steerL = _steerR = null;
+            _brace = ClipSampler.Make(f, "brake_brace", true);
+            _jolt = ClipSampler.Make(f, "crash_jolt", true);
+            _shift = ClipSampler.Make(f, "shift", false);
+            _celeb = ClipSampler.Make(f, "celebrate", false);
+            var have = new System.Collections.Generic.List<string>();
+            if (_idle != null) have.Add("idle"); if (_steerL != null) have.Add("steer"); if (_lookL != null) have.Add("look");
+            if (_brace != null) have.Add("brake brace"); if (_jolt != null) have.Add("crash jolt"); if (_shift != null) have.Add("shift");
+            if (_celeb != null) have.Add("celebrate");
+            ClipSummary = have.Count > 0 ? string.Join(", ", have) : "none";
+
+            // right hand on a knob from above: palm down and a little forward, fingers forward-left (same axes as ArmSide)
+            {
+                var y1 = new Vec(0f, -0.97f, 0.24f).Normalized;
+                var z1 = new Vec(-0.6f, 0f, 0.8f);
+                z1 = (z1 - y1 * Vec.Dot(z1, y1)).Normalized;
+                var x1 = Vec.Cross(y1, z1);
+                _knobGrip = (Quat.FromAxes(x1, y1, z1) * _grip[1].rot.Inv).Normalized;
+            }
+
             var fb = new System.Collections.Generic.List<int> { _sp2, _sp3, _neck, _head, _footR };
             for (int s = 0; s < 2; s++) { fb.Add(_clav[s]); fb.Add(_upper[s]); fb.Add(_lower[s]); fb.Add(_twist[s]); fb.Add(_hand[s]); }
             if (_breatheBones != null) foreach (var b in _breatheBones) if (b >= 0 && !fb.Contains(b)) fb.Add(b);
+            fb.Add(_sp1);   // the knob lean
+            foreach (var cs in new[] { _idle, _steerL, _steerR, _lookL, _lookR, _brace, _jolt, _shift, _celeb })
+                if (cs != null) foreach (var b in cs.Bones) if (b >= 0 && !fb.Contains(b)) fb.Add(b);
+            fb.Sort();
             FrameBones = fb.ToArray();
         }
 
@@ -272,6 +320,66 @@ namespace Driver
             Load(_snapLp, _snapLq);
             LeanProt(Lean, Prot);
             Save(_baseLp, _baseLq);
+
+            // look_right's face turn over its length (for mapping HeadLook's yaw onto it)
+            if (_lookR != null)
+            {
+                float f0 = FaceYaw(), top = 0f;
+                for (int i = 0; i <= 8; i++)
+                {
+                    Load(_baseLp, _baseLq);
+                    Layer(_lookR, i / 8f * _lookR.Length, 1f);
+                    FK();
+                    top = MathF.Max(top, FaceYaw() - f0);   // kept rising, so the inverse lookup is well defined
+                    _lookTab[i] = i == 0 ? 0f : top;
+                }
+                Load(_baseLp, _baseLq);
+            }
+
+            // the shift hand: the cockpit's knob, or (cockpit unknown) the shift clip's own arm, or none (no knob: automatic)
+            KnobMode = st.ShifterState == 1 ? 1 : st.ShifterState < 0 && _shift != null ? -1 : 0;
+            KnobShortCm = 0f; KnobLean = 0f;
+            if (KnobMode == 1)
+            {
+                _knob = st.Shifter / s;
+                CaptureArms();
+                float sh0 = KnobReach(0f);
+                // out of reach: lean the torso toward it (the shoulder moves ~0.45 per radian), up to 14 deg
+                KnobLean = Math.Clamp(sh0 / 0.45f * (180f / MathF.PI), 0f, 14f);
+                Load(_baseLp, _baseLq);
+                if (KnobLean > 0f) KnobLeanApply(1f);
+                CaptureArms();
+                KnobShortCm = KnobReach(0f) * s * 100f;
+                Load(_baseLp, _baseLq);
+            }
+        }
+
+        /// <summary>The head's facing (its rest forward carried by its world rotation) as a yaw in degrees, + = right.</summary>
+        private float FaceYaw()
+        {
+            var fw = (Wq[_head] * _restWq[_head].Inv) * Vec.Fwd;
+            return MathF.Atan2(fw.x, fw.z) * (180f / MathF.PI);
+        }
+
+        /// <summary>Right hand onto the knob top (push: +1 pulled back, -1 pushed forward, 3.5 cm), from _armStart.</summary>
+        private float KnobReach(float push)
+        {
+            var grip = _knob + new Vec(0f, 0.02f, -0.035f * push);
+            return Reach(1, grip, _knobGrip, new Vec(0.45f, -0.25f, -0.25f), true);
+        }
+
+        /// <summary>Lean spine_01..03 toward the knob by KnobLean * w (40/30/30), head kept level.</summary>
+        private void KnobLeanApply(float w)
+        {
+            var h = _knob - Wp[_sp1]; h.y = 0f;
+            if (h.Length < 1e-3f) return;
+            var ax = Vec.Cross(Vec.Up, h.Normalized);
+            float a = KnobLean * w;
+            var hq = Wq[_head];
+            RotateWorld(_sp1, Quat.AngleAxis(a * 0.4f, ax));
+            RotateWorld(_sp2, Quat.AngleAxis(a * 0.3f, ax));
+            RotateWorld(_sp3, Quat.AngleAxis(a * 0.3f, ax));
+            SetWorldRot(_head, hq);
         }
 
         private float Try(float[] prm)
@@ -343,8 +451,15 @@ namespace Driver
             var y1 = Fw * 0.3f - radial;                       // palm: at the hub, a little toward the dash
             y1 = (y1 - z1 * Vec.Dot(y1, z1)).Normalized;
             var x1 = Vec.Cross(y1, z1);
+            var H = (Quat.FromAxes(x1, y1, z1) * _grip[side].rot.Inv).Normalized;
+            return Reach(side, grip, H, new Vec(side == 0 ? -0.35f : 0.35f, -0.5f, 0.10f), stretch);
+        }
+
+        /// <summary>The arm from its base rotations onto a grip point with the hand frame H (two-bone IK, pole = shoulder +
+        /// poleOff, optional 12% stretch, half the wrist twist on lowerarm_twist_01). Returns how far it is still short.</summary>
+        private float Reach(int side, Vec grip, Quat H, Vec poleOff, bool stretch)
+        {
             var g = _grip[side];
-            var H = (Quat.FromAxes(x1, y1, z1) * g.rot.Inv).Normalized;
             var wrist = grip - H * g.pos;
             int up = _upper[side], lo = _lower[side], hd = _hand[side], tw_ = _twist[side];
             // start from the base arm (lengths and rotations), so every call gives the same answer for the same input
@@ -362,7 +477,7 @@ namespace Driver
                     FKFrom(lo);
                 }
             }
-            var pole = sh + new Vec(side == 0 ? -0.35f : 0.35f, -0.5f, 0.10f);
+            var pole = sh + poleOff;
             float shortBy = Ik2(up, lo, hd, wrist, pole);
             SetWorldRot(hd, H);
             // half the forearm twist onto lowerarm_twist_01 (bone axis = local z)
@@ -400,11 +515,19 @@ namespace Driver
         }
 
         // ------------------------------------------------------------------------------------------ per frame
-        /// <summary>The frame's pose into Lp / Lq (FrameBones changed). Angles in degrees; t = seconds for the breathing loop.</summary>
-        public void Frame(float spinDeg, float turn, float headYaw, float headPitch, float throttle, float brake, float t)
+        /// <summary>
+        /// The frame's pose into Lp / Lq (FrameBones changed). Angles in degrees; t = seconds for the idle loop.
+        /// Order: fitted base; idle_seated (or breathe_add with the clips off); torso layers (steer scrubbed by the turn,
+        /// look by the head yaw, brake_brace, crash_jolt, the torso part of shift / celebrate); the knob lean; the rest of
+        /// the head turn + pitch; both hands on the rim (IK); the right arm blended toward the knob / the clip arm; the foot.
+        /// Arm bones are never layered (the IK owns them). No allocations.
+        /// </summary>
+        public void Frame(float spinDeg, float turn, float headYaw, float headPitch, float throttle, float brake, float t, in AnimIn a)
         {
             Load(_baseLp, _baseLq);
-            if (_breathe != null)
+            bool clips = a.On;
+            if (clips && _idle != null) Layer(_idle, t, 1f);
+            else if (_breathe != null)
             {
                 var c = _breathe;
                 float fr = t * c.Fps;
@@ -421,19 +544,111 @@ namespace Driver
                                        new Quat(c.Data[o1], c.Data[o1 + 1], c.Data[o1 + 2], c.Data[o1 + 3]), u);
                     Lq[b] = (Lq[b] * d).Normalized;
                 }
-                FK();
             }
-            // head look: HeadLook's yaw / pitch (+ DriverCam's look into the turn), 35% neck, 65% head
+            // head look: HeadLook's yaw / pitch (+ DriverCam's look into the turn)
             float yaw = Math.Clamp(headYaw + turn * _lookIntoTurn, -80f, 80f), pitch = Math.Clamp(headPitch, -40f, 40f);
+            float celebW = 0f, shiftW = 0f;
+            if (clips)
+            {
+                float tn = Math.Clamp(turn, -1f, 1f), at = MathF.Abs(tn);
+                if (_steerL != null && at > 0.01f) { var c = tn > 0f ? _steerR : _steerL; Layer(c, at * c.Length, 1f); }
+                if (_lookL != null && MathF.Abs(yaw) > 0.05f && _lookTab[8] > 1f)
+                {
+                    // the clip carries the turn up to its full span (spine, neck and head together); beyond it the head turns on
+                    float ay = MathF.Abs(yaw), k = 1f, done = _lookTab[8];
+                    for (int i = 0; i < 8; i++)
+                        if (ay < _lookTab[i + 1])
+                        {
+                            float span = _lookTab[i + 1] - _lookTab[i];
+                            k = (i + (span > 1e-4f ? (ay - _lookTab[i]) / span : 0f)) / 8f; done = ay;
+                            break;
+                        }
+                    var c = yaw > 0f ? _lookR : _lookL;
+                    Layer(c, k * c.Length, 1f);
+                    yaw -= (yaw > 0f ? 1f : -1f) * done;
+                }
+                if (_brace != null && a.Brace > 0.001f) Layer(_brace, a.Brace * _brace.Length, 1f);
+                if (_jolt != null && a.JoltT >= 0f) Layer(_jolt, a.JoltT, 1f);
+                if (_celeb != null && a.CelebT >= 0f)
+                {
+                    celebW = MathF.Min(AnimEvents.Smooth(a.CelebT / 0.3f), AnimEvents.Smooth((_celeb.Length - a.CelebT) / 0.45f));
+                    if (celebW > 0.001f) Layer(_celeb, a.CelebT, celebW);
+                }
+                if (celebW <= 0.001f && KnobMode != 0 && a.ShiftW > 0.001f)
+                {
+                    shiftW = a.ShiftW;
+                    if (_shift != null) Layer(_shift, 0.25f + 0.17f * MathF.Abs(a.ShiftPush), shiftW);   // its shoulder / head part
+                }
+            }
+            FK();
+            if (shiftW > 0f && KnobMode == 1 && KnobLean > 0f) KnobLeanApply(shiftW);
             if (yaw != 0f || pitch != 0f)
             {
+                // 35% neck, 65% head
                 RotateWorld(_neck, Quat.AngleAxis(yaw * 0.35f, Vec.Up) * Quat.AngleAxis(-pitch * 0.35f, Vec.Right));
                 RotateWorld(_head, Quat.AngleAxis(yaw * 0.65f, Vec.Up) * Quat.AngleAxis(-pitch * 0.65f, Vec.Right));
             }
             ArmsFrame(spinDeg);
+            if (celebW > 0.001f) RightArmBlend(celebW, -1, a.CelebT, _celeb);
+            else if (shiftW > 0f)
+            {
+                if (KnobMode == 1) RightArmBlend(shiftW, 1, a.ShiftPush, null);
+                else if (_shift != null) RightArmBlend(shiftW, -1, 0.25f + 0.17f * MathF.Abs(a.ShiftPush), _shift);
+            }
             // right foot: toes down with the throttle (18 deg), a little less for the brake
             float press = MathF.Max(Math.Clamp(throttle, 0f, 1f) * 18f, Math.Clamp(brake, 0f, 1f) * 14f);
             if (press > 0.01f) RotateWorld(_footR, Quat.AngleAxis(press, Vec.Right));
+        }
+
+        /// <summary>Layers clip c at time ct with weight w onto Lq (no FK): additive tracks as deltas; a pose clip's tracks
+        /// as their change from seated_base. Arm bones are skipped (the IK owns them).</summary>
+        private void Layer(ClipSampler c, float ct, float w)
+        {
+            c.Seek(ct);
+            var bones = c.Bones;
+            for (int k = 0; k < bones.Length; k++)
+            {
+                int b = bones[k];
+                if (b < 0 || _ikArm[b]) continue;
+                var d = c.Rot(k);
+                if (!c.Additive) d = _clipLq[b].Inv * d;
+                if (w < 0.999f) d = Quat.Nlerp(Quat.Identity, d, w);
+                Lq[b] = (Lq[b] * d).Normalized;
+            }
+        }
+
+        /// <summary>
+        /// The right arm (after the rim IK) blended by w toward: mode 1 = the knob (IK, push -1..1), or mode -1 = clip c's own
+        /// arm rotations at time ct (relative to the clavicle; the twist as in seated_base). Local rotations nlerp'd, so the
+        /// hand travels on an arc between the rim and the target.
+        /// </summary>
+        private void RightArmBlend(float w, int mode, float ct, ClipSampler c)
+        {
+            int up = _upper[1], lo = _lower[1], tw = _twist[1], hd = _hand[1];
+            _armIk[0] = Lq[up]; _armIk[1] = Lq[lo]; _armIk[2] = Lq[tw]; _armIk[3] = Lq[hd];
+            _armIkP[0] = Lp[lo]; _armIkP[1] = Lp[tw]; _armIkP[2] = Lp[hd];
+            if (mode == 1)
+            {
+                KnobReach(Math.Clamp(ct, -1f, 1f));
+                _armAlt[0] = Lq[up]; _armAlt[1] = Lq[lo]; _armAlt[2] = Lq[tw]; _armAlt[3] = Lq[hd];
+                // Reach may have stretched the forearm: blend the lengths too
+                Lp[lo] = Vec.Lerp(_armIkP[0], Lp[lo], w); Lp[tw] = Vec.Lerp(_armIkP[1], Lp[tw], w); Lp[hd] = Vec.Lerp(_armIkP[2], Lp[hd], w);
+            }
+            else
+            {
+                c.Seek(ct);
+                int ku = c.Track(up), kl = c.Track(lo), kh = c.Track(hd);
+                _armAlt[0] = ku >= 0 ? c.Rot(ku) : _clipLq[up];
+                _armAlt[1] = kl >= 0 ? c.Rot(kl) : _clipLq[lo];
+                _armAlt[2] = _clipLq[tw];
+                _armAlt[3] = kh >= 0 ? c.Rot(kh) : _clipLq[hd];
+                Lp[lo] = Vec.Lerp(_armIkP[0], _restLp[lo], w); Lp[tw] = Vec.Lerp(_armIkP[1], _restLp[tw], w); Lp[hd] = Vec.Lerp(_armIkP[2], _restLp[hd], w);
+            }
+            Lq[up] = Quat.Nlerp(_armIk[0], _armAlt[0], w);
+            Lq[lo] = Quat.Nlerp(_armIk[1], _armAlt[1], w);
+            Lq[tw] = Quat.Nlerp(_armIk[2], _armAlt[2], w);
+            Lq[hd] = Quat.Nlerp(_armIk[3], _armAlt[3], w);
+            FKFrom(up);
         }
 
         /// <summary>CPU skinning matrices for bone b: v' = s * (Wp + D * (v - restWp)), D = Wq * restWq^-1.</summary>

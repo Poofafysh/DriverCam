@@ -23,10 +23,10 @@ namespace Driver
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.driver";
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
 
         internal static new ManualLogSource Log;
-        internal static ConfigEntry<bool> Enabled, ShowInDriverView, ShowInChaseView, Outline, LogEvents, ForceCpuSkin;
+        internal static ConfigEntry<bool> Enabled, ShowInDriverView, ShowInChaseView, Outline, LogEvents, ForceCpuSkin, AnimEnabled, ShiftHand, Celebrate;
 
         public override void Load()
         {
@@ -35,7 +35,10 @@ namespace Driver
             ShowInDriverView = Config.Bind("Look", "ShowInDriverView", true, "DriverCam's driver view: show your body, arms and hands on the wheel (the head is left out: the camera is at the eyes).");
             ShowInChaseView = Config.Bind("Look", "ShowInChaseView", false, "Chase and hood views: show the driver too. The game's cars have painted (opaque) windows, so the driver is hidden inside the body: off saves the drawing cost.");
             Outline = Config.Bind("Look", "Outline", false, "Draw the game's cartoon outline around the driver (a copy of your car's outline material). Off by default: in driver view the inverted outline hull can fill the screen (DriverCam strips the car's outline there for the same reason). Applies when the driver is next built (restart or Enabled off / on).");
-            LogEvents = Config.Bind("Debug", "LogEvents", false, "Log camera-mode changes, re-fits, show / hide and object builds.");
+            AnimEnabled = Config.Bind("Anim", "Enabled", true, "Animation clips (driver_anims.dra) layered under the steering-wheel IK: idle breathing and small head moves, a lean with the steering, the body turning with HeadLook's look, bracing on hard braking, a jolt when you crash. Off = the 0.1 driver (breathing only).");
+            ShiftHand = Config.Bind("Anim", "ShiftHand", true, "On a gear change the right hand leaves the wheel for the cockpit's gear knob and comes back (cars whose DriverCam cockpit has no knob keep both hands on the wheel). Needs [Anim] Enabled.");
+            Celebrate = Config.Bind("Anim", "Celebrate", true, "A fist pump when you complete a level. Needs [Anim] Enabled.");
+            LogEvents = Config.Bind("Debug", "LogEvents", false, "Log camera-mode changes, re-fits, show / hide, object builds and animation events (shift, crash jolt, celebrate).");
             ForceCpuSkin = Config.Bind("Debug", "ForceCpuSkin", false, "Skin the driver on the CPU instead of the GPU (used automatically when the GPU skinning self-test fails). Applies when the driver is next built.");
 
             try { GameApi.Check(); }
@@ -43,7 +46,7 @@ namespace Driver
             if (!GameApi.Ok) return;
             ClassInjector.RegisterTypeInIl2Cpp<Runner>();
             AddComponent<Runner>();
-            Log.LogInfo($"Driver {Version} loaded: a driver in your car (driver view {(ShowInDriverView.Value ? "on" : "off")}, chase view {(ShowInChaseView.Value ? "on" : "off")}).");
+            Log.LogInfo($"Driver {Version} loaded: a driver in your car (driver view {(ShowInDriverView.Value ? "on" : "off")}, chase view {(ShowInChaseView.Value ? "on" : "off")}, animations {(AnimEnabled.Value ? "on" : "off")}).");
         }
     }
 }

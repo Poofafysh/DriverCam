@@ -13,12 +13,15 @@ namespace Driver
         public Vec Eye, SeatTop, SeatBack, WheelPos;
         public Quat WheelRot = Quat.Identity;   // unspun: +Z column axis toward the dash, +Y up, +X the driver's right
         public float RimRadius = 0.185f, SteerAngle = 120f, Pitch, LookIntoTurn = 6f;
+        public Vec Shifter;             // top centre of the cockpit's gear knob (RL_ShiftKnob / ShifterKnob)
+        public int ShifterState = -1;   // 1 = knob found, 0 = the cockpit has none (automatic), -1 = cockpit unknown
 
         public bool Same(Seat o)
         {
             if (o == null || o.Source != Source) return false;
             const float e = 0.002f;
-            return Near(Eye, o.Eye, e) && Near(SeatTop, o.SeatTop, e) && Near(SeatBack, o.SeatBack, e) && Near(WheelPos, o.WheelPos, e)
+            return ShifterState == o.ShifterState && Near(Shifter, o.Shifter, e)
+                && Near(Eye, o.Eye, e) && Near(SeatTop, o.SeatTop, e) && Near(SeatBack, o.SeatBack, e) && Near(WheelPos, o.WheelPos, e)
                 && Math.Abs(WheelRot.x - o.WheelRot.x) + Math.Abs(WheelRot.y - o.WheelRot.y) + Math.Abs(WheelRot.z - o.WheelRot.z) + Math.Abs(WheelRot.w - o.WheelRot.w) < 0.004f
                 && Math.Abs(RimRadius - o.RimRadius) < e && Math.Abs(SteerAngle - o.SteerAngle) < 0.1f && Math.Abs(Pitch - o.Pitch) < 0.1f
                 && Math.Abs(LookIntoTurn - o.LookIntoTurn) < 0.1f;
@@ -180,9 +183,10 @@ namespace Driver
                 }
             }
             if (!bodyFrame || !hasEye) { err = "cockpit_" + car + ".dcm is not fitted to the car body"; return null; }
-            PartBox wheel = null, cushion = null, back = null;
+            PartBox wheel = null, cushion = null, back = null, knob = null;
             foreach (var p in parts)
             {
+                if ((p.Name == "RL_ShiftKnob" || p.Name == "ShifterKnob") && p.Any && !p.Pivot) knob = p;
                 if (p.Name == "SteeringWheel" && p.Pivot) wheel = p;
                 else if (p.Name == "RL_SeatDriver_Cushion" && p.Any) cushion = p;
                 else if (p.Name == "RL_SeatDriver_Back" && p.Any) back = p;
@@ -220,6 +224,19 @@ namespace Driver
                 Layout(cfg, back.Group, out sp, out sr, out ssz);
             }
             s.SeatBack = (sc + sp + sr * ((bPt - sc) * ssz)) * ms;
+            // gear knob (Driver 0.2.0 shift hand): top centre of its box, through its group's layout
+            s.ShifterState = 0;
+            if (knob != null)
+            {
+                var kTop = new Vec((knob.Min.x + knob.Max.x) * 0.5f, knob.Max.y, (knob.Min.z + knob.Max.z) * 0.5f);
+                var kc = GroupCentre(parts, knob.Group);
+                Layout(cfg, knob.Group, out var kp, out var kr, out var ksz);
+                var k = (kc + kp + kr * ((kTop - kc) * ksz)) * ms;
+                // ahead of the eye, below it and not far to its left (the right hand reaches it; the shipped cockpits have
+                // it 0.6-1.25 m from the eye, often beyond the arm: the hand then reaches toward it as far as it goes)
+                var d = k - s.Eye;
+                if (k.Finite && d.Length < 1.4f && d.x > -0.15f && d.y < -0.1f && d.z > 0.1f) { s.Shifter = k; s.ShifterState = 1; }
+            }
             if (!s.Plausible) { err = "implausible seat / wheel from cockpit_" + car + ".dcm"; return null; }
             return s;
         }

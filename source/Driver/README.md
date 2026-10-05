@@ -4,7 +4,7 @@ BepInEx 6 IL2CPP plugin for **Driving Rogue**: a 3D racing driver sits in your c
 DriverCam's steering wheel and turn it with you, the right foot works the pedal, and the head follows HeadLook. In
 DriverCam's driver view you look down at your own body, arms and gloves on the wheel.
 
-Current version: **0.1.0**.
+Current version: **0.2.0**.
 
 ## What it changes
 
@@ -45,8 +45,30 @@ The fit:
   hand slides along the rim instead of turning with it. A hand that would come off the rim slides back toward its
   straight-ahead spot. An arm that still can't reach is stretched by up to 12%.
 - **Feet.** The right foot tips forward with the throttle and the brake. The left foot rests.
-- **Small motion.** The driver breathes (an additive clip), and the neck and head turn with HeadLook and DriverCam's
-  look-into-turn.
+- **Small motion.** The driver breathes and moves the head a little (the `idle_seated` clip), and turns with HeadLook
+  and DriverCam's look-into-turn (see Animations).
+
+## Animations (0.2.0)
+
+The clips in `driver_anims.dra` (original keyframes on the driver's own skeleton, made in Unreal Engine 5.8: see
+`Assets/model/README.md`) are layered on the fitted pose every frame, under the steering-wheel IK. The IK owns the
+arm bones, so the hands stay on the rim whatever the clips do to the body.
+
+| Clip | When | How |
+|---|---|---|
+| `idle_seated` | always | breathing and small head moves (4 s loop); replaces 0.1's `breathe_add` |
+| `steer_left` / `steer_right` | steering | scrubbed by how far you steer: the shoulders turn and lean into the corner. Only the torso, neck and head are used: the clip's hand-over-hand arms leave the rim (they were made without the wheel), so the hands stay on the IK |
+| `look_left` / `look_right` | HeadLook (`rogue.headlook`) | the yaw (plus DriverCam's look-into-turn) scrubs the clip: spine, neck and head turn together up to about 79°; past that the head turns on by itself. Pitch stays procedural |
+| `brake_brace` | hard braking (brake over 60% above 3 m/s) | eased in over 0.15 s and out over 0.35 s |
+| `crash_jolt` | the game's collision count goes up (`CollisionScoreProviderSO.TotalHits`) | 0.8 s one-shot; a hit within 0.25 s of the last doesn't restart it |
+| `shift` | a gear change (`VehicleGearboxHandler.CurrentGearIndex`) | the right hand leaves the wheel for the cockpit's gear knob (`RL_ShiftKnob` / `ShifterKnob` in DriverCam's `cockpit_<Car>.dcm`) in 0.2 s, pulls it back on an upshift or pushes it forward on a downshift, stays 0.45 s after the last change and goes back to the rim in 0.25 s. A knob out of reach (most shipped cockpits put it 0.6-1.25 m from the eye) makes the driver lean toward it (up to 14°) and the hand reaches as far as it can; the log gives the gap per car. A cockpit without a knob (`Saber_auto`) keeps both hands on the wheel; a car without a DriverCam cockpit uses the clip's own arm. The torso and head follow the clip |
+| `celebrate` | the level is completed (`GameState.LevelCompleted`) | 2.4 s fist pump with the right arm (blended off the wheel and back) |
+
+The standing clips (`idle_standing`, `walk`, `wave`) are loaded but not used by the plugin. All the layering is plain
+maths with no allocations (about 15-30 µs a frame with every layer on, measured offline). The game is read 15 times a
+second while the driver shows, never while paused; a hidden driver, a new body, a car change or the level ending
+stops every clip, and the gear, collision and level-completed baselines are taken again (so a restart never fires an
+event by itself). `Anim.Enabled` off gives the 0.1 driver (breathing only).
 
 Measured on the shipped cockpits, the hands sit on the rim on every car except Justice. Justice's wheel is 0.75 m from
 the eye, so the hands stay about 4 cm short even with the arms stretched. The log says so.
@@ -63,8 +85,11 @@ is paused, the driver holds its last pose.
 | `General.Enabled` | true | show the driver (off destroys everything Driver made) |
 | `Look.ShowInDriverView` | true | DriverCam's driver view: body, arms and hands (no head) |
 | `Look.ShowInChaseView` | false | chase and hood views; hidden inside the opaque body anyway |
+| `Anim.Enabled` | true | the animation clips above; off = breathing only (as 0.1) |
+| `Anim.ShiftHand` | true | the right hand to the gear knob on a gear change |
+| `Anim.Celebrate` | true | the fist pump when you complete a level |
 | `Look.Outline` | false | the game's cartoon outline (off by default: in driver view an outline hull this close to the camera can fill the screen) (a copy of your car's outline material); applies the next time the driver is built |
-| `Debug.LogEvents` | false | log camera-mode changes, re-fits, show / hide and object builds |
+| `Debug.LogEvents` | false | log camera-mode changes, re-fits, show / hide, object builds and animation events |
 | `Debug.ForceCpuSkin` | false | skin on the CPU instead of the GPU (used automatically when the self-test fails) |
 
 ## Build
@@ -83,7 +108,8 @@ is paused, the driver holds its last pose.
   | `Plugin.cs` | config |
   | `GameApi.cs` | the only file that touches game types; checked by name at load |
   | `RigFile.cs` | `.drm` / `.dra` reader, plain C#; every index is checked |
-  | `Solver.cs` | the fit and the IK, in plain maths (`Maths.cs`), about 15-100 µs a frame |
+  | `Solver.cs` | the fit, the IK and the clip layers, in plain maths (`Maths.cs`), about 15-100 µs a frame |
+  | `Anim.cs` | clip sampler (`ClipSampler`), the frame inputs (`AnimIn`) and the game events to clip times (`AnimEvents`) |
   | `SeatSource.cs` | the seat sources |
   | `DriverRig.cs` | the Unity objects |
   | `Runner.cs` | the lifecycle |
@@ -91,7 +117,7 @@ is paused, the driver holds its last pose.
 - **Objects.** `Driver_Root` is unparented and placed right before each frame is drawn
   (`Application.onBeforeRender`). It sits at the shaken body frame (the body mesh's pose without its rest offset, as
   DriverCam's `DriverView.BodyFrame` does), so the driver shakes with the car and the cockpit. Each frame writes about
-  15 bone transforms and nothing else.
+  20 bone transforms and nothing else.
 - **Skinning.** The body is one `SkinnedMeshRenderer` (Bone4, no motion vectors). The first build runs a self-test: it
   bends the left forearm, bakes the mesh and compares a wrist vertex with the managed maths. If the test fails, a
   CPU-skinned `MeshRenderer` is used instead.
@@ -106,21 +132,25 @@ is paused, the driver holds its last pose.
   | Plugin unload | the same as 3 errors |
   | Leaving DriverCam's view | the full mesh comes back and the helmet casts its shadow normally |
 
-- **Not in 0.1.0:**
+- **Not in 0.2.0:**
   - the chase-view silhouette (a ZTest-Greater outline through the body)
   - per-camera helmet toggling for the mirrors (DriverCam's mirrors see the head-less body)
   - the g-force lean
-  - hand-over-hand steering
+  - hand-over-hand steering (the clip's arms don't keep the hands on the rim; the IK slides them instead)
+  - the standing clips (a driver outside the car)
   - LOD1
   - per-car overrides for the foot position
 
 ## Log (`/game-log Driver`)
 
 - At startup:
-  - `Driver x.y.z loaded: a driver in your car (driver view <on|off>, chase view <on|off>).`
+  - `Driver x.y.z loaded: a driver in your car (driver view <on|off>, chase view <on|off>, animations <on|off>).`
   - `[Driver] game check OK: camera controller, car body<, pedals>`
+  - `[Driver] animation triggers: gear <yes|no>, speed <yes|no>, collisions <yes|no>, level completed <yes|no>` (a warning listing what is
+    missing when one is not found; only that animation is off)
 - On the first car:
-  - `[Driver] model loaded: 55 bones, LOD0 3854 vertices, clips seated_base, breathe_add (build_driver.py <sha>)`
+  - `[Driver] model loaded: 55 bones, LOD0 3854 vertices, clips seated_base, breathe_add, idle_seated, steer_left, steer_right, shift, look_left, look_right, brake_brace, crash_jolt, celebrate, idle_standing, walk, wave (build_driver.py <sha>)`
+  - `[Driver] animations: <idle, steer, look, brake brace, crash jolt, shift, celebrate> (<on|off: [Anim] Enabled>; shift hand <on|off>, celebrate <on|off>)`
   - `[Driver] car <Car>`
 - When the driver is first shown:
   - `[Driver] model ready: 3854 vertices, 5184 triangles (... without the head), 55 bones, helmet ... vertices, outline on`
@@ -131,6 +161,9 @@ is paused, the driver holds its last pose.
     When the reach is short, the line adds `(... cm with the arms stretched up to 12%)`.
   - When both DriverCam sources exist: `[Driver] <Car>: DriverCam live vs files: eye ... mm, wheel ... mm, seat ... mm`.
   - Without a fitted DriverCam cockpit: `[Driver] <Car>: DriverCam files not used (<reason>)`.
+  - The shift hand: `[Driver] <Car>: shift hand to the gear knob (in reach | in reach with a ... deg lean | ... cm out of reach after a ... deg lean: the hand reaches toward it)`,
+    `[Driver] <Car>: no gear knob in the cockpit: no shift hand` or `[Driver] <Car>: no DriverCam cockpit: the shift clip's own arm on a gear change`.
+- When a level is completed: `[Driver] celebrate (level completed)`.
 - On car changes and teardown:
   - `[Driver] car changed to <Car>`
   - `[Driver] driver removed (switched off | error | plugin unloaded)`
@@ -142,3 +175,5 @@ is paused, the driver holds its last pose.
   - `[Driver] <Car>: re-fit (<source> changed), ...`
   - `[Driver] no car: driver removed`
   - `[Driver] new body for <Car>`
+  - `[Driver] shift <n> -> <m> (hand to the knob | shift clip arm)`
+  - `[Driver] crash jolt (hits <n>)`

@@ -19,7 +19,7 @@ namespace RacingLine
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.racingline";
-        public const string Version = "0.7.0";
+        public const string Version = "0.7.1";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;

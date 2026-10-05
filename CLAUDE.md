@@ -87,7 +87,7 @@ installed ones. A commit that changes the other developer's plugin says in its m
 | `/rollback [latest\|name] [install]` | restore a `backup/` snapshot into an install (always with `-GameDir`; `latest` only with one install; refuses a backup whose `install.txt` names another install) |
 | `/research <topic>` | look up game types: RESEARCH.md, then the real interop assemblies; dump.cs / IDA / AssetRipper facts stay `UNVERIFIED` until found in the interop |
 | `/new-plugin <Name>` | scaffold `source/<Name>/` to repo conventions, then push-check |
-| `/test-tools [words]` | run `tools/push-check.tests.ps1` (42 scenarios) |
+| `/test-tools [words]` | run `tools/push-check.tests.ps1` (44 scenarios) |
 | `/hot-reload` | build a plugin as a hot module (`-p:Hot=true`) into `BepInEx\hot\` and confirm HotReload picked it up, no game restart (see `source/HotReload/README.md`) |
 
 Scripts (run from the repo root with `powershell -NoProfile -ExecutionPolicy Bypass -File <script>`):

@@ -134,14 +134,17 @@ function Linked-Files([string]$dir, [string]$rev) {
 function Changed-Code([string]$dir, [string]$fromRev, [string]$toRev) {
     # a change to a linked shared file (source/Shared/*.cs) is a code change of every plugin that compiles it in
     $paths = @("$dir/") + @(@(Linked-Files $dir $toRev) + @(Linked-Files $dir $fromRev) | Sort-Object -Unique)
+    # no $toRev = your side: what the push carries (commits) plus what is staged for the next commit (the index).
+    # Untracked and unstaged files are not part of the push (section 2 lists them), so they never count as code changes.
     $files = if ($toRev) { @(GitOut diff --name-only $fromRev $toRev -- @paths) }
-             else { @(@(GitOut diff --name-only $fromRev -- @paths) + @(GitOut ls-files --others --exclude-standard -- @paths)) }
+             else { @(GitOut diff --name-only --cached $fromRev -- @paths) }
     $result = @()
     foreach ($f in ($files | Where-Object { $_ } | Sort-Object -Unique)) {
         if (-not (Is-CodeChange $f)) { continue }
         if ($f -match '(Plugin\.cs|\.csproj)$') {
             $old = @((Read-Text $f $fromRev) -split "`r?`n" | Where-Object { $_ -notmatch $versionLine })
-            $new = @((Read-Text $f $toRev) -split "`r?`n" | Where-Object { $_ -notmatch $versionLine })
+            $newText = if ($toRev) { Read-Text $f $toRev } else { (@(GitOut show ":$f") -join "`n") }   # the index copy
+            $new = @($newText -split "`r?`n" | Where-Object { $_ -notmatch $versionLine })
             if (($old -join "`n").Trim() -eq ($new -join "`n").Trim()) { continue }   # only the version moved
         }
         $result += $f
@@ -326,7 +329,7 @@ foreach ($p in $plugins) {
     foreach ($t in $hits) {
         $tagTree = @(GitOut rev-parse "${t}^{commit}:$($p.Dir)")[0]
         $headTree = @(GitOut rev-parse "HEAD:$($p.Dir)")[0]
-        $workDirty = @(GitOut status --porcelain -- $p.Dir | Where-Object { $_ -and (Is-CodeChange $_.Substring(3)) }).Count -gt 0
+        $workDirty = @(GitOut status --porcelain -- $p.Dir | Where-Object { $_ -and $_ -notlike '`?`?*' -and (Is-CodeChange $_.Substring(3)) }).Count -gt 0   # untracked files aren't pushed
         $isRelease = $releaseTags -contains $t
         if (-not $tagTree) {
             # the tag predates this plugin folder; a generic v-tag only collides if it's this plugin's own release

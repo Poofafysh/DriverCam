@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a new score category, **Racing Line**, that rewards driving corners well on grip: the right line, good speed, braking straight, lifting in and powering out.
 
-Current version: **0.7.0** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
+Current version: **0.7.1** (v2 scoring counted live, traffic-aware line drawn on the road; placeholder icons)
 
 Design docs (claude.ai artifacts):
 - "Racing Line Mechanic - Design & Build Plan" (`799a19cf-48f1-4019-9d37-925b9838d47f`): the category itself and the Safety rules that apply to every change here.
@@ -144,6 +144,7 @@ players.
 - **Failure switches.** Scoring, the traffic-aware line, the native category, the results row and the Victory row each switch themselves off after an error. 5 errors in 10 s switches the whole plugin off; the game keeps running.
 - **Rows.** A row is only removed once its screen has closed, so the results screen's animation always finishes (also while the plugin is off or switched off). Unloading the plugin removes both rows at once (accepted: an unload during the results screen's animation can leave it without a Continue button; at game quit that doesn't matter).
 - **Respawns and jumps.** A jump in distance along the road (back more than 5 m or forward more than 50 m in one frame) drops the corner in progress. Distance is tracked while airborne or not in control too, so a long jump isn't mistaken for a teleport; only frames on the ground and in control score.
+- **Reversing (0.7.1).** With the Reverse plugin, nothing scores while the car reverses (AppDomain data `rogue.reverse`), nor afterwards until it is back past the furthest point it had reached on the road. Metres driven again after backing up never pay twice, which matters because the run total reaches the Steam leaderboard. A jump of more than 20 m back or 50 m forward in one frame (respawn, new level) resets that point. Without Reverse installed nothing changes.
 - **Old copies are never destroyed.** Game card effects can keep references to score categories for a whole run, so a destroyed copy would break the game's own code. If the score manager is rebuilt each level, that leaves one tiny unused object per level, which is harmless.
 - **Saves stay compatible both ways.** The id is unique, and unknown ids are skipped on load.
 
@@ -156,6 +157,7 @@ players.
 | `ground line ready (transparent material, shader '...')` | the line drawn on the road is set up (`opaque fallback` if no transparent material could be made) |
 | `Racing Line added as a score category (... Top Speed template ...)` | native mode is on |
 | `corner 12A: SILVER grip q 0.68 exit 0.74 full-throttle 0.9 s coast 0.0 s -> 214 pts ...` | per corner, with `LogCorners` on (off by default); `traffic` after the grip/hit flags = traffic moved or blocked the line in that corner |
+| `reversing: no points until the car is past N m again` | the Reverse plugin started a reverse; scoring waits until the car passes N m again |
 | `road width not known yet, waiting` | the road's width hasn't been read yet, so the line isn't built (logged once) |
 | `path gone (menu or loading): line dropped` | the road path disappeared (back to a menu, or a load), so the line was dropped |
 | `path grew in place: N m -> N m (same object), rebuilding; the current line stays up until then` | the game extended the road path while you drove; the line is rebuilt longer |

@@ -106,6 +106,10 @@ $scenarios = @(
        Setup = { param($e) Change-Code $e.B; Commit $e.B } },
     @{ Name = "up-to-date: code change with bump"; Expect = 0; Must = @('1\.0\.0 -> 1\.0\.1');
        Setup = { param($e) Change-Code $e.B; Set-Version $e.B "1.0.1"; Commit $e.B } },
+    @{ Name = "untracked: a new untracked file in the plugin is not a code change"; Expect = 0; Must = @('untracked files, not part of the push'); MustNot = @('FAIL', 'code changed');
+       Setup = { param($e) W "$($e.B)/source/Foo/Wip.cs" "class Wip { }" } },
+    @{ Name = "untracked: an untracked file is ignored, a staged edit counts"; Expect = 1; Must = @('Foo: code changed \(source/Foo/Code\.cs\)'); MustNot = @('code changed \([^)]*Wip');
+       Setup = { param($e) W "$($e.B)/source/Foo/Wip.cs" "class Wip { }"; Change-Code $e.B; G $e.B add source/Foo/Code.cs } },
     @{ Name = "up-to-date: docs only, no bump needed"; Expect = 0; MustNot = @('FAIL');
        Setup = { param($e) Add-Content "$($e.B)/source/Foo/README.md" "More docs."; Commit $e.B } },
     @{ Name = "up-to-date: bump without code change"; Expect = 0; Must = @('bumped 1\.0\.0 -> 1\.1\.0 without code changes');

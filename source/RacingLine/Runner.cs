@@ -44,6 +44,13 @@ namespace RacingLine
         private PlayerState _player;
         private int _lastHits = -1, _lastNearMisses = -1;
         private float _heading = float.NaN, _carCurvature, _throttle, _brake;   // smoothed over ~0.2 s
+        // Reverse (the rogue.reverse plugin): nothing scores while reversing, nor afterwards until the car is past the
+        // furthest point it had reached, so metres driven again after backing up never pay twice (the run total reaches
+        // the Steam leaderboard)
+        private float _farthest = float.NaN, _lastDist = float.NaN;
+        private bool _wasReversing, _regaining;
+        private float[] _reverse;
+        private float _nextReverseLookup;
         private SpeedProfile.GripEstimate _grip;
         private float _profileTop, _profileGrip, _nextProfile;
         private string _lastResult = "";
@@ -222,7 +229,7 @@ namespace RacingLine
         /// <summary>One frame of scoring: read the player, smooth the inputs, step the scorer, pay ticks and corner bonuses.</summary>
         private void Score()
         {
-            if (!GameApi.ReadPlayer(ref _player)) { _lastHits = -1; _lastNearMisses = -1; _heading = float.NaN; CloseLive(true); return; }
+            if (!GameApi.ReadPlayer(ref _player)) { _lastHits = -1; _lastNearMisses = -1; _heading = float.NaN; _farthest = float.NaN; _lastDist = float.NaN; CloseLive(true); return; }
             if (_player.LevelEnded) CloseLive(true);   // the game's FinishLevel already banked the temporary score
             _playerValid = true;
             float dt = Time.deltaTime;   // game time: 0 while paused, so nothing scores
@@ -268,9 +275,10 @@ namespace RacingLine
             _lastHits = _player.Hits; _lastNearMisses = _player.NearMisses;
             if (hit) _traffic.NoteHit();   // a pass in progress isn't clean any more
 
+            bool fresh = Fresh();
             var r = _scorer.Step(new ScoreInput
             {
-                Active = _player.InControl && _player.Grounded,
+                Active = _player.InControl && _player.Grounded && fresh,
                 Distance = _player.Distance, Offset = _player.Offset, Speed = _player.Speed, Dt = dt,
                 Throttle = _throttle, Brake = _brake, CarCurvature = _carCurvature, Grip = _grip.Value,
                 Drifting = _player.Drifting, Hit = hit, NearMiss = nearMiss,
@@ -289,6 +297,45 @@ namespace RacingLine
                 Plugin.Log.LogInfo($"[RacingLine] corner {c.Index + 1}{c.Type}: {c.Grade ?? "-"}{(c.Grip ? " grip" : " drifted")}{(c.Clean ? "" : " hit")}{(c.TrafficShifted ? " traffic" : "")} q {c.MeanQ:0.00} " +
                                    $"exit {c.Exit:0.00} full-throttle {(float.IsNaN(c.SecondsToFullThrottle) ? "never" : c.SecondsToFullThrottle.ToString("0.0") + " s")} " +
                                    $"coast {c.CoastAfterApex:0.0} s -> {c.Total:0} pts (all live), units {c.Units:0.0}, streak x{_scorer.StreakMultiplier:0.00}, pace {_scorer.Pace:0.00}");
+        }
+
+        /// <summary>
+        /// False while the Reverse plugin reports reversing ("rogue.reverse", float[3]: [0] reversing, [2] unscaled time
+        /// of its last write, live when under 0.25 s old), and afterwards until the car is back past the furthest road
+        /// distance it had reached. A jump of more than 20 m back or 50 m forward in one frame (respawn, new level) resets
+        /// the furthest point. Without the Reverse plugin it is always true.
+        /// </summary>
+        private bool Fresh()
+        {
+            float d = _player.Distance;
+            if (float.IsNaN(d)) return true;
+            bool rev = Reversing();
+            float jump = float.IsNaN(_lastDist) ? 0f : d - _lastDist;
+            _lastDist = d;
+            if (float.IsNaN(_farthest) || jump < -20f || jump > 50f) { _farthest = d; _regaining = false; }
+            if (rev && !_wasReversing)
+                Plugin.Log.LogInfo($"[RacingLine] reversing: no points until the car is past {_farthest:0} m again");
+            _wasReversing = rev;
+            if (rev) { _regaining = true; return false; }
+            if (_regaining)
+            {
+                if (d < _farthest) return false;
+                _regaining = false;
+            }
+            if (d > _farthest) _farthest = d;
+            return true;
+        }
+
+        private bool Reversing()
+        {
+            if (_reverse == null)
+            {
+                if (Time.unscaledTime < _nextReverseLookup) return false;
+                _nextReverseLookup = Time.unscaledTime + 2f;   // Reverse may load after us, or not be installed
+                _reverse = AppDomain.CurrentDomain.GetData("rogue.reverse") as float[];
+                if (_reverse == null || _reverse.Length < 3) { _reverse = null; return false; }
+            }
+            return _reverse[0] > 0.5f && Time.unscaledTime - _reverse[2] < 0.25f;
         }
 
         /// <summary>

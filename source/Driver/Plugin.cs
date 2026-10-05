@@ -25,7 +25,7 @@ namespace Driver
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.driver";
-        public const string Version = "0.4.0";
+        public const string Version = "0.4.1";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, ShowInDriverView, ShowInChaseView, Outline, LogEvents, ForceCpuSkin, AnimEnabled, ShiftHand, Celebrate;

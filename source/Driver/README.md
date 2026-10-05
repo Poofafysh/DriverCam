@@ -5,7 +5,7 @@ DriverCam's steering wheel and turn it with you, the right foot works the pedal,
 DriverCam's driver view you look down at your own body, arms and gloves on the wheel. On one of the Bikes plugin's
 motorcycles the driver rides it instead (0.3.0), and since 0.4.0 it moves the way riders do in the RIDE games.
 
-Current version: **0.4.0**.
+Current version: **0.4.1** (0.4.1: fixes 0.4.0 failing to load: a Runner method with an `out` struct parameter broke IL2CPP injection).
 
 ## What it changes
 

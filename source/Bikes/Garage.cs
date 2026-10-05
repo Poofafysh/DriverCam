@@ -46,6 +46,7 @@ namespace Bikes
             public float Speed, Accel, Handling, Durability;
             // > 0: Speed is worked out when built so the game's top speed shows this on the HUD (SpeedFactorFor); Speed is the fallback
             public float TopMph;
+            public float TopScale = 1f;   // OriginalMaxSpeed x this (Guards.TopSpeed) when the stat range tops out below TopMph
             public Vehicle_SO So, Donor;
             public string Failed;
         }
@@ -84,6 +85,15 @@ namespace Bikes
             IntPtr p = so.Pointer;
             foreach (var b in All) if (b.So != null && b.So.Pointer == p) return true;
             return false;
+        }
+
+        /// <summary>The top-speed scale of a bike's vehicle data, 1 for anything else.</summary>
+        internal static float TopSpeedScaleOf(Vehicle_SO so)
+        {
+            if (so == null) return 1f;
+            IntPtr p = so.Pointer;
+            foreach (var b in All) if (b.So != null && b.So.Pointer == p) return b.TopScale;
+            return 1f;
         }
 
         internal static Bike FindById(string id)
@@ -227,7 +237,7 @@ namespace Bikes
             so.UniqueInt = new UniqueInt(b.IntId);
             so.unlockedByDefault = false;
             so.vehicleName = b.Title;
-            float speed = b.TopMph > 0f ? SpeedFactorFor(b.TopMph, b.Speed, b.Title) : b.Speed;
+            float speed = b.TopMph > 0f ? SpeedFactorFor(b, out b.TopScale) : b.Speed;
             var st = so.baseStats;
             st.maxSpeedFactor = speed; st.accelerationFactor = b.Accel; st.handlingFactor = b.Handling; st.durabilityFactor = b.Durability;
             so.baseStats = st;
@@ -236,48 +246,60 @@ namespace Bikes
             Plugin.Log.LogInfo($"[Bikes] {b.Title} built on the {donor.VehicleName} (id {b.Id}, stats {speed:0.000}/{b.Accel:0.00}/{b.Handling:0.00}/{b.Durability:0.00})");
         }
 
-        // The HUD speedometer (VehicleVisuals.Update) shows floor(VehicleMovement.CurrentSpeed * GetMultiplierNonLogical):
-        // m/s x 2.237 x 1.1 in mph (x 3.6 x 1.1 in km/h). At full throttle with no boost the speed settles on
-        // VehicleMovement.OriginalMaxSpeed = VehicleStats.MaxSpeed = VehicleStatsRange.GetMaxSpeed(factor) / 3.6, the range
-        // being VehicleContainerSO.StatsRange (km/h). GetMaxSpeed clamps the factor to 0..1, so a factor above 1 gains nothing.
+        // The HUD speedometer (VehicleVisuals.Update, IDA 0x76F370) shows floor(VehicleMovement.CurrentSpeed x
+        // GetMultiplierNonLogical): m/s x 2.237 x 1.1 in mph, m/s x 3.6 x 1.1 in km/h. With no boost the speed settles on
+        // VehicleMovement.OriginalMaxSpeed (UpdateSpeed's cap), set by LoadVehicleAttributes to VehicleStats.MaxSpeed =
+        // VehicleStatsRange.GetMaxSpeed(clamp01(base + extra factor)) / 3.6; the range is VehicleContainerSO.StatsRange (stat
+        // km/h; the shipped one is 130-200). GetMaxSpeed clamps the factor to 0..1, so a factor above 1 gains nothing.
         private const float MphPerMps = 2.237f * 1.1f, KphPerMps = 3.6f * 1.1f;
 
         /// <summary>
-        /// The base speed factor whose top speed shows `mph` on the HUD: aims at mph + 0.5 (the middle of the floored
-        /// reading), bisecting the game's own GetMaxSpeed; the linear formula on the serialized range if that call fails.
+        /// The base speed factor for b.TopMph on the HUD, aiming at TopMph + 0.5 (the middle of the floored reading):
+        /// bisection on the game's own GetMaxSpeed, or the linear formula on the serialized range if that call fails. If
+        /// the range can't reach it, the factor is 1 and `scale` (> 1) is what OriginalMaxSpeed needs (Guards.TopSpeed).
         /// </summary>
-        internal static float SpeedFactorFor(float mph, float fallback, string title)
+        internal static float SpeedFactorFor(Bike b, out float scale)
         {
-            float wantKph = (mph + 0.5f) / MphPerMps * 3.6f;
-            VehicleStatsRange r;
-            try { r = GeneralReferencesData.Instance?.VehicleContainer?.StatsRange; }
-            catch (Exception e) { Plugin.Log.LogWarning($"[Bikes] {title}: no stats range ({e.Message}); speed factor {fallback:0.000}"); return fallback; }
-            if (r == null) { Plugin.Log.LogWarning($"[Bikes] {title}: no stats range; speed factor {fallback:0.000}"); return fallback; }
-            float f; string how;
+            scale = 1f;
+            float wantKph = (b.TopMph + 0.5f) / MphPerMps * 3.6f;
+            VehicleStatsRange r = null;
             try
             {
-                float lo = 0f, hi = 1f;
-                if (r.GetMaxSpeed(1f) < wantKph) f = 1f;
+                var refs = GeneralReferencesData.Instance;
+                var c = refs == null ? null : refs.VehicleContainer;
+                if (c != null) r = c.StatsRange;
+            }
+            catch (Exception e) { Plugin.Log.LogWarning($"[Bikes] {b.Title}: no stats range ({e.Message})"); }
+            if (r == null) { Plugin.Log.LogWarning($"[Bikes] {b.Title}: no stats range; speed factor {b.Speed:0.000}, top speed not set"); return b.Speed; }
+            float f, topKph, kph; string how;
+            try
+            {
+                topKph = r.GetMaxSpeed(1f);
+                if (topKph < wantKph) f = 1f;
                 else if (r.GetMaxSpeed(0f) >= wantKph) f = 0f;
                 else
                 {
+                    float lo = 0f, hi = 1f;
                     for (int i = 0; i < 40; i++) { float m = 0.5f * (lo + hi); if (r.GetMaxSpeed(m) < wantKph) lo = m; else hi = m; }
                     f = hi;
                 }
-                how = "game's GetMaxSpeed";
+                kph = r.GetMaxSpeed(f);
+                how = "the game's GetMaxSpeed";
             }
             catch (Exception e)
             {
-                var v = r.maxSpeedStatRange;   // GetMaxSpeed = max(50, x + (y - x) * clamp01(f))
-                f = v.y > v.x ? Mathf.Clamp01((wantKph - v.x) / (v.y - v.x)) : fallback;
-                how = $"linear formula ({e.Message})";
+                var v = r.maxSpeedStatRange;   // GetMaxSpeed = max(50, x + (y - x) x clamp01(f))
+                topKph = Mathf.Max(50f, v.y);
+                f = v.y > v.x ? Mathf.Clamp01((wantKph - v.x) / (v.y - v.x)) : 1f;
+                kph = Mathf.Max(50f, v.x + (v.y - v.x) * f);
+                how = $"the linear formula ({e.Message})";
             }
-            float kph;
-            try { kph = r.GetMaxSpeed(f); } catch { var v = r.maxSpeedStatRange; kph = Mathf.Max(50f, v.x + (v.y - v.x) * f); }
+            if (kph < wantKph && kph > 0f) { scale = wantKph / kph; kph = wantKph; }
             float mps = kph / 3.6f;
-            Plugin.Log.LogInfo($"[Bikes] {title}: speed factor {f:0.0000} by the {how} -> {kph:0.0} stat km/h = {Mathf.Floor(mps * MphPerMps)} mph / {Mathf.Floor(mps * KphPerMps)} km/h on the HUD (target {mph:0} mph)");
-            if (Mathf.Floor(mps * MphPerMps) < mph)
-                Plugin.Log.LogWarning($"[Bikes] {title}: the game's stat range tops out below {mph:0} mph (factor capped at 1; the game clamps factors above 1)");
+            var rv = r.maxSpeedStatRange;
+            Plugin.Log.LogInfo($"[Bikes] {b.Title}: stat range {rv.x:0}-{rv.y:0} km/h; speed factor {f:0.0000} ({how})" +
+                               (scale != 1f ? $", the range tops out at {topKph:0.0} so top speed x{scale:0.0000}" : "") +
+                               $" -> {Mathf.Floor(mps * MphPerMps)} mph / {Mathf.Floor(mps * KphPerMps)} km/h on the HUD (target {b.TopMph:0} mph)");
             return f;
         }
 

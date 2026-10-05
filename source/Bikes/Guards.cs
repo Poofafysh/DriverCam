@@ -29,6 +29,10 @@ namespace Bikes
     /// - VehicleSkinHolder.Awake, InitializeVehicleMeshes and SetVehiclePart postfixes: on a bike body ("Bikes." name),
     ///   the car's meshes and any part the game adds are hidden with Renderer.forceRenderingOff (enabled stays, for
     ///   DriverCam's body measurement and HideCarBody).
+    /// - VehicleMovement.LoadVehicleAttributes postfix (0.2.4): on a vehicle with a TopMph (the M2), OriginalMaxSpeed (the cap
+    ///   UpdateSpeed holds TargetSpeed under) is multiplied by Garage's top-speed scale. The game sets it from the stats on
+    ///   every call (IDA 0x74C690: VehicleStats.MaxSpeed), so the postfix never compounds. Only when the stat range can't
+    ///   reach the target (factors are clamped to 0..1); otherwise the scale is 1 and nothing changes.
     /// </summary>
     internal static class Guards
     {
@@ -61,6 +65,8 @@ namespace Bikes
                 new Hook { Name = "VehicleSkinHolder.InitializeVehicleMeshes", Target = AccessTools.Method(typeof(VehicleSkinHolder), "InitializeVehicleMeshes"), Postfix = nameof(SkinChanged) },
                 // harmony-target: VehicleSkinHolder.SetVehiclePart
                 new Hook { Name = "VehicleSkinHolder.SetVehiclePart", Target = AccessTools.Method(typeof(VehicleSkinHolder), "SetVehiclePart"), Postfix = nameof(SkinChanged) },
+                // harmony-target: VehicleMovement.LoadVehicleAttributes
+                new Hook { Name = "VehicleMovement.LoadVehicleAttributes", Target = AccessTools.Method(typeof(Game.Runtime.Vehicle.VehicleMovement), "LoadVehicleAttributes"), Postfix = nameof(TopSpeed) },
             };
             foreach (var k in hooks) if (k.Target == null) throw new MissingMethodException($"hook target missing: {k.Name}");
             try
@@ -76,6 +82,26 @@ namespace Bikes
             }
             Ok = true;
             return hooks.Count;
+        }
+
+        private static bool s_topSpeedFailed;
+
+        private static void TopSpeed(Game.Runtime.Vehicle.VehicleMovement __instance)
+        {
+            try
+            {
+                if (__instance == null) return;
+                var im = __instance.vehicleManager;
+                var vm = im == null ? null : im.TryCast<Game.Runtime.Vehicle.VehicleManager>();
+                if (vm == null) return;
+                float k = Garage.TopSpeedScaleOf(vm.VehicleSO);
+                if (k == 1f) return;
+                __instance.OriginalMaxSpeed = __instance.OriginalMaxSpeed * k;
+            }
+            catch (Exception e)
+            {
+                if (!s_topSpeedFailed) { s_topSpeedFailed = true; Plugin.Log.LogWarning($"[Bikes] top speed not applied: {e.Message}"); }
+            }
         }
 
         private static void GarageAwake()

@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.2.3** (see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.2.4** (the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -15,9 +15,23 @@ Lean, Grip and Braking")
   |---|---|---|---|---|
   | BMW S1000RR | 0.95 | 0.90 | 0.75 | 0.30 |
   | Sport Bike | 0.85 | 0.95 | 0.85 | 0.35 |
-  | M2 G87 (car) | 0.82 | 0.80 | 0.85 | 0.65 |
+  | M2 G87 (car) | 1.00 (200 mph) | 1.00 | 1.00 | 1.00 |
 
   They're always unlocked and cost nothing.
+- **M2 top speed (0.2.4): 200 mph on the HUD** (322 km/h with the game set to km/h). How the game gets there (IDA, GameAssembly.dll):
+  - the HUD (`VehicleVisuals.Update`, 0x76F370) shows `floor(VehicleMovement.CurrentSpeed x 2.237 x 1.1)` mph
+    (`x 3.6 x 1.1` km/h: `MetricEnumExtensions.GetMultiplierNonLogical`, 0x7C2C60);
+  - with no boost, the speed settles on `VehicleMovement.OriginalMaxSpeed` (`UpdateSpeed`, 0x74FFF0, caps `TargetSpeed`
+    at it), which `LoadVehicleAttributes` (0x74C690) sets to `VehicleStats.MaxSpeed` = `MaxSpeedKph / 3.6`;
+  - `MaxSpeedKph` = `VehicleStatsRange.GetMaxSpeed(clamp01(base + card/upgrade factor))` (0x6B9DE0: `max(50, x + (y - x) f)`),
+    the range being `VehicleContainerSO.StatsRange`, 130-200 in the shipped data. The factor is clamped to 0..1, so the
+    stats alone top out at 200 "km/h" = 136 mph on the HUD.
+  - So the M2's speed factor is 1.0 (the plugin bisects the game's `GetMaxSpeed` for 200.5 mph and finds it out of
+    range) and a `LoadVehicleAttributes` postfix multiplies the M2's `OriginalMaxSpeed` by 293.3 / 200 = 1.4667: 81.48 m/s,
+    200.5 mph on the meter, shown as 200 (322 km/h). The postfix runs every time the game reloads the stats, which set the
+    value fresh, so it never compounds. Boost pads, slipstream and drift-exit boosts still raise the speed above it for a
+    while (`totalSpeedModifier`); speed cards can't (the factor is already at 1). Any speed-lowering card scales with it.
+  - The garage bars use `(factor + 0.2) / 1.4` clamped to 0..1 (`GetStatVisualFactor`, 0x6BAB00): full bars at 1.0.
 - **A bike on a hidden car.** Underneath, each bike drives on a copy of a donor car (`DonorCar`, default Saber): the
   game's own driving, four physics wheels and collider. That's why traffic, scoring, daredevils, police, RacingLine,
   damage and the timer all keep working. The bike also uses the donor's parts and vinyl groups (they don't show on the
@@ -114,11 +128,13 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 
 ## Log (`/game-log Bikes`)
 
-- `Bikes x.y.z loaded: 10 hooks; the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
+- `Bikes x.y.z loaded: 11 hooks; the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
 - `[Bikes] model SportBike loaded (bike): N triangles, wheelbase 1.41 m` (the same for BMW_S1000RR, and
   `loaded (car)` for BMW_M2_G87).
 - `[Bikes] Sport Bike body: N car meshes to hide, bike at real size (...)` and
-  `[Bikes] Sport Bike built on the Saber (id rogue.bikes.sportbike, stats ...)`; for the M2:
+  `[Bikes] Sport Bike built on the Saber (id rogue.bikes.sportbike, stats ...)`; for the M2 first
+  `[Bikes] M2 G87: stat range 130-200 km/h; speed factor 1.0000 (the game's GetMaxSpeed), the range tops out at 200.0 so top
+  speed x1.4667 -> 200 mph / 322 km/h on the HUD (target 200 mph)`, then `stats 1.000/1.00/1.00/1.00`, and:
   `[Bikes] M2 G87 body: N car meshes to hide, car model at scale S (wheelbase G vs M); steering wheel turns; on the car's
   layer L` (`part of the body (static)` with a model from before 0.2.3).
 - Only if the game's transparent shader is missing: `[Bikes] no transparent shader: BMW_M2_G87 glass glass drawn opaque`.

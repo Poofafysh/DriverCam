@@ -157,13 +157,13 @@ function Backup-Install($plugins) {
         $cars = Join-Path $configDir "$($p.Assembly)_cars"
         if (Test-Path $cars) { Copy-Item $cars (Join-Path $dest "config") -Recurse }
     }
-    # keep the 10 newest backups
-    Get-ChildItem $backupRoot -Directory | Sort-Object Name -Descending | Select-Object -Skip 10 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # keep the 10 newest backups (by date: folder names start with different prefixes, so a name sort would keep the wrong ones)
+    Get-ChildItem $backupRoot -Directory | Sort-Object CreationTime -Descending | Select-Object -Skip 10 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     return $dest
 }
 
 if ($Rollback) {
-    $src = if ($Rollback -eq "latest") { Get-ChildItem $backupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1 } else { Get-Item (Join-Path $backupRoot $Rollback) -ErrorAction SilentlyContinue }
+    $src = if ($Rollback -eq "latest") { Get-ChildItem $backupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object CreationTime -Descending | Select-Object -First 1 } else { Get-Item (Join-Path $backupRoot $Rollback) -ErrorAction SilentlyContinue }
     if (-not $src) { Fail "no backup '$Rollback' in $backupRoot"; Report "rollback" }
     if (Game-Running) { if ($CloseGame) { if (-not (Close-Game)) { Fail "could not close the game"; Report "rollback" } } else { Fail "game is running - close it or pass -CloseGame"; Report "rollback" } }
     Copy-Item (Join-Path $src.FullName "plugins\*") $pluginsDir -Recurse -Force

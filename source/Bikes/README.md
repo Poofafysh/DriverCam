@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.2.4** (the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.2.5** (the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 

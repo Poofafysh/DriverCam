@@ -26,7 +26,7 @@ namespace Bikes
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.bikes";
-        public const string Version = "0.2.4";
+        public const string Version = "0.2.5";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, RodeBikeThisRun;

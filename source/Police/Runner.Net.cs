@@ -42,6 +42,7 @@ namespace Police
         private bool _gHasCar;
         private IntPtr _gRaceCar;
         private string _gOffLogged;
+        private float _gNextWaitLog;   // 0.9.0: the waiting line repeats every 10 s until linked
 
         private static string Describe(NetMode m) => m == NetMode.Single ? "single-player" : m == NetMode.Host ? "multiplayer host" : m == NetMode.Guest ? "multiplayer guest" : "multiplayer (role unknown)";
 
@@ -72,21 +73,38 @@ namespace Police
             }
         }
 
-        /// <summary>Every tick after the patrol tick: host state to the guests, or the guest's own tick.</summary>
+        /// <summary>
+        /// Every tick after the patrol tick: host state to the guests, or the guest's own tick. 0.9.0: the link runs while
+        /// hosting / a guest even with General.Enabled or Multiplayer.Enabled off: then only hellos with "off and why" go
+        /// out (no cars, no chases, nothing drawn), so the other players' logs say why they see no police.
+        /// </summary>
         private void NetTick()
         {
             bool want = Plugin.Enabled.Value && Plugin.MpEnabled.Value;
             float now = Time.unscaledTime;
-            if (_mode == NetMode.Host && want)
+            if (_mode == NetMode.Host)
             {
                 if (_hostNet == null) _hostNet = new HostNet();
                 Players.Refresh();   // also while patrols are idle: the daredevils and the hello check need the players
                 if (!SteamNet.Init(now)) return;
-                BroadcastState();
+                HostStatus();
+                if (want) BroadcastState();   // off: hellos with the status only
             }
-            else if (_hostNet != null && (_hostNet.PeerCount > 0 || Players.All.Count > 0)) StopHost(want ? "not hosting" : "switched off");
-            if (_mode == NetMode.Guest && want) GuestTick(now);
-            else if (_guest != null && (_guest.Host != 0 || _gLive) || _gview != null && _gview.Count > 0) StopGuest(want ? "not a guest" : "switched off");
+            else if (_hostNet != null && (_hostNet.PeerCount > 0 || Players.All.Count > 0)) StopHost("not hosting");
+            if (_mode == NetMode.Guest) GuestTick(now);
+            else if (_guest != null && (_guest.Host != 0 || _gLive) || _gview != null && _gview.Count > 0) StopGuest("not a guest");
+        }
+
+        /// <summary>0.9.0: this host's police / daredevils on or off and why, for the hellos (string literals: nothing built per tick).</summary>
+        private void HostStatus()
+        {
+            string pw = !Plugin.MpEnabled.Value ? "Multiplayer.Enabled false" : !Plugin.Enabled.Value ? "General.Enabled false"
+                      : IsMode("Off") ? "Mode = Off" : !_sessionOn ? "patrols off with F3" : _tickOff || _broken ? "switched off after an error"
+                      : !GameApi.TrafficOk || !GameApi.PlayerOk ? "game check failed" : null;
+            string dw = !Plugin.MpEnabled.Value ? "Multiplayer.Enabled false" : !Plugin.Enabled.Value ? "General.Enabled false"
+                      : !Plugin.DareEnabled.Value ? "Daredevils.Enabled false" : !GameApi.DaredevilOk ? "game check failed" : null;
+            _hostNet.Status = (byte)((pw == null ? 1 : 0) | (dw == null ? 2 : 0) | (IsMode("Chill") ? 4 : 0));
+            _hostNet.PoliceWhy = pw ?? ""; _hostNet.DareWhy = dw ?? "";
         }
 
         // ------------------------------------------------------------------ host
@@ -203,11 +221,14 @@ namespace Police
 
         // ------------------------------------------------------------------ guest
 
-        /// <summary>Why this guest's Police doesn't take part (null = it does): its own settings and game check.</summary>
+        /// <summary>
+        /// Why this guest's Police doesn't take part (null = it does): its own settings and game check. A guest with its
+        /// own Police off draws nothing (its switch is respected), but still links and tells the host why (0.9.0).
+        /// </summary>
         private string GuestWhyOff()
         {
-            if (!Plugin.Enabled.Value) return "disabled in config";
-            if (!Plugin.MpEnabled.Value) return "Multiplayer.Enabled = false";
+            if (!Plugin.Enabled.Value) return "General.Enabled false";
+            if (!Plugin.MpEnabled.Value) return "Multiplayer.Enabled false";
             if (IsMode("Off")) return "Mode = Off";
             if (!_sessionOn) return "off (F3)";
             if (!GameApi.NetViewOk || !GameApi.PlayerOk) return "game check failed (see log)";
@@ -245,17 +266,29 @@ namespace Police
             }
             if (_gLive && !_guest.Linked) GuestChaseEnd(PursuitScore.End.Cancel, "host link lost");
             if (_gHasCar && _gp.Drifting) _gDrifted = true;
+            // 0.9.0: our own status for the hellos (the host logs why this player sees nothing)
+            _guest.MyStatus = (byte)((off == null ? 1 : 0) | (off == null && Plugin.DareEnabled.Value ? 2 : 0));
+            _guest.MyWhy = off ?? (Plugin.DareEnabled.Value ? "" : "Daredevils.Enabled false");
+            _guest.MyDareWhy = off ?? (Plugin.DareEnabled.Value ? "" : "Daredevils.Enabled false");
             if (_gHasCar && steam)
             {
                 _guest.Report(_gp.Hits, _gp.NearMisses, _gp.Drifting, _gDrifted, _gp.LevelEnded, off == null, off == null && IsMode("Normal"), _gp.TopSpeed, _gp.MaxNow);
                 _gDrifted = false;
             }
-            string state = off != null ? "multiplayer guest: idle (" + off + ")"
+            bool waiting = steam && !_guest.Linked;
+            string state = off != null ? (steam && _guest.Linked ? "multiplayer guest: Police is off in this game (" + off + "): the host's police and daredevils aren't drawn here (the host is told)"
+                                                                 : "multiplayer guest: Police is off in this game (" + off + "): nothing is drawn here")
                          : !steam ? "multiplayer guest: waiting for the Steam link (" + SteamNet.Why + ")"
-                         : _guest.Host == 0 ? "multiplayer guest: looking for the host's SteamID"
-                         : !_guest.Linked ? "multiplayer guest: waiting for the host's Police (it must run the same build with Multiplayer.Enabled)"
+                         : _guest.Host == 0 ? "multiplayer guest: waiting for the host's Police (looking for the host's SteamID)"
+                         : !_guest.Linked ? "multiplayer guest: waiting for the host's Police (no hello yet: is Police " + Plugin.Version + " installed on the host? channel " + SteamNet.Channel + ")"
+                         : !Plugin.DareEnabled.Value ? "multiplayer guest: linked (police from the host; the host's rivals aren't drawn: Daredevils.Enabled false here)"
                          : "multiplayer guest: linked (police and daredevils from the host)";
-            if (state != _gOffLogged) { _gOffLogged = state; Plugin.Log.LogInfo("[Police] " + state); }
+            // logged on every change, and (0.9.0) again every 10 s while still waiting for the host
+            if (state != _gOffLogged || (waiting || !steam) && off == null && now >= _gNextWaitLog)
+            {
+                _gOffLogged = state; _gNextWaitLog = now + 10f;
+                Plugin.Log.LogInfo("[Police] " + state);
+            }
         }
 
         /// <summary>One chase event from the host for this player.</summary>

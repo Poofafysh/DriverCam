@@ -26,6 +26,9 @@ namespace Police
     ///   DaredevilPlanner on a traffic snapshot (every 0.1 s): it heads for your lane, passes traffic round the gaps,
     ///   takes corners at full speed (the game's curve slow-down held off) and only brakes for a car it can't get round;
     ///   it never steers into you (the planner's never-hit rules). Handed back to its home lane when the chase ends.
+    ///   0.9.0: smooth like a driver (DriveFeel): the offset through a bounded lateral spring, the speed a jerk-limited
+    ///   ramp written as MaxSpeed and Speed (launch: a 15 m/s^2 ramp, no jump), an emergency cut only when nothing else
+    ///   avoids contact; aims at the chased lane 0.4 s ahead.
     /// - Ends: lead bar full / empty, time up (at or past the middle = escaped), every chaser more than 200 m behind for
     ///   3 s (only with the lead bar at or past the middle and not in the first 12 s), every unit lost (despawned, or 260 m
     ///   behind: "lost them" below the middle), the last unit wrecked ("they crashed"; cancelled in the first 3 s), or the
@@ -75,6 +78,9 @@ namespace Police
         private const float PenaltyKeepSeconds = 3f;
         // chase driving (0.7.0)
         private const float DriveSnapSeconds = 0.1f, DriveRate = 4.5f, DriveLookAhead = 260f;
+        // 0.9.0: a driven chaser accelerates at most ChaseAccel m/s^2 (ChaseLaunchAccel while below LaunchFactor x the
+        // chased player's speed: the launch is a ramp, no speed jump) and aims at the chased lane ChasePreview s ahead
+        private const float ChaseAccel = 12f, ChaseLaunchAccel = 15f, ChasePreview = 0.4f;
         // 0.8.2: how far across chasers may drive = the outermost lane centre of the live road (road width / 2 - half a
         // 5 m lane): 7.5 m on the game's 20 m roads, 12.5 m on Sandbox's 30 m / 6-lane road; read once a second
         private const float StockDriveLimit = 7.5f;
@@ -122,6 +128,12 @@ namespace Police
             public bool Driving;
             public float LatOffset, PlanTarget = float.NaN, Yaw;
             public bool Reverse;               // on the oncoming path: never driven by us
+            // 0.9.0 smooth driving (DriveFeel): lateral spring, commanded speed, age of the chosen gap, smoothness meter
+            public LatState Lat;
+            public SpeedState Spd;
+            public float GapAge;
+            public bool LastEvading;
+            public readonly FeelMeter Feel = new FeelMeter();
         }
 
         /// <summary>
@@ -403,6 +415,7 @@ namespace Police
             {
                 // a new race (or a new car): nothing carries over
                 if (_patrols.Count > 0 || AnyLive()) ReleaseAll("new race");
+                LogSmoothSummary();   // 0.9.0: a race left before its end still gets its smoothness line
                 _raceCar = _local.P.Car; _raceSpawner = spawner;
                 _nextPatrolAt = float.NaN; _lastTickTime = -1f; _nextPickTry = 0f;
                 foreach (var s in _suspects) NewRaceFor(s);
@@ -423,6 +436,7 @@ namespace Police
             if (AllEnded())
             {
                 if (_patrols.Count > 0 || AnyLive()) ReleaseAll(RaceOver);   // a running chase's pending PURSUIT points are banked
+                LogSmoothSummary();
                 SetState("race over");
                 return;
             }
@@ -456,6 +470,13 @@ namespace Police
             }
             if (_broken || _tickOff) return;   // a breaker tripped inside the chase step: pick nothing new (nothing would restore it)
             MaybePick();
+        }
+
+        /// <summary>0.9.0: the race's smoothness line (chasers and rivals; Daredevils logs it too, whichever comes first), always logged.</summary>
+        private void LogSmoothSummary()
+        {
+            var line = SmoothTally.TakeSummary(_raceCar);
+            if (line != null) Plugin.Log.LogInfo(line);
         }
 
         private bool AnyLive()
@@ -787,7 +808,7 @@ namespace Police
             p.Target = s;
             s.Chasers.Add(p);
             ApplyChase(p);
-            if (!Driven || p.Lane == null || p.Reverse) GameApi.Launch(p.Pf, LaunchFactor * s.P.Speed);   // driven: Drive launches it once the way is clear
+            if (!Driven || p.Lane == null || p.Reverse) GameApi.Launch(p.Pf, LaunchFactor * s.P.Speed);   // driven: Drive ramps it up (0.9.0: an acceleration ramp, no speed jump)
         }
 
         /// <summary>A player's car's current top speed (upgrades and boosts), or its base top speed if unknown.</summary>
@@ -988,6 +1009,7 @@ namespace Police
         {
             var s = p.Target;
             bool wasChaser = s != null && s.Chasers.Remove(p);
+            SmoothTally.Add(_raceCar, p.Feel, false);   // 0.9.0: a driven chaser's smoothness into the race summary (nothing if never driven)
             RestoreChase(p, true);
             p.Target = null;
             if (p.Bar != null) { try { p.Bar.Destroy(); } catch { /* scene */ } p.Bar = null; }
@@ -1094,7 +1116,7 @@ namespace Police
                 _snapTime = now;
             }
             float youV = Mathf.Max(0f, _dp.Speed);
-            float soon = _dp.Lane + Mathf.Clamp(_dpLaneVel, -8f, 8f) * 0.6f;
+            float soon = _dp.Lane + Mathf.Clamp(_dpLaneVel, -8f, 8f) * 0.7f;   // 0.9.0: 0.6 s + the game's 0.1 s position smoothing
             // multiplayer host: _others = [you exactly as the planner's "you" (no latency)] + every remote player (with their
             // latency margins), for chasers of a remote player; _othersShift = the remote players only, for chasers of you
             bool mp = _mode == NetMode.Host && Players.All.Count > 0;
@@ -1129,22 +1151,27 @@ namespace Police
                     float cur = GameApi.ReadMaxSpeed(c.Pf);
                     if (!float.IsNaN(c.Written) && Mathf.Abs(cur - c.Written) > 0.01f) { c.Offset += cur - c.Written; c.ChaseTop += cur - c.Written; }
                     float v = Mathf.Max(0f, c.S.Speed);
-                    bool start = !c.Driving;
-                    if (start)
+                    if (!c.Driving)
                     {
                         c.Driving = true;
+                        DriveFeel.ResetLat(ref c.Lat, c.S.Lane);
                         c.LatOffset = c.S.Lane;
-                        c.PlanTarget = float.NaN;
-                        GameApi.ClampSpeed(c.Pf, v);   // from what it really drives: no jump when the game's slow-down factors go to 1
+                        c.PlanTarget = float.NaN; c.GapAge = 0f; c.LastEvading = false;
+                        c.Spd.V = v; c.Spd.A = 0f;   // from what it really drives: no jump when the game's slow-down factors go to 1
+                        c.Feel.Reset();
                     }
+                    else if (Mathf.Abs(v - c.Spd.V) > 3f && _roadN < _road.Length) { c.Spd.V = v; c.Spd.A = 0f; }   // something else moved its speed
                     float halfW = Mathf.Clamp(c.BoxS.x * 0.5f, 0.8f, 1.3f), halfL = Mathf.Clamp(c.BoxS.z * 0.5f, 1.8f, 3.2f);
+                    var lim = DriveFeel.Limits(v, DriveRate, c.LastEvading, false);
                     var input = new PlanInput
                     {
-                        Self = c.Ptr, S = c.S.Road, V = v, Offset = c.LatOffset, HalfW = halfW, HalfL = halfL,
-                        LineTarget = Mathf.Clamp(_dp.Lane, -DriveLimit, DriveLimit), PrevTarget = c.PlanTarget,
-                        Limit = DriveLimit, Rate = DriveRate, Vmax = c.ChaseTop, SinceSnap = now - _snapTime,
+                        Self = c.Ptr, S = c.S.Road, V = v, Offset = c.Lat.X, HalfW = halfW, HalfL = halfL,
+                        LineTarget = Mathf.Clamp(_dp.Lane + Mathf.Clamp(_dpLaneVel, -8f, 8f) * ChasePreview, -DriveLimit, DriveLimit),
+                        PrevTarget = c.PlanTarget, PrevAge = c.GapAge,
+                        Limit = DriveLimit, Rate = lim.VMax, LatAccel = lim.AMax, LatJerk = lim.JMax, LatVel = c.Lat.V, Vmax = c.ChaseTop, SinceSnap = now - _snapTime,
                         YouValid = true, YouRoad = _dp.Distance, YouLane = _dp.Lane,
                         YouLo = Mathf.Min(_dp.Lane, soon), YouHi = Mathf.Max(_dp.Lane, soon), YouSpeed = youV,
+                        YouLaneVel = Mathf.Clamp(_dpLaneVel, -8f, 8f),
                     };
                     float targetV = youV;
                     if (mp && !s.Local && s.Remote != null && s.Remote.Ok)
@@ -1153,22 +1180,30 @@ namespace Police
                         // latency: [0]), every remote player (them included) one with their latency margins
                         var r = s.Remote;
                         input.YouValid = false;
-                        input.LineTarget = Mathf.Clamp(r.Lane + Mathf.Clamp(r.LaneVel, -8f, 8f) * r.OneWay, -DriveLimit, DriveLimit);
+                        input.LineTarget = Mathf.Clamp(r.Lane + Mathf.Clamp(r.LaneVel, -8f, 8f) * (r.OneWay + ChasePreview), -DriveLimit, DriveLimit);
                         input.Others = _others; input.OthersN = othersN;
                         targetV = r.Speed;
                     }
                     else if (mp) { input.Others = _othersShift; input.OthersN = remotesN; }   // you as before, every remote player as an obstacle
                     var plan = DaredevilPlanner.Plan(input, _road, _roadN);
+                    c.GapAge = plan.NewGap ? 0f : c.GapAge + dt;
                     c.PlanTarget = plan.Target;
-                    float before = c.LatOffset;
-                    c.LatOffset = Mathf.MoveTowards(c.LatOffset, plan.Target, DriveRate * (plan.Evading ? 1.6f : 1f) * dt);
-                    float sideways = (c.LatOffset - before) / dt;
-                    c.Yaw = v > 1f ? Mathf.Atan2(sideways, v) * Mathf.Rad2Deg : 0f;   // the look points where it goes
+                    if (plan.Threat != c.LastEvading) { lim = DriveFeel.Limits(v, DriveRate, plan.Threat, false); c.LastEvading = plan.Threat; }   // toward a player: full evade limits at once
+                    DriveFeel.StepLat(ref c.Lat, plan.Target, dt, lim);   // the planner's pick through the lateral spring
+                    c.LatOffset = c.Lat.X;
+                    c.Yaw = DriveFeel.FollowYaw(c.Yaw, DriveFeel.Heading(c.Lat.PV, v), dt);   // the look points where the body really goes
                     float top = Mathf.Max(1f, Mathf.Min(c.ChaseTop, plan.Cap));
-                    GameApi.Steer(c.Pf, c.Lane, c.LatOffset, top, _roadN < _road.Length);   // a full snapshot: keep the game's braking too
-                    c.Written = top;   // ours: ApplyChase doesn't take it for a slow-motion change
-                    if (plan.Instant < v) GameApi.ClampSpeed(c.Pf, plan.Instant);
-                    else if (start) GameApi.Launch(c.Pf, Mathf.Min(LaunchFactor * targetV, top));   // the launch, now that the way is known to be clear
+                    float accel = c.Spd.V < LaunchFactor * targetV ? ChaseLaunchAccel : ChaseAccel;   // the launch: a ramp, not a jump
+                    DriveFeel.Longitudinal(ref c.Spd, top, in plan, dt, accel, c.Feel, out float cutFrom);
+                    if (!float.IsNaN(cutFrom) && Plugin.LogEvents.Value)
+                        Plugin.Log.LogInfo($"[Police] chaser{s.Who}: emergency cut {cutFrom * 3.6f:0} -> {c.Spd.V * 3.6f:0} km/h (room {plan.NeedRoom:0.0} m, closing {plan.NeedClosing * 3.6f:0} km/h, needed {plan.NeedDecel:0} m/s^2)");
+                    GameApi.Steer(c.Pf, c.Lane, c.Lat.X, c.Spd.V, c.Spd.A, _roadN < _road.Length);   // a full snapshot: keep the game's braking too
+                    c.Written = c.Spd.V;   // ours: ApplyChase doesn't take it for a slow-motion change
+                    if (c.Feel.Frame(dt, c.Yaw, c.Lat.A, c.Spd.A, plan.Target))
+                    {
+                        if (Plugin.LogSmooth.Value) Plugin.Log.LogInfo($"[Police] smoothness chaser{s.Who} {(c.Look != null ? c.Look.Name : "traffic car")}: {c.Feel.WindowText()}");
+                        c.Feel.EndWindow();
+                    }
                 }
             }
         }
@@ -1184,8 +1219,9 @@ namespace Police
         }
 
         /// <summary>Gives a driven chaser back to the game's driving (still chasing: its chase values stay).</summary>
-        private static void StopDriving(Patrol c)
+        private void StopDriving(Patrol c)
         {
+            SmoothTally.Add(_raceCar, c.Feel, false);   // 0.9.0: this drive's smoothness into the race summary
             c.Driving = false; c.Yaw = 0f;
             try { if (c.Lane != null && c.S.Active && !c.S.WasHit) GameApi.HandBack(c.Lane, c.HomeLane); }
             catch { /* destroyed with the scene */ }

@@ -285,6 +285,8 @@ namespace Police
         }
 
         private bool Need(int k) { if (_p + k > _n) { Ok = false; return false; } return true; }
+        /// <summary>Bytes left: a newer sender appends fields an older reader never reads (0.9.0 hello status).</summary>
+        internal bool More => _p < _n;
         internal byte U8() => Need(1) ? _b[_p++] : (byte)0;
         internal int U16() { if (!Need(2)) return 0; int v = _b[_p] | (_b[_p + 1] << 8); _p += 2; return v; }
         internal uint U32() { if (!Need(4)) return 0; uint v = (uint)(_b[_p] | (_b[_p + 1] << 8) | (_b[_p + 2] << 16) | (_b[_p + 3] << 24)); _p += 4; return v; }

@@ -40,7 +40,7 @@ namespace Police
         private readonly List<BossModel> _models = new List<BossModel>();
         private float _nextModelLoad;
         private int _failures;
-        private bool _looksOff, _markersOff, _logged;
+        private bool _looksOff, _markersOff, _loggedPatrol, _loggedRival;
 
         internal int Count => _cars.Count;
 
@@ -192,7 +192,12 @@ namespace Police
                     catch (Exception e) { _markersOff = true; Plugin.Log.LogWarning($"[Police] multiplayer guest: 3D markers switched off for this session: {e.Message}"); }
                 }
             }
-            if (!_logged) { _logged = true; Plugin.Log.LogInfo($"[Police] multiplayer guest: first {(c.Rival ? "daredevil" : "patrol")} from the host drawn ({(c.Look != null ? c.Look.Name : "traffic look")})"); }
+            // 0.9.0: the first patrol and the first rival each logged once (a guest that draws nothing can be told apart)
+            if (c.Rival ? !_loggedRival : !_loggedPatrol)
+            {
+                if (c.Rival) _loggedRival = true; else _loggedPatrol = true;
+                Plugin.Log.LogInfo($"[Police] multiplayer guest: first {(c.Rival ? "daredevil" : "patrol")} from the host drawn ({(c.Look != null ? c.Look.Name : "traffic look")})");
+            }
         }
 
         /// <summary>The game's boss list, loaded once it is available (same order on every machine: the game's data).</summary>

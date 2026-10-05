@@ -23,10 +23,10 @@ namespace Police
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.police";
-        public const string Version = "0.8.2";
+        public const string Version = "0.9.0";
 
         internal static new ManualLogSource Log;
-        internal static ConfigEntry<bool> Enabled, LogEvents, Markers, NoticeNearMiss, NoticeDrift;
+        internal static ConfigEntry<bool> Enabled, LogEvents, LogSmooth, Markers, NoticeNearMiss, NoticeDrift;
         internal static ConfigEntry<string> Mode, CarModels, Livery;
         internal static ConfigEntry<int> MaxPatrols, MaxChasers, ConfigVersion;
         internal static ConfigEntry<float> PatrolSpacing, NoticeRange, OverspeedKmh, CloseLaneMetres, PassWindow;
@@ -42,7 +42,7 @@ namespace Police
         public override void Load()
         {
             Log = base.Log;
-            Enabled = Config.Bind("General", "Enabled", true, "Master switch. F3 turns patrols off / on for the current session.");
+            Enabled = Config.Bind("General", "Enabled", true, "Master switch. F3 turns patrols off / on for the current session. In multiplayer, Police still links to the other players' Police over its Steam channel with it off (hellos only: no cars, chases or drawing), so their logs say why.");
             Mode = Config.Bind("General", "Mode", "Normal",
                 new ConfigDescription("Normal = patrols notice you and chase. Chill = patrols drive around with their lightbars but never notice you. Off = no patrols.",
                                       new AcceptableValueList<string>("Normal", "Chill", "Off")));
@@ -104,8 +104,10 @@ namespace Police
                 "Police and daredevils in multiplayer (every player should run the same Police build). The host drives every patrol, chase and daredevil, for every player " +
                 "(its Patrols / Notice / Chase settings apply to everyone); each guest draws them, shows its own pursuit panel and scores its own PURSUIT. " +
                 "No caught time penalty in multiplayer (the race countdown is shared by the game's networking). Players talk " +
-                "to the host over a private Steam channel. Off = Police does nothing in multiplayer.");
+                "to the host over a private Steam channel. Off = no police or daredevils in multiplayer (Police still tells the other players' Police that it is off, so their logs say why).");
             LogEvents = Config.Bind("Debug", "LogEvents", true, "Log patrols picked and released, notices, chases and their outcome (for /game-log).");
+            LogSmooth = Config.Bind("Debug", "Smoothness", false,
+                "Log once a second, for every chaser and rival we drive: its largest yaw rate, lateral jerk and speed jerk, planner target flips, emergency cuts and speed reversals (for comparing builds; the per-race smoothness summary is logged either way).");
             ConfigVersion = Config.Bind("Debug", "ConfigVersion", 0, "Written by the plugin (settings migration). Don't edit.");
             Migrate();
 

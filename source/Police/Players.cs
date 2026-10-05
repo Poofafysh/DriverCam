@@ -130,7 +130,7 @@ namespace Police
                 var r = All[i];
                 if (r == skip || !r.Ok || r.Dead) continue;
                 float lv = Mathf.Clamp(r.LaneVel, -8f, 8f);
-                float soon = r.Lane + lv * (0.6f + r.OneWay);   // where it's heading, as for you, plus the update's age
+                float soon = r.Lane + lv * (0.7f + r.OneWay);   // where it's heading, as for you (0.9.0: 0.6 s + the game's 0.1 s smoothing), plus the update's age
                 buf[n++] = new PlanOther
                 {
                     Road = RoadNow(r, now), Lo = Mathf.Min(r.Lane, soon), Hi = Mathf.Max(r.Lane, soon), Speed = r.Speed,

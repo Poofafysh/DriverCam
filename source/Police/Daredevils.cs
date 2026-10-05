@@ -34,16 +34,19 @@ namespace Police
     /// Driving (LateUpdate, written for the next physics steps; GameApi.Steer):
     /// - lateral (DaredevilPlanner): the gap planner picks the offset across the road with the most free speed (then the
     ///   one nearer the racing line, then the smallest move), never inside the band of a car alongside, never cutting across
-    ///   a car within its safe gap; boxed in, the braking envelope queues it. The offset moves at most 4.5 m/s sideways
-    ///   (5.5 for drift cars, 1.6x when evading).
+    ///   a car within its safe gap; boxed in, the braking envelope queues it. 0.9.0: the offset follows the planner's pick
+    ///   through DriveFeel.StepLat (bounded sideways speed 4.5 / 5.5 m/s, acceleration and jerk; much quicker when
+    ///   evading), the line is read speed x DriveFeel.Preview ahead, a chosen gap is kept 0.8 s unless unsafe.
     /// - never into you: while you are alongside or close, the side of you it is on is a hard limit (your lane now and
-    ///   where you're heading in 0.6 s, plus both widths + 1.6 m); it only swings back in front of you once it is
+    ///   where you're heading in 0.7 s, plus both widths + 1.6 m); it only swings back in front of you once it is
     ///   12 m + 1.5 s x your extra speed ahead; anything in line ahead caps its speed by a braking envelope (it can always
     ///   slow to that car's real road speed before a safe gap: 8 m + 0.35 s behind you, 5 m + 0.2 s behind traffic,
     ///   allowing for the game's speed smoothing on the closing speed). You always keep the full envelope; a traffic car
-    ///   it will swerve clear of before reaching that car's safe gap doesn't brake it. Inside a safe gap and closing, its
-    ///   running speed is cut at once.
-    /// - style: grip cars point where they go (yaw = their sideways motion); drift cars slide: the look is turned into
+    ///   it will swerve clear of before reaching that car's safe gap doesn't brake it. 0.9.0: the speed is a jerk-limited
+    ///   ramp (DriveFeel.Longitudinal) written as MaxSpeed and Speed; inside a safe gap it brakes up to 13.5 m/s^2, and the
+    ///   running speed is cut at once only when even that can't stop it closing before contact (logged).
+    /// - style: grip cars point where they go (yaw = the body's real sideways motion: the game's 0.1 s position
+    ///   smoothing modelled, eased so it never steps); drift cars slide: the look is turned into
     ///   the corner by up to MaxSlipAngle as the cornering load rises. Front wheels steer with the corner (line curvature
     ///   over the wheelbase); drift cars counter-steer. The physics car itself is never turned.
     /// The game's own obstruction braking (pedalFactor: a gentle, long-range slow-down) is held off while a rival races
@@ -69,7 +72,7 @@ namespace Police
         private const float GripStart = 16f, GripMin = 8f, GripMax = 45f, GripRate = 3f;    // your cornering estimate (m/s^2)
         private const float TowGap = 30f, TowLane = 1.5f, TowBoost = 1.06f;
         private const float GapMargin = 0.9f, SafeGap = 5f, SafeTime = 0.2f;                                                     // traffic
-        private const float YouMargin = 1.6f, YouSafeGap = 8f, YouSafeTime = 0.35f, YouClearAhead = 12f, YouClearSeconds = 1.5f, YouPredict = 0.6f;   // you
+        private const float YouMargin = 1.6f, YouSafeGap = 8f, YouSafeTime = 0.35f, YouClearAhead = 12f, YouClearSeconds = 1.5f, YouPredict = 0.7f;   // you (0.9.0: 0.6 s + the game's 0.1 s position smoothing)
         private const float YouHalfWidth = 1.0f, YouHalfLength = 2.4f;
         private const float Wheelbase = 2.7f;
         private const float NearAdopt = 300f;   // 0.7.0: further ahead, a daredevil is only picked up while no rival is near you and fewer than 2 race
@@ -102,6 +105,12 @@ namespace Police
             // precision and racecraft
             public float Wander, WanderTarget, NextWander, DefendCorner = float.NaN, DefendSide;
             public float PlanTarget = float.NaN;   // the gap planner's last pick (hysteresis)
+            // 0.9.0 smooth driving (DriveFeel): lateral spring, commanded speed, age of the chosen gap, smoothness meter
+            public LatState Lat;
+            public SpeedState Spd;
+            public float GapAge;
+            public bool LastQuick;                 // last frame: a player close to its band (full evade limits)
+            public readonly FeelMeter Feel = new FeelMeter();
             // race report
             public float NearTime, SpeedSum, YouSum, SpeedTime, Closest = float.PositiveInfinity;
             public int Passes, Passed, RelSign;
@@ -114,7 +123,7 @@ namespace Police
             public float AnyD = float.NaN, AnyRel, AnyLat, AnyClosing;             // box distance, its place (+ = ahead), side clearance, closing speed
             public bool AnyWreck, AnyOncoming;
             public float AdoptedAt, SteerSince = float.NaN;                        // game time picked up / steering (re)started
-            public float LastInstantAt = float.NaN, LastInstantCut;                // the last instant speed cut and its size (m/s)
+            public float LastInstantAt = float.NaN, LastInstantCut;                // the last emergency speed cut and its size (m/s)
             public bool LastEvading, LastCapped;                                   // last frame: evading you / speed capped by a car
             // contacts with you (the never-hit rule made visible)
             public float TickMinGap = float.PositiveInfinity;
@@ -237,6 +246,7 @@ namespace Police
             if (_player.Car != _raceCar)
             {
                 if (_rivals.Count > 0) ReleaseAll("new race");
+                LogSmoothSummary();   // a race left before its end still gets its smoothness line
                 _raceCar = _player.Car;
                 _lastPlayerLane = float.NaN; _playerLaneVel = 0f; _lastPlayerDist = float.NaN; _playerRoadVel = float.NaN;
                 _youTop = float.NaN; _raceReported = false;   // your cornering estimate carries over: usually the same car
@@ -249,6 +259,7 @@ namespace Police
                 if (_rivals.Count > 0) ReleaseAll("race over");
                 var summary = DaredevilTally.TakeSummary(_raceCar);   // every race with a rival, also when none is left driving (once: the tally starts over)
                 if (summary != null) Plugin.Log.LogInfo(summary);
+                LogSmoothSummary();
                 if (!_raceReported && _e != null) { _raceReported = true; Plugin.Log.LogInfo($"[Police] daredevils: race over, your cornering {_youGrip:0} m/s^2, your top speed {_youTop * 3.6f:0} km/h"); }
                 SetState("race over");
                 return;
@@ -292,6 +303,13 @@ namespace Police
                 for (int i = 0; i < _found.Count && _rivals.Count < MaxRivals; i++) Adopt(_found[i], !nearOne && _rivals.Count < 2);
             }
             PublishNet();
+        }
+
+        /// <summary>0.9.0: the race's smoothness line (rivals and chasers; Runner logs it too, whichever comes first), always logged.</summary>
+        private void LogSmoothSummary()
+        {
+            var line = SmoothTally.TakeSummary(_raceCar);
+            if (line != null) Plugin.Log.LogInfo(line);
         }
 
         /// <summary>Multiplayer host: the rivals' netIds and boss ranks for the guests (Runner sends them).</summary>
@@ -595,25 +613,28 @@ namespace Police
 
         private void Steer(Rival r, float now, float dt)
         {
+            float s = r.S.Road, v = Mathf.Max(0f, r.S.Speed);
             if (!r.Steering)
             {
                 r.Steering = true;
                 r.SteerSince = now;
+                DriveFeel.ResetLat(ref r.Lat, r.S.Lane);
                 r.Offset = r.S.Lane;
-                r.PlanTarget = float.NaN;
+                r.PlanTarget = float.NaN; r.GapAge = 0f; r.LastQuick = false;
+                r.Feel.Reset();
                 // 0.7.0 (review: 15 of 42 crashes right where the rival was picked up): Steer holds pedalFactor and
                 // curvatureFactor at 1, so a car the game had slowed (behind traffic, in a curve) would jump to its raw
-                // Speed in the next physics step. Its running speed starts from what it really drives (S.Speed =
-                // Speed x pedal x curvature); the planner speeds it up from there.
-                GameApi.ClampSpeed(r.Pf, Mathf.Max(0f, r.S.Speed));
+                // Speed in the next physics step. 0.9.0: the commanded speed starts from what it really drives (S.Speed =
+                // Speed x pedal x curvature), standing still in acceleration, and ramps from there (no cut, no jump).
+                r.Spd.V = v; r.Spd.A = 0f;
                 GameApi.WriteChaseExtras(r.Pf, Mathf.Min(Smoothness, r.SavedSmooth), float.NaN);
             }
-            float s = r.S.Road, v = Mathf.Max(0f, r.S.Speed);
+            else if (Mathf.Abs(v - r.Spd.V) > 3f && _roadN < _road.Length) { r.Spd.V = v; r.Spd.A = 0f; }   // something else moved its speed: follow the car
             float rel = s - _player.Distance;   // + = ahead of you
-            float cap = float.PositiveInfinity;
 
-            // the line, with a weaker driver's slow wander off it
-            float target = Sample(_e, s, _step, _n);
+            // the line, read where it will be by the time the lateral spring gets there (speed x DriveFeel.Preview ahead),
+            // with a weaker driver's slow wander off it
+            float target = Sample(_e, s + v * DriveFeel.Preview, _step, _n);
             float wanderAmp = 0.9f * Mathf.Clamp01((1.05f - r.Skill) / 0.15f);
             if (wanderAmp > 0f)
             {
@@ -640,49 +661,65 @@ namespace Police
             }
 
             // traffic and you: the gap planner (DaredevilPlanner) picks the offset with the most free speed, brakes only for
-            // cars it won't be clear of in time, and keeps every never-hit rule (your band, the swing-back, the instant cut)
+            // cars it won't be clear of in time, and keeps every never-hit rule (your band, the swing-back); its sideways
+            // timing uses this car's real sideways limits (DriveFeel.Limits)
             float myHalfW = Mathf.Clamp(r.BoxS.x * 0.5f, 0.8f, 1.3f), myHalfL = Mathf.Clamp(r.BoxS.z * 0.5f, 1.8f, 3.2f);
             float paceTop = r.Top * r.Push * (Plugin.DareSlipstream.Value ? TowBoost : 1f);
             float pace = r.Profile != null ? Mathf.Min(paceTop, Sample(r.Profile, s + v * LeadSeconds, _step, _n) * r.Push) : paceTop;
             float soon = _player.Lane + Mathf.Clamp(_playerLaneVel, -8f, 8f) * YouPredict;   // where you're heading
+            float rate = r.Drift ? 5.5f : 4.5f;
+            var lim = DriveFeel.Limits(v, rate, r.LastQuick, r.Drift);
             var plan = DaredevilPlanner.Plan(new PlanInput
             {
-                Self = r.Ptr, S = s, V = v, Offset = r.Offset, HalfW = myHalfW, HalfL = myHalfL,
-                LineTarget = Mathf.Clamp(target, -_limit, _limit), PrevTarget = r.PlanTarget,
-                Limit = _limit, Rate = r.Drift ? 5.5f : 4.5f, Vmax = pace, SinceSnap = now - _snapTime,
+                Self = r.Ptr, S = s, V = v, Offset = r.Lat.X, HalfW = myHalfW, HalfL = myHalfL,
+                LineTarget = Mathf.Clamp(target, -_limit, _limit), PrevTarget = r.PlanTarget, PrevAge = r.GapAge,
+                Limit = _limit, Rate = lim.VMax, LatAccel = lim.AMax, LatJerk = lim.JMax, LatVel = r.Lat.V, Vmax = pace, SinceSnap = now - _snapTime,
                 YouValid = true, YouRoad = _player.Distance + youV * (now - _playerTime), YouLane = _player.Lane,
                 YouLo = Mathf.Min(_player.Lane, soon), YouHi = Mathf.Max(_player.Lane, soon), YouSpeed = youV,
+                YouLaneVel = Mathf.Clamp(_playerLaneVel, -8f, 8f),
                 Others = _othersN > 0 ? _others : null, OthersN = _othersN,
             }, _road, _roadN);
-            target = plan.Target;
+            r.GapAge = plan.NewGap ? 0f : r.GapAge + dt;
             r.PlanTarget = plan.Target;
-            cap = plan.Cap;
-            float instant = plan.Instant;
+            float cap = plan.Cap;
             bool tow = plan.Tow;
             bool evading = plan.Evading;
-            float rate = (r.Drift ? 5.5f : 4.5f) * (evading ? 1.6f : 1f);
-            float before = r.Offset;
-            r.Offset = Mathf.MoveTowards(r.Offset, target, rate * dt);
+            if (plan.Threat != r.LastQuick) { lim = DriveFeel.Limits(v, rate, plan.Threat, r.Drift); r.LastQuick = plan.Threat; }   // toward a player: full evade limits at once
+            DriveFeel.StepLat(ref r.Lat, plan.Target, dt, lim);   // the planner's pick through the lateral spring
+            r.Offset = r.Lat.X;
 
-            // look: grip = pointing where it goes; drift = sliding into the corner; front wheels steer with the corner
-            float sideways = dt > 0f ? (r.Offset - before) / dt : 0f;
-            float heading = v > 1f ? Mathf.Atan2(sideways, v) * Mathf.Rad2Deg : 0f;
+            // look: grip = pointing where the body really goes (the game's smoothed sideways motion); drift = sliding into
+            // the corner; front wheels steer with the corner
+            float heading = DriveFeel.Heading(r.Lat.PV, v);
             float k = Sample(_k, s, _step, _n), load = v * v * k;   // signed cornering load, + = turning right
             float maxSlip = Mathf.Clamp(Plugin.DareMaxSlip.Value, 0f, 50f);
             float want = r.Drift ? Mathf.Sign(load) * maxSlip * Mathf.Clamp01((Mathf.Abs(load) - 2.5f) / 5.5f)
                                  : Mathf.Sign(load) * 2.5f * Mathf.Clamp01(Mathf.Abs(load) / 10f);
             r.Slip += (want - r.Slip) * (1f - Mathf.Exp(-dt * (r.Drift ? 3f : 6f)));
-            r.Yaw = heading + r.Slip;
+            r.Yaw = DriveFeel.FollowYaw(r.Yaw, heading + r.Slip, dt);
             float steerWant = Mathf.Atan(Wheelbase * k) * Mathf.Rad2Deg + 0.5f * heading - (r.Drift ? 0.85f * r.Slip : 0f);   // drift: counter-steer
             r.Steer += (Mathf.Clamp(steerWant, -32f, 32f) - r.Steer) * (1f - Mathf.Exp(-dt * 8f));
 
-            // speed: the rival's own profile (its skill on your car's numbers), push / conserve, slipstream
+            // speed: the rival's own profile (its skill on your car's numbers), push / conserve, slipstream, capped by the
+            // planner; reached by the jerk-limited speed ramp (DriveFeel.StepSpeed), braking harder (up to BrakeHard) when a
+            // car needs it; an emergency cut only when even that can't stop it closing in time
             r.Push = DaredevilPacing.Factor(rel, dt, r.Push, youV / Mathf.Max(1f, r.Top));   // out of sight: ease ahead / push behind; in sight: honest
             float top = r.Top * r.Push * (tow && Plugin.DareSlipstream.Value ? TowBoost : 1f);
             float vt = r.Profile != null ? Mathf.Min(top, Sample(r.Profile, s + v * LeadSeconds, _step, _n) * r.Push) : top;   // cap: the planner's
-            GameApi.Steer(r.Pf, r.Lane, r.Offset, Mathf.Min(vt, cap), _roadN < _road.Length);   // a full snapshot: keep the game's braking too
-            if (instant < v) { GameApi.ClampSpeed(r.Pf, instant); r.LastInstantAt = now; r.LastInstantCut = v - instant; }   // too close: slow now, not after the game's smoothing
+            DriveFeel.Longitudinal(ref r.Spd, Mathf.Min(vt, cap), in plan, dt, Mathf.Max(6f, BaseAccel * 2f * r.Skill), r.Feel, out float cutFrom);
+            if (!float.IsNaN(cutFrom))
+            {
+                r.LastInstantAt = now; r.LastInstantCut = cutFrom - r.Spd.V;
+                if (Plugin.LogEvents.Value)
+                    Plugin.Log.LogInfo($"[Police] daredevil {r.Name}: emergency cut {cutFrom * 3.6f:0} -> {r.Spd.V * 3.6f:0} km/h (room {plan.NeedRoom:0.0} m, closing {plan.NeedClosing * 3.6f:0} km/h, needed {plan.NeedDecel:0} m/s^2)");
+            }
+            GameApi.Steer(r.Pf, r.Lane, r.Lat.X, r.Spd.V, r.Spd.A, _roadN < _road.Length);   // a full snapshot: keep the game's braking too
             r.LastEvading = evading; r.LastCapped = cap < vt - 0.5f;
+            if (r.Feel.Frame(dt, r.Yaw, r.Lat.A, r.Spd.A, plan.Target))
+            {
+                if (Plugin.LogSmooth.Value) Plugin.Log.LogInfo($"[Police] smoothness daredevil {r.Name}: {r.Feel.WindowText()}");
+                r.Feel.EndWindow();
+            }
         }
 
         /// <summary>The race report: time near you, overtakes both ways, closest gap, average speeds (logged when let go).</summary>
@@ -697,7 +734,7 @@ namespace Police
             if (r.RelSign < 0 && sign > 0) r.Passes++;        // it got past you
             else if (r.RelSign > 0 && sign < 0) r.Passed++;   // you got past it
             r.RelSign = sign;
-            float gap = Mathf.Max(Mathf.Abs(rel) - (myHalfL + YouHalfLength), Mathf.Abs(r.Offset - _player.Lane) - (myHalfW + YouHalfWidth));
+            float gap = Mathf.Max(Mathf.Abs(rel) - (myHalfL + YouHalfLength), Mathf.Abs(r.Lat.PX - _player.Lane) - (myHalfW + YouHalfWidth));
             if (gap < r.Closest) r.Closest = gap;
             if (gap < r.TickMinGap) r.TickMinGap = gap;
         }
@@ -783,7 +820,7 @@ namespace Police
                 : $"closest car any side {Mathf.Max(0f, r.AnyD):0.0} m ({(r.AnyRel >= 0f ? "ahead" : "behind")} {Mathf.Abs(r.AnyRel):0} m, side clearance {r.AnyLat:0.0} m, " +
                   $"{(r.AnyWreck ? "a wreck" : r.AnyOncoming ? "oncoming" : $"closing {r.AnyClosing * 3.6f:0} km/h")})";
             string steer = !r.Steering || float.IsNaN(r.SteerSince) ? "not steering" : $"steering {now - r.SteerSince:0.0} s";
-            string cut = !float.IsNaN(r.LastInstantAt) && now - r.LastInstantAt < 2f ? $", instant cut {r.LastInstantCut * 3.6f:0} km/h {now - r.LastInstantAt:0.0} s before" : "";
+            string cut = !float.IsNaN(r.LastInstantAt) && now - r.LastInstantAt < 2f ? $", emergency cut {r.LastInstantCut * 3.6f:0} km/h {now - r.LastInstantAt:0.0} s before" : "";
             float halfW = Mathf.Clamp(r.BoxS.x * 0.5f, 0.8f, 1.3f);
             float k = _e != null && r.S.Road >= 0f ? Mathf.Abs(Sample(_k, r.S.Road, _step, _n)) : 0f;
             return $"{any}; picked up {now - r.AdoptedAt:0.0} s ago, {steer}{cut}{(r.LastEvading ? ", evading you" : "")}{(r.LastCapped ? ", capped by a car" : "")}; " +
@@ -797,6 +834,7 @@ namespace Police
         private void StopSteering(Rival r, bool backToLane)
         {
             r.Steering = false;
+            SmoothTally.Add(_raceCar, r.Feel, true);   // 0.9.0: this drive's smoothness into the race summary
             try
             {
                 if (r.Pf != null && r.Saved) { GameApi.WriteChase(r.Pf, r.SavedRubber, r.SavedMax); GameApi.WriteChaseExtras(r.Pf, r.SavedSmooth, float.NaN); }
@@ -814,6 +852,7 @@ namespace Police
             if (r.S.WasHit && !r.Crashed) NoteCrash(r);   // hit in the same frame as a ReleaseAll: still counted and logged once
             if (r.Steering && r.S.Active && !reused) StopSteering(r, !r.S.WasHit && !r.Crashed);
             r.Steering = false;
+            SmoothTally.Add(_raceCar, r.Feel, true);   // (a reused car's drive; nothing when StopSteering already added it)
             DaredevilTally.Add(_raceCar, r.Crashed, r.Passes, r.Passed, r.Closest, r.Contacts);
             if (r.Saved)
             {

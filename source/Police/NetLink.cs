@@ -40,6 +40,9 @@ namespace Police
     /// Every message from anyone else is dropped.
     /// Per guest: hellos (1 s, reliable, with round-trip timing), state (every Runner tick, unreliable), chase events
     /// (reliable). Guests report their own notice inputs (collisions, near misses, drifting, top speed, settings).
+    /// 0.9.0: every hello (both ways) ends with a status: flags (1 police on, 2 daredevils on, 4 Chill) and why each is
+    /// off. The link runs while hosting even with Police's own switches off (then only hellos, no cars or chases), so
+    /// both logs say why nothing shows. An older Police reads its own fields and ignores the rest.
     /// </summary>
     internal sealed class HostNet
     {
@@ -52,6 +55,9 @@ namespace Police
             public float Rtt = float.NaN;                   // s, smoothed
             public double EchoT; public float EchoAt = -1f; // their last hello's time stamp and when it came (unscaled)
             public bool Linked;
+            public bool VersionWarned;
+            public int Status = -1;                         // 0.9.0: its hello status (-1 = not sent: an older Police)
+            public string Why = "";
             // the guest's own report
             public float ReportAt = -100f;
             public int Hits = -1, NearMisses = -1;
@@ -68,6 +74,10 @@ namespace Police
         private readonly HashSet<ulong> _rejected = new HashSet<ulong>();
         private readonly List<ulong> _invite = new List<ulong>(8), _lobby = new List<ulong>(8);
         private bool _inviteLogged;
+
+        /// <summary>0.9.0: this host's status for the hellos (Runner sets it every tick).</summary>
+        internal byte Status;
+        internal string PoliceWhy = "", DareWhy = "";
 
         internal HostNet() { _onMessage = OnMessage; }
 
@@ -117,6 +127,7 @@ namespace Police
                 if (_peers.TryGetValue(id, out var p) && p.Linked) continue;
                 var w = _w.Begin(Wire.THello);
                 w.Str(Plugin.Version); w.U32(GameApi.LocalNetId()); w.F64(NetClock.Now); w.F64(0); w.F32(0f);
+                w.U8(Status); w.Str(PoliceWhy); w.Str(DareWhy);
                 SteamNet.Send(id, w.B, w.N, true);
                 SteamNet.Accept(id);
                 sent++;
@@ -142,6 +153,8 @@ namespace Police
                 uint netId = r.U32();
                 double t = r.F64(), echoT = r.F64();
                 float held = r.F32();
+                int status = -1; string why = "";
+                if (r.Ok && r.More) { status = r.U8(); why = r.Str(); r.Str(); }   // 0.9.0 guest status
                 if (!r.Ok) return;
                 // the sender must be a remote player in this session (and, when its connection gives a SteamID, that one)
                 Players.Remote who = null;
@@ -168,9 +181,18 @@ namespace Police
                 SteamNet.Accept(from);
                 if (fresh)
                 {
-                    Plugin.Log.LogInfo($"[Police] multiplayer: linked to player {netId} (Police {version}{(version != Plugin.Version ? $", NOT this build {Plugin.Version}" : "")}); police and daredevil looks shared with them");
+                    Plugin.Log.LogInfo($"[Police] multiplayer: linked to player {netId} (Police {version}{(version != Plugin.Version ? $", NOT this build {Plugin.Version}" : "")}); " +
+                                       $"{(status < 0 ? "their status isn't sent by that version" : GuestStatus(status, why))}; police and daredevil looks shared with them");
+                    if (version != Plugin.Version && !p.VersionWarned)
+                    {
+                        p.VersionWarned = true;
+                        Plugin.Log.LogWarning($"[Police] multiplayer: version mismatch: player {netId} runs Police {version}, this host {Plugin.Version}: everyone should run the same build");
+                    }
                     SendHello(p, now);
                 }
+                else if (status >= 0 && (status != p.Status || why != p.Why))
+                    Plugin.Log.LogInfo($"[Police] multiplayer: player {netId}'s Police: {GuestStatus(status, why)}");
+                p.Status = status; p.Why = why;
             }
             else if (r.Type == Wire.TReport)
             {
@@ -209,8 +231,14 @@ namespace Police
             w.F64(NetClock.Now);
             w.F64(p.EchoT);
             w.F32(p.EchoAt < 0f ? 0f : now - p.EchoAt);
+            w.U8(Status); w.Str(PoliceWhy); w.Str(DareWhy);   // 0.9.0 status
             SteamNet.Send(p.Steam, w.B, w.N, true);
         }
+
+        /// <summary>A guest's status for the host's log.</summary>
+        private static string GuestStatus(int status, string why)
+            => (status & 1) != 0 ? $"police on on their side{((status & 2) == 0 ? $", their game doesn't draw rivals ({why})" : "")}"
+                                 : $"police off on their side ({why}): they see no police or rivals";
 
         /// <summary>The host's view for one guest: patrols, rivals and that guest's own chase panel (unreliable).</summary>
         internal void SendState(Peer p, List<NetCar> patrols, List<NetCar> rivals, bool chase, uint chaseId, float bar, int units, int secLeft)
@@ -263,7 +291,9 @@ namespace Police
     /// <summary>
     /// A guest's side of the Police channel (0.8.0): finds the host's SteamID, says hello every second, takes the host's
     /// state and chase events (only from the host's SteamID and only for this player's netId), and reports this player's
-    /// own notice inputs (every Runner tick). Linked while the host's hellos / state keep coming (3 s).
+    /// own notice inputs (every Runner tick). Linked while the host's hellos / state keep coming (3 s). 0.9.0: its
+    /// hellos carry its status (MyStatus / MyWhy, set by Runner), and it logs the host's status: on linking, and each
+    /// time it changes.
     /// </summary>
     internal sealed class GuestNet
     {
@@ -273,8 +303,16 @@ namespace Police
         private float _nextHello, _nextHostLookup, _lastHeard = -100f, _echoAt = -1f;
         private double _echoT;
         private string _how;
-        private bool _linked, _warnedVersion;
+        private bool _linked, _warnedVersion, _announced;
         private uint _me;
+
+        /// <summary>0.9.0: this guest's status for its hellos (1 police on, 2 rivals drawn) and why not.</summary>
+        internal byte MyStatus;
+        internal string MyWhy = "", MyDareWhy = "";
+        /// <summary>The host's version and status from its hellos (-1 = not sent: an older host).</summary>
+        internal string HostVersion = "";
+        internal int HostStatus = -1;
+        internal string HostPoliceWhy = "", HostDareWhy = "";
 
         internal ulong Host { get; private set; }
         internal bool Linked => _linked;
@@ -306,7 +344,7 @@ namespace Police
             if (_linked && !linked)
             {
                 Plugin.Log.LogInfo($"[Police] multiplayer guest: link to the host lost (nothing for {LinkSeconds:0} s)");
-                Patrols.Clear(); Rivals.Clear(); ChaseOn = false;
+                Patrols.Clear(); Rivals.Clear(); ChaseOn = false; _announced = false;
             }
             _linked = linked;
             if (Host != 0 && _me != 0 && now >= _nextHello)
@@ -315,6 +353,7 @@ namespace Police
                 var w = _w.Begin(Wire.THello);
                 w.Str(Plugin.Version); w.U32(_me);
                 w.F64(NetClock.Now); w.F64(_echoT); w.F32(_echoAt < 0f ? 0f : now - _echoAt);
+                w.U8(MyStatus); w.Str(MyWhy); w.Str(MyDareWhy);   // 0.9.0 status
                 SteamNet.Send(Host, w.B, w.N, true);
                 SteamNet.Accept(Host);
             }
@@ -345,6 +384,8 @@ namespace Police
                     r.U32();   // the host's own player netId (not needed)
                     double t = r.F64(), echoT = r.F64();
                     float held = r.F32();
+                    int status = -1; string pw = "", dw = "";
+                    if (r.Ok && r.More) { status = r.U8(); pw = r.Str(); dw = r.Str(); }   // 0.9.0 host status
                     if (!r.Ok) return;
                     _echoT = t; _echoAt = now;
                     if (echoT > 0)
@@ -352,8 +393,8 @@ namespace Police
                         float rtt = (float)(NetClock.Now - echoT) - held;
                         if (rtt > 0f && rtt < 3f) Rtt = float.IsNaN(Rtt) ? rtt : Rtt + (rtt - Rtt) * 0.25f;
                     }
-                    if (!_linked) Plugin.Log.LogInfo($"[Police] multiplayer guest: linked to the host (Police {version}); the host drives police and daredevils, this game draws them");
-                    if (version != Plugin.Version && !_warnedVersion) { _warnedVersion = true; Plugin.Log.LogWarning($"[Police] multiplayer guest: the host runs Police {version}, this game {Plugin.Version}: run the same build"); }
+                    HostStatusFrom(version, status, pw, dw);
+                    if (version != Plugin.Version && !_warnedVersion) { _warnedVersion = true; Plugin.Log.LogWarning($"[Police] multiplayer guest: version mismatch: the host runs Police {version}, this game {Plugin.Version}: run the same build"); }
                     _lastHeard = now; _linked = true;
                     break;
                 }
@@ -406,6 +447,36 @@ namespace Police
             }
         }
 
+        /// <summary>
+        /// 0.9.0: the host's status from a hello: one "linked" line per link (version, police and daredevils on / off and
+        /// why), then a line whenever police or daredevils go off or on again on the host.
+        /// </summary>
+        private void HostStatusFrom(string version, int status, string pw, string dw)
+        {
+            bool first = !_announced;
+            bool changed = status != HostStatus || pw != HostPoliceWhy || dw != HostDareWhy;
+            int old = HostStatus;
+            string oldPw = HostPoliceWhy, oldDw = HostDareWhy;
+            HostVersion = version; HostStatus = status; HostPoliceWhy = pw; HostDareWhy = dw;
+            if (first)
+            {
+                _announced = true;
+                Plugin.Log.LogInfo(status < 0
+                    ? $"[Police] multiplayer guest: linked; host Police {version} (that version doesn't send whether its police / daredevils are on); the host drives them, this game draws them"
+                    : $"[Police] multiplayer guest: linked; host Police {version}, police {OnOff(status, 1, pw)}, daredevils {OnOff(status, 2, dw)}");
+            }
+            if (status < 0 || !(first || changed)) return;
+            bool policeOn = (status & 1) != 0, dareOn = (status & 2) != 0;
+            if (first ? !policeOn : old < 0 || ((old & 1) != 0) != policeOn || (!policeOn && pw != oldPw))
+                Plugin.Log.LogInfo(policeOn ? "[Police] multiplayer guest: the host's Police is on again: police this session"
+                                            : $"[Police] multiplayer guest: the host's Police is off ({pw} on the host): no police this session");
+            if (first ? !dareOn : old < 0 || ((old & 2) != 0) != dareOn || (!dareOn && dw != oldDw))
+                Plugin.Log.LogInfo(dareOn ? "[Police] multiplayer guest: the host's daredevils are on again"
+                                          : $"[Police] multiplayer guest: the host's daredevils are off ({dw} on the host): no rivals this session");
+        }
+
+        private static string OnOff(int status, int bit, string why) => (status & bit) != 0 ? "on" : $"off ({why} on the host)";
+
         /// <summary>Tells the host we stop and closes the session. Never throws.</summary>
         internal void Stop(string why)
         {
@@ -420,7 +491,7 @@ namespace Police
                 }
             }
             catch { /* Steam gone */ }
-            Host = 0; _linked = false; _lastHeard = -100f; _nextHostLookup = 0f;
+            Host = 0; _linked = false; _lastHeard = -100f; _nextHostLookup = 0f; _announced = false; HostStatus = -1;
             Patrols.Clear(); Rivals.Clear(); Events.Clear(); ChaseOn = false;
         }
     }

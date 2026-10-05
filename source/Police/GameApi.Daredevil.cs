@@ -39,8 +39,12 @@ namespace Police
     /// - Handing a car back (HandBack): initialLane restored, then MoveToLaneIndex(CurrentLaneIndex), the game's own eased
     ///   lane change from wherever the car is (it sets previousLaneOffset = CurrentLaneOffset; it does nothing for a crashed
     ///   car), whose completion zeroes MyAngle and ends the lane-change bookkeeping.
-    /// - Speed: HandleSpeed smooth-damps Speed to TargetSpeed = MaxSpeed (x LaneTransitionSpeedMultiplier); HandleMovement
-    ///   moves Speed x pedalFactor x curvatureFactor. curvatureFactor eases to targetCurvatureFactor = 1 - curvature/5
+    /// - Speed: HandleSpeed (Update) smooth-damps Speed to TargetSpeed = MaxSpeed (x LaneTransitionSpeedMultiplier while
+    ///   CurrentLaneOffset != targetLaneOffset), only while Speed != TargetSpeed; HandleMovement (FixedUpdate, 50 Hz)
+    ///   moves Speed x pedalFactor x curvatureFactor x fixed dt and SmoothDamps the kinematic, interpolated rigidbody to
+    ///   path point + right x CurrentLaneOffset in 0.1 s (re-read in IDA 2026-10-04 for 0.9.0; prefab
+    ///   pfb_AI_DefaultTrafficVehicle: isKinematic, interpolate). 0.9.0 writes Speed = MaxSpeed itself (Steer).
+    ///   curvatureFactor eases to targetCurvatureFactor = 1 - curvature/5
     ///   (Update); we hold both at 1 because the racing line's own speed profile already slows for corners. pedalFactor /
     ///   targetPedalFactor (AIObstructionDetector.UpdateObstructionInFront: a gentle, long-range slow-down behind any car
     ///   whose AvoidanceLaneRange overlaps ours, our offset included) are held at 1 too unless asked otherwise: the
@@ -70,7 +74,7 @@ namespace Police
                        && Has(asm, "AIVehicleLaneHandler", missing, "CurrentLaneOffset", "previousLaneOffset", "targetLaneOffset",
                               "LaneTransitionSpeedMultiplier", "initialLane", "CurrentLaneIndex", "MyAngle", "MoveToLaneIndex")
                        && Has(asm, "AIPathFollower", missing, "curvatureFactor", "targetCurvatureFactor", "originalMaxSpeed",
-                              "pedalFactor", "targetPedalFactor", "aheadDistanceDespawn");
+                              "pedalFactor", "targetPedalFactor", "aheadDistanceDespawn", "speedDampVelocity");
         }
 
         /// <summary>True for a daredevil (a Police patrol is never picked from these). Only call when DaredevilOk.</summary>
@@ -133,11 +137,16 @@ namespace Police
         internal static MonoBehaviour LaneHandlerOf(MonoBehaviour carObj) => ((AIVehicleController)carObj).LaneHandler;
 
         /// <summary>
-        /// Drives a daredevil for the next physics steps: lateral offset (m, + = right) and MaxSpeed (m/s). Holds every
-        /// lane-change field on that offset so the game's own lane logic can't pull it elsewhere. Local car only.
+        /// Drives a rival or chaser for the next physics steps: lateral offset (m, + = right) and speed (m/s). Holds every
+        /// lane-change field on that offset so the game's own lane logic can't pull it elsewhere. Local car only (host).
+        /// 0.9.0: the speed is our own smooth (jerk-limited) commanded speed, written as MaxSpeed AND Speed, with
+        /// speedDampVelocity = its acceleration (m/s^2): HandleSpeed (Update) then finds Speed == TargetSpeed and leaves it,
+        /// instead of smooth-damping towards a MaxSpeed that jumped (an acceleration spike of up to (2 / speedSmoothness)^2
+        /// x the jump); a hand-back continues from the same speed and acceleration. Speed / speedDampVelocity are running
+        /// state the game rewrites itself (nothing to restore); NaN speed = leave both as they are.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static void Steer(MonoBehaviour pfObj, MonoBehaviour laneObj, float offset, float maxSpeed, bool ownBraking)
+        internal static void Steer(MonoBehaviour pfObj, MonoBehaviour laneObj, float offset, float speed, float accel, bool ownBraking)
         {
             var pf = (AIPathFollower)pfObj;
             var lane = (AIVehicleLaneHandler)laneObj;
@@ -155,7 +164,13 @@ namespace Police
                 pf.pedalFactor = 1f;      // the rival's braking envelope replaces the game's gentle obstruction braking
                 pf.targetPedalFactor = 1f;
             }
-            if (!float.IsNaN(maxSpeed)) pf.MaxSpeed = maxSpeed;
+            if (!float.IsNaN(speed))
+            {
+                speed = Math.Max(0f, speed);
+                pf.MaxSpeed = speed;
+                pf.Speed = speed;
+                pf.speedDampVelocity = float.IsNaN(accel) ? 0f : accel;
+            }
         }
 
         /// <summary>The despawn distances (serialized fields of the pooled car: captured, written, given back).</summary>
@@ -173,14 +188,6 @@ namespace Police
             var pf = (AIPathFollower)pfObj;
             if (!float.IsNaN(behind) && pf.behindDistanceDespawn != behind) pf.behindDistanceDespawn = behind;
             if (!float.IsNaN(ahead) && pf.aheadDistanceDespawn != ahead) pf.aheadDistanceDespawn = ahead;
-        }
-
-        /// <summary>Cuts the car's running speed to at most <paramref name="max"/> m/s at once (Speed is state, not a setting).</summary>
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static void ClampSpeed(MonoBehaviour pfObj, float max)
-        {
-            var pf = (AIPathFollower)pfObj;
-            if (!float.IsNaN(max) && pf.Speed > max) pf.Speed = Mathf.Max(0f, max);
         }
 
         /// <summary>The lane the car returns to after its lane changes (captured before we steer, given back after).</summary>

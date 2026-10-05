@@ -1,3 +1,4 @@
+using Il2CppInterop.Runtime.Attributes;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -182,7 +183,7 @@ namespace Driver
         }
 
         /// <summary>The ride-style rider is on: a bike, [Bike] Enabled (bike mode) and [Bike] RideStyle.</summary>
-        private bool RideOn => _bikeMode && Plugin.RideStyle.Value;
+        [HideFromIl2Cpp] private bool RideOn => _bikeMode && Plugin.RideStyle.Value;
 
         private void LoadModel()
         {
@@ -382,11 +383,11 @@ namespace Driver
             }
         }
 
-        private static string OnOff(bool b) => b ? "on" : "off";
+        [HideFromIl2Cpp] private static string OnOff(bool b) => b ? "on" : "off";
 
         /// <summary>Bikes' [Look] MaxLean from its config through the chainloader (read-only; the knee-down and leg-out
         /// thresholds scale with it), 50 when Bikes or the setting isn't there. Twice a second while on a bike.</summary>
-        private void BikesMaxLean()
+        [HideFromIl2Cpp] private void BikesMaxLean()
         {
             float v = 50f; string from = "default (Bikes' MaxLean not found)";
             try
@@ -564,7 +565,7 @@ namespace Driver
         }
 
         /// <summary>The body frame as rendered: the body mesh's pose with its rest offset removed (DriverView.BodyFrame), in plain maths.</summary>
-        private void BodyFrame(out Vec pos, out Quat rot)
+        [HideFromIl2Cpp] private void BodyFrame(out Vec pos, out Quat rot)
         {
             if (_bodyMesh == null || _bodyMesh.WasCollected)
             {
@@ -582,7 +583,7 @@ namespace Driver
         }
 
         /// <summary>HeadLook's published head turn (AppDomain "rogue.headlook": yaw, pitch, running), or 0.</summary>
-        private void HeadLook(out float yaw, out float pitch)
+        [HideFromIl2Cpp] private void HeadLook(out float yaw, out float pitch)
         {
             yaw = 0f; pitch = 0f;
             if (_headLook == null)
@@ -626,7 +627,7 @@ namespace Driver
             Unsubscribe();
         }
 
-        private void Fault(Exception e)
+        [HideFromIl2Cpp] private void Fault(Exception e)
         {
             _errors++;
             Plugin.Log.LogWarning($"[Driver] error ({_errors}/3): {e.Message}");

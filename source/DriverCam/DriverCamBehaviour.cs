@@ -327,6 +327,14 @@ public class DriverCamBehaviour : MonoBehaviour
     {
         var provider = ctrl.VehicleProvider;
         var body = provider != null ? provider.BodyTransform : null;   // Il2Cpp object: explicit null check, not ?.
+        if (BikeLink.On(body))
+        {
+            // 0.11.2: a Bikes motorcycle or the M2 G87: HideCarBody would hide the bike and its rider (or the M2 and its
+            // cabin), and the car's outline is already hidden with the car's meshes (Bikes), so neither applies; anything done before the bike was recognised is undone
+            ShowBody();
+            RestoreOutlines();
+            return;
+        }
         bool wantHidden = Plugin.HideCarBody.Value && body != null;
         bool bodyChanged = _hiddenBody != null && (body == null || _hiddenBody.Pointer != body.Pointer);
         if (!wantHidden || bodyChanged) ShowBody();

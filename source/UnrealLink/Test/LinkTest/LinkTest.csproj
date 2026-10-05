@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Dev tool for UnrealLink (not a plugin, never deployed): acts as the game on the shared memory, opens Unreal's
+       shared texture through Native\bin\UnrealLinkNative.dll (standalone D3D11 device), saves a PNG and prints the
+       measured latency and costs. Targets the installed SDK's .NET, no NuGet (like tools/IlCheck).
+       How to run it: source/UnrealLink/README.md, section "Test without the game". -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net$(BundledNETCoreAppTargetFrameworkVersion)</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\LinkProtocol.cs" Link="LinkProtocol.cs" />
+  </ItemGroup>
+
+</Project>

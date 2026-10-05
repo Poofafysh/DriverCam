@@ -10,7 +10,9 @@ namespace Bikes
     /// A vehicle model: a bike (.csm with `kind bike`, Assets/build_bike.py; wheels WheelF / WheelR) or a car (`kind car`,
     /// Assets/build_car.py; wheels WheelFL / FR / RL / RR). Text, Unity axes, metres, real size, origin on the ground
     /// midway between the axles, +z forward. Lines:
-    /// - `name`, `tex tag file` (base-colour texture for that tag), `mat tag r g b smoothness metallic emission`;
+    /// - `name`, `tex tag file` (base-colour texture for that tag), `mat tag r g b smoothness metallic emission [alpha]`
+    ///   (alpha under 1 = see-through glass: an alpha-blended URP Particles/Unlit material, a shader variant the game ships;
+    ///   plain opaque Lit if that shader isn't loaded);
     /// - parts: `o part`, `p x y z` (a wheel's pivot, its triangles written around it), `m tag`, `f` / `u` triangles
     ///   (3 x position + normal [+ uv]).
     /// Body = one mesh with a submesh per tag; each wheel is its own mesh. Meshes, materials and textures are
@@ -30,7 +32,7 @@ namespace Bikes
 
         private static readonly Dictionary<string, BikeModel> s_cache = new Dictionary<string, BikeModel>();
         private static readonly List<UnityEngine.Object> s_owned = new List<UnityEngine.Object>();
-        private static Shader s_lit;
+        private static Shader s_lit, s_glass;
 
         internal static string Folder => Path.Combine(Path.GetDirectoryName(typeof(Plugin).Assembly.Location) ?? ".", "Bikes");
 
@@ -72,7 +74,7 @@ namespace Bikes
         {
             var inv = CultureInfo.InvariantCulture;
             var model = new BikeModel { Name = Path.GetFileNameWithoutExtension(path) };
-            var mats = new Dictionary<string, (Color c, float s, float m, float e)>();
+            var mats = new Dictionary<string, (Color c, float s, float m, float e)>();   // c.a = alpha
             var tex = new Dictionary<string, string>();
             var parts = new List<Part>();
             Part part = null; string tag = "paint"; bool bike = false, car = false;
@@ -85,7 +87,7 @@ namespace Bikes
                     case "kind": bike = t.Length > 1 && t[1] == "bike"; car = t.Length > 1 && t[1] == "car"; break;
                     case "name": model.Name = t[1]; break;
                     case "tex": tex[t[1]] = t[2]; break;
-                    case "mat": mats[t[1]] = (new Color(F(t, 2), F(t, 3), F(t, 4)), F(t, 5), F(t, 6), F(t, 7)); break;
+                    case "mat": mats[t[1]] = (new Color(F(t, 2), F(t, 3), F(t, 4), t.Length > 8 ? Mathf.Clamp01(F(t, 8)) : 1f), F(t, 5), F(t, 6), F(t, 7)); break;
                     case "o": part = new Part { Name = t[1] }; parts.Add(part); break;
                     case "p": if (part != null) { part.HasPivot = true; part.Pivot = new Vector3(F(t, 1), F(t, 2), F(t, 3)); } break;
                     case "m": tag = t[1]; break;
@@ -137,6 +139,31 @@ namespace Bikes
             return model;
         }
 
+        /// <summary>
+        /// See-through glass: URP "Particles/Unlit" with exactly the keyword set the game's own ~90 particle materials use
+        /// ({_SURFACE_TYPE_TRANSPARENT}, SrcAlpha / OneMinusSrcAlpha), so the variant is compiled in (as RogueShared.Fx).
+        /// Back faces culled, so a window's outer and inner layers each tint once. Null if the shader isn't loaded.
+        /// </summary>
+        private static Material MakeGlass(string model, string tag, Color c)
+        {
+            if (s_glass == null) s_glass = Shader.Find("Universal Render Pipeline/Particles/Unlit");   // looked up again until found
+            if (s_glass == null) { Plugin.Log.LogWarning($"[Bikes] no transparent shader: {model} {tag} glass drawn opaque"); return null; }
+            var m = new Material(s_glass) { name = $"Bikes.{model}.{tag}", hideFlags = HideFlags.DontUnloadUnusedAsset };
+            m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            m.SetOverrideTag("RenderType", "Transparent");
+            m.SetFloat("_Surface", 1f);
+            m.SetFloat("_Blend", 0f);
+            m.SetFloat("_SrcBlend", 5f);    // SrcAlpha
+            m.SetFloat("_DstBlend", 10f);   // OneMinusSrcAlpha
+            m.SetFloat("_ZWrite", 0f);
+            m.SetFloat("_Cull", 2f);        // back
+            m.SetFloat("_ColorMode", 0f);   // tint x vertex colour (white)
+            m.SetColor("_BaseColor", c);
+            m.renderQueue = 3000;
+            s_owned.Add(m);
+            return m;
+        }
+
         private static float F(string[] t, int i) => float.Parse(t[i], CultureInfo.InvariantCulture);
 
         private static (Mesh, List<string>) BuildMesh(string name, Part p)
@@ -156,6 +183,9 @@ namespace Bikes
             mesh.vertices = verts.ToArray();
             mesh.normals = norms.ToArray();
             mesh.uv = uvs.ToArray();
+            var white = new Color32[verts.Count];   // white vertex colours: the glass shader multiplies its tint by them
+            for (int i = 0; i < white.Length; i++) white[i] = new Color32(255, 255, 255, 255);
+            mesh.colors32 = white;
             mesh.subMeshCount = subs.Count;
             for (int i = 0; i < subs.Count; i++) mesh.SetTriangles(subs[i], i);
             mesh.RecalculateBounds();
@@ -167,6 +197,12 @@ namespace Bikes
 
         private static Material MakeMaterial(string model, string tag, (Color c, float s, float m, float e) d, string texFile)
         {
+            if (d.c.a < 1f && texFile == null)
+            {
+                var g = MakeGlass(model, tag, d.c);
+                if (g != null) return g;
+                d.c.a = 1f;   // no transparent shader: opaque tint
+            }
             if (s_lit == null) s_lit = Shader.Find("Universal Render Pipeline/Lit");
             if (s_lit == null) s_lit = Shader.Find("Universal Render Pipeline/Simple Lit");
             if (s_lit == null) throw new InvalidOperationException("no URP lit shader");

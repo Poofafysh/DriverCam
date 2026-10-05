@@ -8,7 +8,7 @@ using Il2CppInterop.Runtime.Injection;
 
 namespace DriverCam;
 
-[BepInPlugin(Guid, "DriverCam", "0.11.1")]
+[BepInPlugin(Guid, "DriverCam", "0.11.2")]
 public class Plugin : BasePlugin
 {
     public const string Guid = "drivingrogue.drivercam";
@@ -28,6 +28,8 @@ public class Plugin : BasePlugin
     internal static ConfigEntry<bool> ShowButton;
     internal static ConfigEntry<float> ButtonX, ButtonY, UiScale, TuneStep;
     internal static ConfigEntry<bool> AddToCycle, DumpModes, DriverSelected, ViewButtonToggles;
+    internal static ConfigEntry<bool> BikeDriverView;
+    internal static ConfigEntry<float> BikeCameraLean, BikeEyeUp, BikeEyeForward;
 
     /// <summary>Bumped whenever a setting changes so the view and cockpit rebuild.</summary>
     internal static int SettingsVersion;
@@ -95,6 +97,15 @@ public class Plugin : BasePlugin
         // not saved per car (not in CarPresets.Track), so switching it never rebuilds the cockpit
         WorkingGauges = Config.Bind("View", "WorkingGauges", true, "Speedometer and tachometer needles (and the W8's digital panel) follow the car's speed, in the game HUD's unit, and EngineAudio's RPM (a built-in engine model without it). Off = the dials rest at zero.");
 
+        // 0.11.2: Bikes motorcycles (BikeLink.cs); not saved per car (a bike's body is its donor car's)
+        BikeDriverView = Config.Bind("Bike", "DriverView", true, "On a Bikes motorcycle (S1000RR, Sport Bike) the driver view shows only the bike and the rider, and in Bikes' M2 G87 only the M2's own cabin: no donor-car cockpit, steering wheel, gauges or mirrors, HideCarBody is skipped, and the eye is at the rider's head (the M2's driver seat in the M2). Off = the donor car's cockpit and seat, as before 0.11.2.");
+        BikeCameraLean = Config.Bind("Bike", "CameraLean", 0f, new ConfigDescription(
+            "How much the driver view rolls with the bike's lean: 0 = level horizon, 0.5 = half the bike's lean, 1 = locked to the bike.", new AcceptableValueRange<float>(0f, 1f)));
+        BikeEyeUp = Config.Bind("Bike", "EyeUp", 0f, new ConfigDescription(
+            "Extra eye height on a bike or in the M2 G87, in meters (on top of the rider's head or the M2's seat eye).", new AcceptableValueRange<float>(-0.3f, 0.3f)));
+        BikeEyeForward = Config.Bind("Bike", "EyeForward", 0f, new ConfigDescription(
+            "Extra eye shift forward (+) or back (-) on a bike or in the M2 G87, in meters.", new AcceptableValueRange<float>(-0.3f, 0.3f)));
+
         ShowButton = Config.Bind("UI", "ShowButton", false, new ConfigDescription(
             "Show the on-screen DriverCam button (a dev tool: it opens DriverCam's settings panel). Off by default; F6 (driver view) and " +
             "F7 (Edit mode) work without it, and every setting is also in Rogue Hub (MODS > Camera).", null,
@@ -152,7 +163,7 @@ public class Plugin : BasePlugin
         AddComponent<DriverCamBehaviour>();
 
         new Harmony(Guid).PatchAll(typeof(Patches));
-        Log.LogInfo("DriverCam 0.11.1 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
+        Log.LogInfo("DriverCam 0.11.2 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
     }
 }
 

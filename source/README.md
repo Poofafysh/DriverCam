@@ -44,9 +44,58 @@ The build copies `DriverCam.dll` and the cockpit files into the game's `BepInEx/
   see "Performance" below).
 - `HudLayout.cs` moves and scales the health bar, speedometer and ability bar (0.11.0: writes nothing while the layout
   is off and restored, and only values that changed).
+- `BikeLink.cs` (0.11.2) recognises a Bikes motorcycle and places the eye at the rider's head. See "On a Bikes
+  motorcycle" below.
 - `CarExporter.cs`, `GpuMeshReader.cs` and `TextureSaver.cs` export the driven car's mesh and textures in-game, as a fitting reference.
 
 IL2CPP note: wrap Unity objects the mod creates with `Keep.Hold`, or the GC collects their managed wrappers.
+
+## On a Bikes motorcycle (0.11.2)
+
+The Bikes plugin builds each motorcycle (S1000RR, Sport Bike) on a hidden copy of a donor car (the Saber by default).
+Before 0.11.2 the driver view treated it as that car: the Saber's cockpit, steering wheel, gauges, pillars, roof and
+mirrors were drawn around the bike, with the eye at the car's seat. Now, with `Bike.DriverView` on (default):
+
+- **What shows:** only the bike (tank, bars, clocks, screen: Bikes' own model) and, with the Driver plugin, the
+  rider's body, arms and hands on the grips (Driver leaves the head out in the driver view).
+- **What is skipped:** the cockpit isn't built or shown (one built before a late recheck recognised the bike is hidden), so there's no steering wheel, gauges or mirror cameras (the
+  mirrors cost nothing on a bike). `View.HideCarBody` is ignored (it would hide the bike and the rider), and the car's
+  outline isn't stripped (Bikes already hides the car's meshes). DriverCam doesn't publish seat data for Driver
+  (`rogue.drivercam`) on a bike, because Driver uses the bike's own sockets there.
+- **How a bike is recognised:** a `Bikes.Lean` node in the driven car's body (Bikes' stable names; the key comes from
+  the `Bikes.<Key>_Body` copy). It's looked up once per body, and once more a second later.
+- **The M2 G87** (Bikes' car model, with its own cabin) is a `Bikes.Car` node instead, found in the same search. Before,
+  the Saber's cockpit (dash, wheel, pillars, mirrors) was drawn inside the M2's own cabin with the eye at the Saber's
+  seat. Now it gets the same treatment as a bike: no donor cockpit, gauges or mirror cameras, `View.HideCarBody` and the
+  outline strip skipped (they would hide the M2), so only the M2's own dash, wheel and seats show. The eye is Bikes'
+  `Bikes.Eye` node under `Bikes.Car` (the driver's eye in that cabin, left-hand drive: 0.37 m left of centre, 1.12 m up,
+  0.40 m behind the axle midpoint, model metres, scaled with the model), else that same point estimated by DriverCam.
+  No horizon roll; `Bike.EyeUp` / `Bike.EyeForward` shift it. Driver's seat data isn't published there either.
+- **The eye:** when Driver rides the bike, the eye is Driver's `eye_c` socket on the rider's head bone (found through
+  its `Driver_Helmet` node under `Bikes.Lean`, looked up at most once a second while missing). So the camera follows the
+  tuck, the hang-off and the head. Without Driver's rider, it's an estimate in the bike frame: the seat point from Bikes'
+  AppDomain data `rogue.bikes.rider.<Key>` (else the S1000RR's 0.82 m seat), plus 0.58 m up and 0.45 m forward for a
+  sport-bike tuck. `Bike.EyeUp` and `Bike.EyeForward` (metres, default 0) shift it.
+- **The horizon:** `Bike.CameraLean` (0-1, default 0) is how much the view rolls with the bike's lean, like RIDE's
+  level-horizon option: 0 keeps the horizon level, 0.5 rolls by half the lean, 1 locks the view to the bike. Pitch,
+  look-into-turn, HeadFollowsShake and HeadLook work as in a car; the car's seat offsets and Edit mode don't apply.
+- **Leaving the bike** (car change, death, restart, level end, F6 off, `Bike.DriverView` off): the next car body
+  goes through the normal car path, which builds its cockpit as before. A car's driver view is unchanged.
+- **Cost:** on a bike, less than in a car (no cockpit, gauges or mirror cameras). Per frame: the head bone's pose and
+  plain maths. In a car: one pointer compare per call, plus one search of the car's hierarchy per new body (and one
+  recheck).
+- **Log:** `Bikes motorcycle <Key>: driver view without the car's cockpit, mirrors, gauges or HideCarBody; eye at the
+  rider's head (...)` once per bike, and `Bikes motorcycle <Key>: eye at the Driver rider's head.` (or `... an estimate
+  from Bikes' seat socket.`) when the eye source changes. In the M2: `Bikes car M2G87: driver view in its own cabin,
+  without the donor car's cockpit, mirrors, gauges or HideCarBody; eye at Bikes' eye socket.` (or `... an estimate of
+  the M2's seat.`).
+
+| Setting | Default | What |
+|---|---|---|
+| `Bike.DriverView` | on | the bike (and M2 G87) driver view above; off = the donor car's cockpit and seat, as before |
+| `Bike.CameraLean` | 0 | how much the view rolls with the bike's lean (0 level horizon, 1 locked to the bike) |
+| `Bike.EyeUp` | 0 m | extra eye height on a bike or in the M2 (-0.3 to 0.3) |
+| `Bike.EyeForward` | 0 m | extra eye shift forward / back on a bike or in the M2 (-0.3 to 0.3) |
 
 ## Not included
 

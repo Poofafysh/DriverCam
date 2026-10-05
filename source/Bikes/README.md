@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.2.0** (bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.2.1** (see-through glass and a cabin for the M2; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -30,9 +30,17 @@ Lean, Grip and Braking")
 - **The M2 G87** is a car model fitted the CarSkins way: scaled so its wheelbase matches the donor's, front axle on the
   donor's front axle, its four wheels on the donor's own wheel pivots (they spin and steer with them). No lean.
 - **Models:**
-  - the bikes are each about 3,600 triangles with one 1024 px texture, built by `Assets/build_bike.py` (Blender);
-  - the M2 is about 11,000 triangles in flat colours (paint, carbon, glass, lights, tyres, rims), built by
-    `Assets/build_car.py`.
+  - the S1000RR is about 18,300 triangles in flat colours (a white / blue / red livery, black trim, metal, from a small
+    palette texture; the cockpit is denser for the rider's view, and every face the rider's eye or an outside view
+    sees from behind is two-sided, so the inner fairing and clocks have no holes) with a see-through smoked windscreen, and the Sport
+    Bike about 10,800 with one 2048 px texture, both built by `Assets/build_bike.py` (Blender);
+  - the M2 is about 50,000 triangles (each wheel about 3,900, with rounded tyres) in flat colours (paint, gloss black trim, carbon, underbody, glass, lights, tyres,
+    rims), built by `Assets/build_car.py`. Its windows are see-through (a model's `mat` line can end in an alpha value)
+    and it has its interior (about 14,000 triangles: dash, steering wheel, seats, headliner) with one texture,
+    `BMW_M2_G87_interior.jpg` (soft-touch black, labels, the digital instrument cluster and centre screen). An empty
+    `Bikes.Eye` node under `Bikes.Car` marks the driver's eye in that cabin (left-hand drive, model metres
+    -0.37, 1.12, -0.40); DriverCam's driver view (0.11.2) sits there and shows only the M2's own cabin, without the
+    donor car's cockpit.
 
 ## For the rider (Driver plugin)
 
@@ -96,6 +104,7 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 - `[Bikes] Sport Bike body: N car meshes to hide, bike at real size (...)` and
   `[Bikes] Sport Bike built on the Saber (id rogue.bikes.sportbike, stats ...)`; for the M2:
   `[Bikes] M2 G87 body: N car meshes to hide, car model at scale S (wheelbase G vs M)`.
+- Only if the game's transparent shader is missing: `[Bikes] no transparent shader: BMW_M2_G87 glass glass drawn opaque`.
 - `[Bikes] 3 bike(s) added to the garage after the N cars (garage opened)`, and
   `[Bikes] bikes taken out of the garage (multiplayer)` / `(switched off)`.
 - `[Bikes] driving Sport Bike: bike model, wheels follow the game's, steering follows` the first time you drive one
@@ -118,7 +127,8 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 - **Not tested in game yet.** Not tested:
   - how the bike sits on each donor car;
   - the garage turntable;
-  - DriverCam's driver view on a bike (it fits a cockpit to the donor car).
+  - DriverCam's driver view on a bike and in the M2 (DriverCam 0.11.2 recognises `Bikes.Lean` / `Bikes.Car` and
+    skips the donor car's cockpit; the M2's eye point is estimated from its interior mesh, not checked in game).
 - **Which models are in the repo:** the M2 G87 model is (the user chose to publish it, under its CC BY-NC-SA licence).
   The two bike models stay local (`.gitignore`).
 
@@ -126,12 +136,15 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 
 - **Sport Bike:** ["Low Poly Motorcycle"](https://sketchfab.com/3d-models/low-poly-motorcycle-e03e5c442ab0492389df5a6f61a99f1f)
   by **pyrzegeclb** on Sketchfab, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes: decimated
-  to about 3,600 triangles, wheels split out, and the colours baked onto a new texture by `Assets/build_bike.py`.
+  to about 10,800 triangles, wheels split out, smooth-shaded, and the colours baked onto a new texture by
+  `Assets/build_bike.py`.
 - **BMW S1000RR:** ["BMW S1000 RR"](https://sketchfab.com/3d-models/bmw-s1000-rr-1873aed292d6465694119bd81860a0c2) by
   **VTX** (@VTX_car) on Sketchfab, licensed [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/): a
-  hand-crafted model based on the real bike. Changes: small parts dropped, remeshed, decimated and re-textured by
-  `Assets/build_bike.py`.
+  hand-crafted model based on the real bike. Changes: small parts and unseen faces dropped, decimated, given flat
+  colours (white / blue / red livery) and a see-through windscreen by `Assets/build_bike.py`.
 - **M2 G87:** ["2026 Zacoe BMW G87 M2 Widebody Carbon Fiber Kit"](https://sketchfab.com/3d-models/2026-zacoe-bmw-g87-m2-widebody-carbon-fiber-kit-d15e7b05cd7543b19b36bdcbc5f27b59)
   by **Ddiaz Design** (sergiodd) on Sketchfab, licensed [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
-  Changes: interior, engine and calipers removed, decimated to about 11,000 triangles and given flat colours by
-  `Assets/build_car.py`. `Assets/BMW_M2_G87.csm` is shared under the same CC BY-NC-SA 4.0 licence (non-commercial).
+  Changes: engine and calipers removed, paint hidden under the kit removed, decimated to about 50,000 triangles
+  (14,000 of them the interior), given flat colours, see-through glass and an interior texture made from the source's
+  own interior textures by `Assets/build_car.py`. `Assets/BMW_M2_G87.csm` and `Assets/BMW_M2_G87_interior.jpg` are shared under the same CC BY-NC-SA 4.0 licence
+  (non-commercial).

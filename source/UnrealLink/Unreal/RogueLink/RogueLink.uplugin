@@ -1,0 +1,21 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "RogueLink",
+	"Description": "Driving Rogue link: reads the game's frame from shared memory, renders the avatar with the game's camera and shares the picture with the game as a D3D11 texture (UnrealLink plugin, Driving Rogue mods repo).",
+	"Category": "Rendering",
+	"CreatedBy": "Driving Rogue mods",
+	"CanContainContent": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "RogueLink",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [
+				"Win64"
+			]
+		}
+	]
+}

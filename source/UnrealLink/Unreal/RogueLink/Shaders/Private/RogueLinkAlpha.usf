@@ -1,0 +1,29 @@
+// RogueLink: turns the scene capture's output into what the game composites.
+// Unreal keeps scene-capture alpha inverted on purpose (alpha = 1 - opacity, see SceneCapturePixelShader.usf), and the
+// colour is already "premultiplied" (the background is black). Out = (rgb, opacity), so the game draws it with plain
+// alpha blending. Encode = 1 when the input is an sRGB texture (sampled as linear): the bytes are re-encoded to sRGB
+// so the shared texture holds display values either way.
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float4> InTex;
+RWTexture2D<float4> OutTex;
+uint2 Size;
+uint Encode;
+
+float3 LinearToSrgb(float3 c)
+{
+	c = saturate(c);
+	return select(c <= 0.0031308, c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055);
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 Id : SV_DispatchThreadID)
+{
+	if (Id.x >= Size.x || Id.y >= Size.y) return;
+	float4 C = InTex.Load(int3(Id.xy, 0));
+	float A = saturate(1.0 - C.a);
+	float3 Rgb = Encode != 0 ? LinearToSrgb(C.rgb) : saturate(C.rgb);
+	// unpremultiply where partly covered, so plain alpha blending in the game gives the same edge
+	if (A > 0.0 && A < 1.0) Rgb = saturate(Rgb / A);
+	OutTex[Id.xy] = float4(Rgb, A);
+}

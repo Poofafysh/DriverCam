@@ -44,7 +44,7 @@ internal static class DriverView
     static Matrix4x4 _restMeshToBodyInv = Matrix4x4.identity;
     static CameraControllerInGame _ctrl;
     static Vector3 _head;
-    static bool _active;
+    static bool _active, _onBike;   // _onBike: a Bikes motorcycle (BikeLink): no cockpit, mirrors or car seat
 
     public static void Apply(CameraControllerInGame ctrl)
     {
@@ -77,6 +77,18 @@ internal static class DriverView
 
             float turnInput = Mathf.Clamp(vehicle.TurnInput, -1f, 1f);
             _turn = Mathf.Lerp(_turn, turnInput, 1f - Mathf.Exp(-10f * Time.deltaTime));
+
+            // 0.11.2: a Bikes motorcycle shows only the bike and its rider, the M2 G87 only its own cabin (the donor's
+            // cockpit, built or not, stays hidden: no wheel, gauges or mirror cameras). A car skips this block, so its path below is unchanged.
+            _onBike = BikeLink.On(body);
+            if (_onBike)
+            {
+                Cockpit.SetVisible(false);
+                MirrorView.SetActive(false);
+                DriverLink.SetView(false);
+                ApplyPose();
+                return;
+            }
             _head = HeadInBodyFrame();
 
             if (_measuredVersion != Plugin.SettingsVersion || !Cockpit.Alive)
@@ -116,6 +128,7 @@ internal static class DriverView
         var body = _body;
         var cam = _ctrl == null ? null : _ctrl.CurrentCamera;
         if (body == null || body.WasCollected || cam == null) return;
+        if (_onBike) { ApplyBikePose(body, cam); return; }
 
         // Stable vehicle frame and the shaken (rendered) body frame
         var stablePos = body.position;
@@ -147,6 +160,26 @@ internal static class DriverView
         LastHeadInBody = _head;
 
         MirrorView.UpdatePose(shakenRot, cam);
+    }
+
+    /// <summary>
+    /// The camera on a Bikes motorcycle: at the rider's eye (BikeLink.Eye), the upright body frame (with the head
+    /// following the shake by HeadFollowsShake as in a car) rolled by Bike.CameraLean of the bike's lean, then the same
+    /// pitch, look-into-turn and HeadLook as in a car. The cockpit, DriverLink and mirrors are left alone.
+    /// </summary>
+    static void ApplyBikePose(Transform body, Camera cam)
+    {
+        if (!BikeLink.Alive) return;   // the bike body went between Apply and this pose: the next Apply sorts it out
+        BodyFrame(out _, out var shakenRot);
+        float follow = Mathf.Clamp01(Plugin.HeadFollowsShake.Value);
+        var frameRot = Quaternion.Slerp(body.rotation, shakenRot, follow);
+        var eye = BikeLink.Eye(frameRot);
+        float roll = BikeLink.Roll(frameRot);
+        float headYaw = 0f, headPitch = 0f;
+        if (!EditMode.Active) HeadLookLink.Get(out headYaw, out headPitch);
+        var lookRot = frameRot * Quaternion.Euler(0f, 0f, roll) * Quaternion.Euler(Plugin.Pitch.Value - headPitch, _turn * Plugin.LookIntoTurn.Value + headYaw, 0f);
+        cam.transform.SetPositionAndRotation(eye, lookRot);
+        cam.nearClipPlane = Plugin.NearClip.Value;
     }
 
     /// <summary>The body frame as currently rendered: the body mesh's pose with its rest offset removed.</summary>
@@ -285,6 +318,8 @@ internal static class DriverView
     {
         _body = null;
         _active = false;
+        _onBike = false;
+        BikeLink.Reset();
         Cockpit.SetVisible(false);
         MirrorView.SetActive(false);
         DriverLink.SetView(false);

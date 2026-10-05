@@ -37,6 +37,7 @@ namespace Bikes
             public string Key, Model, Title, Id;
             public float[] Rider;     // seat xyz, right grip xyz, right peg xyz, hip height above the seat, knee half-width (bike frame)
             public bool Car;          // a car model (four wheels on the donor's spin pivots, no lean)
+            public float[] Eye;       // a car model: the driver's eye in its cabin, xyz (model frame, metres): the "Bikes.Eye" node (DriverCam)
             public int IntId;
             public float Speed, Accel, Handling, Durability;
             public Vehicle_SO So, Donor;
@@ -52,7 +53,9 @@ namespace Bikes
                        Speed = 0.85f, Accel = 0.95f, Handling = 0.85f, Durability = 0.35f,
                        Rider = new[] { 0f, 0.90f, -0.20f, 0.33f, 0.92f, 0.40f, 0.18f, 0.38f, -0.40f, 0.10f, 0.20f } },
             new Bike { Key = "M2G87", Model = "BMW_M2_G87", Title = "M2 G87", Id = "rogue.bikes.m2g87", IntId = 9003,
-                       Speed = 0.82f, Accel = 0.80f, Handling = 0.85f, Durability = 0.65f, Car = true },
+                       Speed = 0.82f, Accel = 0.80f, Handling = 0.85f, Durability = 0.65f, Car = true,
+                       // left-hand drive: steering wheel centre about (-0.37, 0.84, 0.21), seat cushion 0.42, headrest z -0.56
+                       Eye = new[] { -0.37f, 1.12f, -0.40f } },
         };
 
         internal static bool Injected { get; private set; }
@@ -281,7 +284,8 @@ namespace Bikes
 
         /// <summary>
         /// A car model, CarSkins-style. It's scaled so its wheelbase matches the donor's and placed with its front axle on
-        /// the donor's front axle. The body sits under the body node as "Bikes.Car". Each wheel goes under the donor's spin
+        /// the donor's front axle. The body sits under the body node as "Bikes.Car", with an empty "Bikes.Eye" child at the
+        /// driver's eye in the model's cabin (DriverCam). Each wheel goes under the donor's spin
         /// pivot (it spins and steers with it), turned to the body's frame and scaled like the body.
         /// </summary>
         private static VehicleSkinHolder FinishCar(Bike b, VehicleSkinHolder holder, BikeModel model, Transform bodyNode,
@@ -296,6 +300,13 @@ namespace Bikes
             root.transform.localScale = new Vector3(s, s, s);
             root.transform.localPosition = gF - turn * (model.PivotF * s);
             AddRenderer(new GameObject("Bikes.Frame"), root.transform, Vector3.zero, model.Body, model.BodyMats);
+            if (b.Eye != null)
+            {
+                // the driver's eye in the model's own cabin (no mesh), so DriverCam's driver view sits in this cabin
+                var eye = new GameObject("Bikes.Eye");
+                eye.transform.SetParent(root.transform, false);
+                eye.transform.localPosition = new Vector3(b.Eye[0], b.Eye[1], b.Eye[2]);
+            }
             float world = s * bodyNode.lossyScale.x;
             foreach (var k in new[] { "FL", "FR", "RL", "RR" })
             {

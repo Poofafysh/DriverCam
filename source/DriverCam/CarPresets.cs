@@ -198,6 +198,9 @@ internal static class CarPresets
     public static void Save()
     {
         if (_car == null) return;
+        // 0.11.5: on a Bikes vehicle (bike or M2) the car being "driven" is the hidden donor (Saber): its seat, eye and part
+        // tweaks don't apply to the bike / M2 view, and saving them wrecked the Saber's own cockpit view. Not written there.
+        if (BikeLink.Alive) return;
         var lines = Header(_car);
         foreach (var e in _entries) lines.Add($"{Key(e)} = {e.GetSerializedValue()}");
         lines.AddRange(PartLayout.LinesFor(_car));

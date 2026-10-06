@@ -12,8 +12,12 @@ namespace Bikes
     /// RodeBikeThisRun is set while a bike is driven and cleared when a new run starts (a new car at stage 0, race 0).
     /// While the player drives a bike, each frame (LateUpdate, after the game moved its wheels):
     /// - the bike's front wheel copies the game's FL spin pivot and its fork the FL steer pivot; the rear wheel copies RL;
-    /// - the bike leans into corners: lean = atan(speed x yaw rate / g), smoothed, capped at MaxLean;
-    /// - twice a second (not while paused), any car mesh the game added late is hidden with Renderer.forceRenderingOff.
+    /// - the bike leans into corners: lean = atan(speed x yaw rate / g), smoothed, capped at MaxLean. The yaw rate is the
+    ///   heading's change per frame (0.2.6: the game turns the car by setting its rotation, so the rigidbody's angular
+    ///   velocity stays near 0 and the bikes stayed upright);
+    /// - twice a second (not while paused), any car mesh the game added late is hidden with Renderer.forceRenderingOff,
+    ///   the donor car's colliders are squeezed to the bike's size and the game's glitch copies of the car hidden (Hitbox;
+    ///   restored as soon as the player is off the bike, Bikes is switched off, on the error breaker and on unload).
     ///   Bodies are also hidden as they spawn (Guards' VehicleSkinHolder hooks), which covers the garage turntable.
     /// </summary>
     public class Runner : MonoBehaviour
@@ -93,6 +97,7 @@ namespace Bikes
         private void Fault(Exception e)
         {
             Clear();
+            try { Hitbox.Restore("error"); } catch { /* retried off the bike */ }
             if (++_errors >= 5)
             {
                 Broken = true;   // WantBikes is false from now on: the next tick takes the bikes out of the garage
@@ -104,6 +109,7 @@ namespace Bikes
 
         private void OnDestroy()
         {
+            try { Hitbox.Restore("plugin unloaded"); } catch { /* shutting down */ }
             try { Garage.Remove("plugin unloaded", force: true); } catch { /* shutting down */ }
             Garage.DestroyAll();
             BikeModel.DestroyAll();
@@ -112,7 +118,7 @@ namespace Bikes
         private void Clear()
         {
             _skinPtr = IntPtr.Zero; _skin = null; _lean = null; _steerF = null; _bars = null; _wheelF = null; _wheelR = null;
-            _carSpinF = null; _carSteerF = null; _carSpinR = null; _rb = null; _leanDeg = 0f;
+            _carSpinF = null; _carSteerF = null; _carSpinR = null; _rb = null; _leanDeg = 0f; _hasYaw = false; _yawRate = 0f;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -120,15 +126,21 @@ namespace Bikes
         {
             float now = Time.unscaledTime;
             var veh = VehicleManager.Instance;
-            if (veh == null || !Garage.IsBike(veh.VehicleSO))
+            if (veh == null || !Garage.IsBike(veh.VehicleSO) || !Plugin.Enabled.Value)
             {
-                if (_skinPtr != IntPtr.Zero) Clear();
-                return;
+                if (Hitbox.Any) Hitbox.Restore(veh == null ? "no player car" : !Plugin.Enabled.Value ? "switched off" : "off the bike");
+                if (_skinPtr != IntPtr.Zero && (veh == null || !Garage.IsBike(veh.VehicleSO))) Clear();
+                if (veh == null || !Garage.IsBike(veh.VehicleSO)) return;
             }
             var holder = veh.VehicleSkin;
             if (holder == null) { Clear(); return; }
             if (holder.Pointer != _skinPtr || _skin == null) Find(holder.transform, veh);
-            if (now >= _nextHide && Time.timeScale > 0f) { _nextHide = now + 0.5f; Garage.HideCar(_skin); }
+            if (now >= _nextHide && Time.timeScale > 0f)
+            {
+                _nextHide = now + 0.5f;
+                Garage.HideCar(_skin);
+                if (Plugin.Enabled.Value) Hitbox.Apply(veh.transform, _rb, _carSpinF, _carSpinR, bike: _lean != null);
+            }
             if (_lean == null) return;   // a car model: its wheels ride on the donor's pivots, no lean
 
             // wheels: copy the game's own spin and steer
@@ -142,9 +154,16 @@ namespace Bikes
             float dt = Time.deltaTime;
             if (_rb != null && dt > 0f)
             {
-                Vector3 v = _rb.linearVelocity, w = _rb.angularVelocity;
+                Vector3 v = _rb.linearVelocity;
+                Vector3 fwd = _rb.transform.forward;
+                float yaw = (float)Math.Atan2(fwd.x, fwd.z);
+                float dYaw = _hasYaw ? yaw - _prevYaw : 0f;
+                if (dYaw > Math.PI) dYaw -= (float)(2 * Math.PI); else if (dYaw < -Math.PI) dYaw += (float)(2 * Math.PI);
+                _prevYaw = yaw; _hasYaw = true;
+                float rate = dYaw / dt;                                  // rad/s, + = turning right
+                _yawRate += (rate - _yawRate) * (1f - (float)Math.Exp(-12f * dt));   // per-frame heading is noisy
                 float speed = (float)Math.Sqrt(v.x * v.x + v.z * v.z);
-                float lat = speed * w.y;   // + = turning right
+                float lat = speed * _yawRate;
                 float max = Math.Max(0f, Math.Min(65f, Plugin.MaxLean.Value));
                 target = -(float)(Math.Atan2(lat, 9.81) * 180.0 / Math.PI) * Plugin.LeanScale.Value;
                 if (speed < 3f) target *= speed / 3f;   // upright at a crawl
@@ -156,6 +175,8 @@ namespace Bikes
         }
 
         private Quaternion _leanBase = Quaternion.identity;
+        private float _prevYaw, _yawRate;
+        private bool _hasYaw;
 
         private void Find(Transform skin, VehicleManager veh)
         {

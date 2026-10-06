@@ -32,6 +32,12 @@ internal static class BikeLink
     static IntPtr _bodyPtr;
     static float _recheckAt = -1f, _nextHeadLookup;
     static Transform _lean, _head;   // _lean: the bike frame, or the car model's root ("Bikes.Car") when _isCar
+    static Transform _bars;          // Bikes' "Bikes.Bars" (the handlebar pivot): the eye stays behind and above it
+    // 0.11.5: the eye at least this far behind / above the bars along the bike's own axes (metres). A tucked rider's
+    // helmet sits almost over the bars, which put them below the view ("you can't even see the handle bars")
+    const float BarsBack = 0.55f, BarsUp = 0.30f;
+    /// <summary>Extra downward pitch on a motorcycle (degrees), so the bars, tank and clocks are in view.</summary>
+    internal const float PitchDown = 8f;
     static Transform _eyeNode;       // a car model: Bikes' "Bikes.Eye" node (null = the estimate below)
     static bool _isCar;
     static string _key, _logged;
@@ -73,13 +79,13 @@ internal static class BikeLink
             _recheckAt = -1f;
             Find(body);
         }
-        if (_lean != null && _lean.WasCollected) { _lean = null; _head = null; _eyeNode = null; }
+        if (_lean != null && _lean.WasCollected) { _lean = null; _head = null; _eyeNode = null; _bars = null; }
         return _lean != null;
     }
 
     static void Find(Transform body)
     {
-        _lean = null; _head = null; _eyeNode = null; _isCar = false; _key = null; _nextHeadLookup = 0f;
+        _lean = null; _head = null; _eyeNode = null; _bars = null; _isCar = false; _key = null; _nextHeadLookup = 0f;
         Transform lean = null;
         var veh = VehicleManager.Instance;
         var skin = veh != null ? veh.VehicleSkin : null;
@@ -176,6 +182,7 @@ internal static class BikeLink
             _nextHeadLookup = Time.unscaledTime + 1f;   // Driver builds (and rebuilds) its rider on its own schedule
             var helmet = FindNamed(_lean, "Driver_Helmet");
             _head = helmet != null ? helmet.parent : null;
+            if (_bars == null) _bars = FindNamed(_lean, "Bikes.Bars");
             string log = _key + "|" + (_head != null ? "rider" : _seatFrom);
             if (_logged != log)
             {
@@ -189,6 +196,18 @@ internal static class BikeLink
         {
             var lp = _lean.position;
             eye = FM.Add(lp, FM.Rotate(_lean.rotation, _seatEye));
+        }
+        if (_bars != null && _bars.WasCollected) _bars = null;
+        if (_bars != null)
+        {
+            // keep the eye behind and above the bars in the bike's frame (it leans with the bike)
+            var lr = _lean.rotation;
+            var fwd = FM.Rotate(lr, FM.V3(0f, 0f, 1f));
+            var up = FM.Rotate(lr, FM.V3(0f, 1f, 0f));
+            var d = FM.Sub(eye, _bars.position);
+            float along = FM.Dot(d, fwd), high = FM.Dot(d, up);
+            if (along > -BarsBack) eye = FM.AddScaled(eye, fwd, -BarsBack - along);
+            if (high < BarsUp) eye = FM.AddScaled(eye, up, BarsUp - high);
         }
         return FM.Add(eye, FM.Rotate(frameRot, FM.V3(0f, Plugin.BikeEyeUp.Value, Plugin.BikeEyeForward.Value)));
     }
@@ -207,6 +226,6 @@ internal static class BikeLink
     /// <summary>The bike body was left (car change, level end): drop the cached lookups.</summary>
     internal static void Reset()
     {
-        _bodyPtr = IntPtr.Zero; _lean = null; _head = null; _eyeNode = null; _isCar = false; _key = null; _recheckAt = -1f;
+        _bodyPtr = IntPtr.Zero; _lean = null; _head = null; _eyeNode = null; _bars = null; _isCar = false; _key = null; _recheckAt = -1f;
     }
 }

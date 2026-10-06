@@ -2,7 +2,7 @@
 
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: hides the scenery you can't really see, to cut clutter and draw calls.
 
-Current version: **0.1.0**
+Current version: **0.2.0**
 
 ## What it does
 
@@ -19,6 +19,9 @@ Current version: **0.1.0**
 - **How it hides:** `Renderer.forceRenderingOff`, so `enabled` stays as the game set it (CurbFeel, DriverCam and
   LODGroups see the same renderer). Switched off, after an error, or in a Sandbox race, everything it hid is shown
   again.
+- **No damage ghost (0.2.0):** the see-through copy of your car the game flashes when you're hit (its GlitchFX "ghost
+  phasing" effect) is hidden with `forceRenderingOff`, in every race including Sandbox. `[Effects] HideDamageGhost`
+  (default on) shows it again at once.
 - **Cost:** a newly loaded tile is sorted a slice per frame, within `BudgetMs` (1.5 ms). After that it costs nothing
   per frame. Nothing runs while paused.
 
@@ -30,6 +33,7 @@ Current version: **0.1.0**
 | `Rules.SmallSize` | 2 | Props whose largest side is under this many metres count as small (0.5-6) |
 | `Rules.SmallDistance` | 40 | Small props further than this from the road are hidden, m (10-150) |
 | `Rules.FarDistance` | 120 | Anything further than this from the road is hidden, m (40-400) |
+| `Effects.HideDamageGhost` | true | Hide the see-through copy of your car the game flashes when you're hit (applies at once) |
 | `Tuning.BudgetMs` | 1.5 | Time per frame for sorting a new tile, ms (0.5-10) |
 
 The rules apply to tiles loaded after a change (the next race). Rogue Hub shows them all, with a live status line.
@@ -39,6 +43,8 @@ The rules apply to tiles loaded after a change (the next race). Rogue Hub shows 
 - `Declutter 0.1.0 loaded: hiding props under 2 m beyond 40 m and everything beyond 120 m from the road.`
 - Per tile: `[Declutter] tile <scene>: N renderers hidden (F far from the road, S small props)`.
 - `[Declutter] N renderers shown again in T tiles (switched off | Sandbox race | errors | plugin unloaded)`.
+- `[Declutter] damage ghost hidden: N renderer(s) of the car's glitch effect` (once per car), and
+  `[Declutter] damage ghost shown again (N renderer(s); switched off | errors | plugin unloaded)`.
 - Trouble: `[Declutter] tile <scene> left as it is after an error: ...`, `[Declutter] error (n/3): ...`, then
   `[Declutter] switched off for this session after repeated errors (everything is shown again)`.
 

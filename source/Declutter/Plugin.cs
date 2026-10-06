@@ -23,10 +23,10 @@ namespace Declutter
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.declutter";
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
 
         internal static new ManualLogSource Log;
-        internal static ConfigEntry<bool> Enabled;
+        internal static ConfigEntry<bool> Enabled, HideDamageGhost;
         internal static ConfigEntry<float> SmallSize, SmallDistance, FarDistance, BudgetMs;
 
         public override void Load()
@@ -43,6 +43,9 @@ namespace Declutter
             FarDistance = Config.Bind("Rules", "FarDistance", 120f, new ConfigDescription(
                 "Anything further than this from the road is hidden.", new AcceptableValueRange<float>(40f, 400f),
                 HubLink.Meta("Hide everything beyond", 40, 400, 10, "m", applies: "next race")));
+            HideDamageGhost = Config.Bind("Effects", "HideDamageGhost", true, new ConfigDescription(
+                "Hide the see-through copy of your car the game flashes when you're hit (its glitch / ghost phasing effect).", null,
+                HubLink.Meta("Hide the damage ghost", applies: "now")));
             BudgetMs = Config.Bind("Tuning", "BudgetMs", 1.5f, new ConfigDescription(
                 "Time per frame spent sorting a newly loaded tile, in milliseconds.", new AcceptableValueRange<float>(0.5f, 10f),
                 HubLink.Meta("Work per frame", 0.5, 10, 0.5, "ms", advanced: true, applies: "now")));

@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.2.5** (the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.2.6** (bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -39,8 +39,13 @@ Lean, Grip and Braking")
 - **The look.** The bike model is shown at real size (about 2 m long), centred between the hidden car's axles, with its
   wheels on the road. The front wheel spins and steers with the game's front-left wheel, the rear wheel spins with the
   rear-left. The bike leans into corners by the physical lean for its speed and turn rate
-  (tan lean = speed x yaw rate / g), up to `MaxLean` (50°), and stays upright at a crawl. The car's own meshes, and any
-  part the game adds, are hidden.
+  (tan lean = speed x yaw rate / g, the yaw rate from the heading's change per frame), up to `MaxLean` (50°), and
+  stays upright at a crawl. The car's own meshes, and any part the game adds, are hidden.
+- **Bike-sized hitbox (0.2.6):** while you ride, every solid collider of the hidden donor car (hull capsules, ground box,
+  barrier capsules, also one the game detached) is narrowed to 0.8 m and shortened to 2.2 m round the axles' midpoint,
+  height kept; the rigidbody's centre of mass and inertia stay the game's. Put back exactly when you're off the bike,
+  Bikes is switched off, after errors or on unload. Log: `[Bikes] bike hitbox: N car collider(s) squeezed to 0.8 x 2.2 m`
+  and `[Bikes] car hitbox and glitch effect restored (...)`.
 - **The M2 G87** is a car model fitted the CarSkins way: scaled so its wheelbase matches the donor's, front axle on the
   donor's front axle, its four wheels on the donor's own wheel pivots (they spin and steer with them). No lean.
 - **Models:**

@@ -205,7 +205,8 @@ internal static class DriverView
         float roll = BikeLink.Roll(frameRot);
         float headYaw = 0f, headPitch = 0f;
         if (!EditMode.Active) HeadLookLink.Get(out headYaw, out headPitch);
-        var lookRot = frameRot * Quaternion.Euler(0f, 0f, roll) * Quaternion.Euler(Plugin.Pitch.Value - headPitch, _turn * Plugin.LookIntoTurn.Value + headYaw, 0f);
+        float pitch = Plugin.Pitch.Value + (BikeLink.IsCar ? 0f : BikeLink.PitchDown);   // 0.11.5: a motorcycle looks a little down at its bars
+        var lookRot = frameRot * Quaternion.Euler(0f, 0f, roll) * Quaternion.Euler(pitch - headPitch, _turn * Plugin.LookIntoTurn.Value + headYaw, 0f);
         cam.transform.SetPositionAndRotation(eye, lookRot);
         cam.nearClipPlane = Plugin.NearClip.Value;
         if (_carCabin && BikeLink.IsCar) CarCabin.Pose(shakenPos, shakenRot, cabinRot, eye, cam, _turn);   // mirrors, readout, Driver seat, wheel spin

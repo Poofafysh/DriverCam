@@ -54,6 +54,7 @@ namespace Declutter
             try
             {
                 float now = Time.unscaledTime;
+                DamageGhost.Tick(now);   // its own switch: every race, Sandbox included
                 if (now >= _nextPoll) _sandbox = SandboxRace();   // read once a second (and before every poll)
                 bool on = Plugin.Enabled.Value && !_sandbox;
                 // switching off restores at once, even from the pause menu
@@ -69,6 +70,7 @@ namespace Declutter
                 {
                     _broken = true;
                     try { RestoreAll("errors"); } catch { /* scene gone */ }
+                    try { DamageGhost.Restore("errors"); } catch { /* car gone */ }
                     Plugin.Log.LogError($"[Declutter] switched off for this session after repeated errors (everything is shown again): {e}");
                 }
                 else Plugin.Log.LogWarning($"[Declutter] error ({_errors}/3): {e.Message}");
@@ -78,6 +80,7 @@ namespace Declutter
         private void OnDestroy()
         {
             try { RestoreAll("plugin unloaded"); } catch { /* shutting down */ }
+            try { DamageGhost.Restore("plugin unloaded"); } catch { /* shutting down */ }
         }
 
         /// <summary>

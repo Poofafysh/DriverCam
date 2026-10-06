@@ -8,7 +8,7 @@ using Il2CppInterop.Runtime.Injection;
 
 namespace DriverCam;
 
-[BepInPlugin(Guid, "DriverCam", "0.11.4")]
+[BepInPlugin(Guid, "DriverCam", "0.11.5")]
 public class Plugin : BasePlugin
 {
     public const string Guid = "drivingrogue.drivercam";
@@ -163,7 +163,7 @@ public class Plugin : BasePlugin
         AddComponent<DriverCamBehaviour>();
 
         new Harmony(Guid).PatchAll(typeof(Patches));
-        Log.LogInfo("DriverCam 0.11.4 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
+        Log.LogInfo("DriverCam 0.11.5 loaded. Click the DriverCam button on screen, or press F6 to toggle driver view.");
     }
 }
 

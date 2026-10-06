@@ -25,10 +25,11 @@ namespace Driver
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.driver";
-        public const string Version = "0.4.2";
+        public const string Version = "0.5.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, ShowInDriverView, ShowInChaseView, Outline, LogEvents, ForceCpuSkin, AnimEnabled, ShiftHand, Celebrate;
+        internal static ConfigEntry<float> SteerLean;
         internal static ConfigEntry<bool> BikeEnabled, HangOff;
         internal static ConfigEntry<bool> RideStyle, Tuck, LegDangle, KneeDown, LookIntoCorner, FootDown;
         internal static ConfigEntry<RideStyleKind> Style;
@@ -45,6 +46,7 @@ namespace Driver
             AnimEnabled = Config.Bind("Anim", "Enabled", true, "Animation clips (driver_anims.dra) layered under the steering-wheel IK: idle breathing and small head moves, a lean with the steering, the body turning with HeadLook's look, bracing on hard braking, a jolt when you crash. Off = the 0.1 driver (breathing only).");
             ShiftHand = Config.Bind("Anim", "ShiftHand", true, "On a gear change the right hand leaves the wheel for the cockpit's gear knob and comes back (cars whose DriverCam cockpit has no knob keep both hands on the wheel). Needs [Anim] Enabled.");
             Celebrate = Config.Bind("Anim", "Celebrate", true, "A fist pump when you complete a level. Needs [Anim] Enabled.");
+            SteerLean = Config.Bind("Anim", "SteerLean", 6f, new ConfigDescription("Lean the upper body into corners with the steering, degrees at full lock (0 = off). Negative flips the direction if it leans the wrong way. The hands stay on the wheel. Needs [Anim] Enabled.", new AcceptableValueRange<float>(-15f, 15f)));
             BikeEnabled = Config.Bind("Bike", "Enabled", true, "On a Bikes motorcycle the driver rides it: sport-bike tuck, hands on the grips, feet on the pegs, leaning with the bike, shown in every view (head-less in DriverCam's driver view). Off = the driver sits in the hidden donor car's seat as in a car.");
             HangOff = Config.Bind("Bike", "HangOff", true, "Hang off in corners: the hips slide up to 15 cm to the inside with the lean (full at 30 deg), the upper body leans in up to 12 deg more past 30 deg, the inside knee opens. Off = the rider stays centred on the seat. Needs [Bike] Enabled.");
             RideStyle = Config.Bind("Bike", "RideStyle", true, "RIDE-style rider (0.4.0): the body moves with the riding: tuck at speed, sits up and braces on the brakes, the inside leg out under braking, a slow visible weight shift side to side, knee down and elbow drop at full lean, the head leading into corners, a foot down at a standstill, the left foot on the shifter, brake and clutch fingers, the throttle hand rolling. Off = the 0.3.0 rider. Needs [Bike] Enabled.");

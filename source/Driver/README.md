@@ -5,7 +5,7 @@ DriverCam's steering wheel and turn it with you, the right foot works the pedal,
 DriverCam's driver view you look down at your own body, arms and gloves on the wheel. On one of the Bikes plugin's
 motorcycles the driver rides it instead (0.3.0), and since 0.4.0 it moves the way riders do in the RIDE games.
 
-Current version: **0.4.2** (a slimmer driver: narrower shoulders, thinner upper arms, less torso girth, a slimmer neck and a smaller helmet; same skeleton, sockets and clips. In Bikes' M2 G87 the driver sits in the M2's own seat with its hands on the M2's wheel, from DriverCam 0.11.3's seat data. 0.4.1: fixes 0.4.0 failing to load: a Runner method with an `out` struct parameter broke IL2CPP injection).
+Current version: **0.5.0** (a slimmer driver: narrower shoulders, thinner upper arms, less torso girth, a slimmer neck and a smaller helmet; same skeleton, sockets and clips. In Bikes' M2 G87 the driver sits in the M2's own seat with its hands on the M2's wheel, from DriverCam 0.11.3's seat data. 0.4.1: fixes 0.4.0 failing to load: a Runner method with an `out` struct parameter broke IL2CPP injection).
 
 ## What it changes
 
@@ -205,8 +205,9 @@ is paused, the driver holds its last pose.
 | `Look.ShowInDriverView` | true | DriverCam's driver view: body, arms and hands (no head) |
 | `Look.ShowInChaseView` | false | chase and hood views; hidden inside the opaque body anyway |
 | `Anim.Enabled` | true | the animation clips above; off = breathing only (as 0.1) |
-| `Anim.ShiftHand` | true | the right hand to the gear knob on a gear change |
+| `Anim.ShiftHand` | true | the right hand to the gear knob on a gear change (0.5.0: a quicker, crisper reach / throw / return) |
 | `Anim.Celebrate` | true | the fist pump when you complete a level |
+| `Anim.SteerLean` | 6 | lean the upper body into corners, degrees at full lock (0 = off, negative flips the direction); the hands stay on the wheel (0.5.0) |
 | `Bike.Enabled` | true | on a Bikes motorcycle the driver rides it (shown in every view); off = seated in the hidden donor car |
 | `Bike.HangOff` | true | hang off in corners (hips up to 15 cm inside, upper body up to 12° more past 30° of lean) |
 | `Bike.RideStyle` | true | the RIDE-style rider (0.4.0, above); off = the 0.3.0 rider |

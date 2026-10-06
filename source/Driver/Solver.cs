@@ -381,6 +381,16 @@ namespace Driver
             return Reach(1, grip, _knobGrip, new Vec(0.45f, -0.25f, -0.25f), true);
         }
 
+        /// <summary>Roll spine_01..03 into the corner by rollDeg (40/30/30), head kept level (eyes stay on the road).</summary>
+        private void SteerLeanApply(float rollDeg)
+        {
+            var hq = Wq[_head];
+            RotateWorld(_sp1, Quat.AngleAxis(rollDeg * 0.4f, Vec.Fwd));
+            RotateWorld(_sp2, Quat.AngleAxis(rollDeg * 0.3f, Vec.Fwd));
+            RotateWorld(_sp3, Quat.AngleAxis(rollDeg * 0.3f, Vec.Fwd));
+            SetWorldRot(_head, hq);
+        }
+
         /// <summary>Lean spine_01..03 toward the knob by KnobLean * w (40/30/30), head kept level.</summary>
         private void KnobLeanApply(float w)
         {
@@ -563,6 +573,9 @@ namespace Driver
             }
             FK();
             if (shiftW > 0f && KnobMode == 1 && KnobLean > 0f) KnobLeanApply(shiftW);
+            // lean the upper body into the corner with the steering (the hands re-solve onto the rim afterwards, so they stay put)
+            float lean = Plugin.SteerLean.Value;
+            if (clips && MathF.Abs(lean) > 0.01f && MathF.Abs(turn) > 0.01f) SteerLeanApply(Math.Clamp(turn, -1f, 1f) * lean);
             if (yaw != 0f || pitch != 0f)
             {
                 // 35% neck, 65% head

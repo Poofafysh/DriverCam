@@ -109,7 +109,7 @@ namespace Driver
         private float _clock, _shiftUntil = -1f, _shiftStart = -1f, _shiftRaw;
         private int _shiftDir;
 
-        public const float ShiftIn = 0.2f, ShiftHold = 0.45f, ShiftOut = 0.25f;
+        public const float ShiftIn = 0.16f, ShiftHold = 0.4f, ShiftOut = 0.22f;   // a quicker, crisper reach / throw / return
 
         public AnimEvents(float joltLen, float celebLen)
         {

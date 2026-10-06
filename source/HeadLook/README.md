@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: look around like turning your head in real life, up, down, left and
 right, and spring back to centre when you let go.
 
-Current version: **0.1.1**
+Current version: **0.2.0**
 
 ## Controls
 
@@ -52,6 +52,13 @@ seat and parts, so the driver's head doesn't turn there.
 | `Look.MaxUp` / `MaxDown` | 35 / 25 | furthest look up / down, degrees (0-80) |
 | `Look.Speed` | 12 | how quickly the head follows and springs back (2-40) |
 | `Look.ChaseOrbit` | true | chase views orbit the car (off = turn in place) |
+| `LookBack.Enabled` | true | push the look all the way down to swing to a rear-bumper view facing backwards (GTA-style); let go to spring forward |
+| `LookBack.EngageAt` | 0.85 | how far down to push to trigger it, as a fraction of full down (0.2 = easy, 1 = only at the very bottom) |
+| `LookBack.Distance` | 2.4 | how far behind the car the rear view sits, metres (0.5-6) |
+| `LookBack.Height` | 0.95 | height of the rear view above the car's base, metres (0-3) |
+| `LookBack.AllowPan` | true | the left / right look still pans the rear view a little |
+
+**Look back (0.2.0):** on the hood and chase views, pushing the look fully down moves the camera to the rear bumper and faces it backwards, so you can see what's behind you; the move is eased and springs forward when you let go. The driver view (DriverCam's) reads the blend from AppDomain `rogue.headlook.lookback` and can honour it too.
 
 ## Log (`/game-log HeadLook`)
 

@@ -24,11 +24,11 @@ namespace HeadLook
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.headlook";
-        public const string Version = "0.1.1";
+        public const string Version = "0.2.0";
 
         internal static new ManualLogSource Log;
-        internal static ConfigEntry<bool> Enabled, Stick, Mouse, InvertY, ChaseOrbit;
-        internal static ConfigEntry<float> MaxYaw, MaxUp, MaxDown, Deadzone, MouseSensitivity, Speed;
+        internal static ConfigEntry<bool> Enabled, Stick, Mouse, InvertY, ChaseOrbit, LookBack, LookBackPan;
+        internal static ConfigEntry<float> MaxYaw, MaxUp, MaxDown, Deadzone, MouseSensitivity, Speed, LookBackAt, LookBackDist, LookBackHeight;
 
         public override void Load()
         {
@@ -44,6 +44,12 @@ namespace HeadLook
             MaxDown = Config.Bind("Look", "MaxDown", 25f, "Furthest look down, degrees (0-80).");
             Speed = Config.Bind("Look", "Speed", 12f, "How quickly the head follows the input and springs back (2-40; higher = snappier).");
             ChaseOrbit = Config.Bind("Look", "ChaseOrbit", true, "Chase views: orbit the camera around the car. Off = turn the chase camera in place like the hood view.");
+
+            LookBack = Config.Bind("LookBack", "Enabled", true, "GTA-style look back: push the look all the way DOWN and the view moves to the rear bumper, facing backwards, so you can see what's behind you. Let go and it springs forward.");
+            LookBackAt = Config.Bind("LookBack", "EngageAt", 0.85f, new ConfigDescription("How far down you must push to trigger look-back, as a fraction of full down (0.2 = easy, 1 = only at the very bottom).", new AcceptableValueRange<float>(0.2f, 1f)));
+            LookBackDist = Config.Bind("LookBack", "Distance", 2.4f, new ConfigDescription("How far behind the car the rear view sits, metres (0.5-6).", new AcceptableValueRange<float>(0.5f, 6f)));
+            LookBackHeight = Config.Bind("LookBack", "Height", 0.95f, new ConfigDescription("Height of the rear view above the car's base, metres (0-3).", new AcceptableValueRange<float>(0f, 3f)));
+            LookBackPan = Config.Bind("LookBack", "AllowPan", true, "While looking back, the left / right look still pans the rear view a little.");
 
             try { GameApi.Check(); }
             catch (Exception e) { Log.LogError($"[HeadLook] game check crashed, plugin stays idle: {e}"); return; }

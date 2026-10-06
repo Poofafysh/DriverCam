@@ -45,9 +45,15 @@ namespace HeadLook
         /// <summary>Shared with DriverCam through AppDomain data "rogue.headlook": [yaw deg (+ right), pitch deg (+ up), 1 = HeadLook running].</summary>
         internal static readonly float[] Shared = new float[3];
         internal const string SharedKey = "rogue.headlook";
+        /// <summary>Look-back blend for DriverCam's driver view (AppDomain "rogue.headlook.lookback"): [0] = 0..1 (1 = rear-bumper view), kept a separate key so the float[3] above stays unchanged for existing readers.</summary>
+        internal static readonly float[] BackShared = new float[1];
+        internal const string BackKey = "rogue.headlook.lookback";
 
         private static float _yaw, _pitch;            // current head angle, degrees
+        private static float _back;                   // 0..1 look-back blend (0 = normal head look, 1 = at the rear bumper facing back)
+        private static bool _backOn;                  // look-back latched (hysteresis on the down demand)
         private float _mouseYaw, _mousePitch;
+        private float _downDemand;                    // 0..1 how far down the look is pushed this frame (raw, before clamping)
         private bool _subscribed, _broken;
         private int _errors;
         private Action _beforeRender;
@@ -62,6 +68,7 @@ namespace HeadLook
         private void Awake()
         {
             AppDomain.CurrentDomain.SetData(SharedKey, Shared);
+            AppDomain.CurrentDomain.SetData(BackKey, BackShared);
         }
 
         private void Update()
@@ -77,7 +84,7 @@ namespace HeadLook
                     Application.add_onBeforeRender(_beforeRenderAction);
                 }
                 ReadInput(out float targetYaw, out float targetPitch);
-                if (Time.timeScale <= 0f) { targetYaw = 0f; targetPitch = 0f; _mouseYaw = _mousePitch = 0f; }   // paused / menus: head back to centre, input ignored
+                if (Time.timeScale <= 0f) { targetYaw = 0f; targetPitch = 0f; _mouseYaw = _mousePitch = 0f; _downDemand = 0f; }   // paused / menus: head back to centre, input ignored
                 float dt = FM.Min(0.1f, Time.unscaledDeltaTime);
                 float k = 1f - MathF.Exp(-FM.Clamp(Plugin.Speed.Value, 2f, 40f) * dt);
                 _yaw += (targetYaw - _yaw) * k;
@@ -85,13 +92,22 @@ namespace HeadLook
                 if (Math.Abs(_yaw) < 0.01f && targetYaw == 0f) _yaw = 0f;
                 if (Math.Abs(_pitch) < 0.01f && targetPitch == 0f) _pitch = 0f;
                 Shared[0] = _yaw; Shared[1] = _pitch; Shared[2] = Plugin.Enabled.Value ? 1f : 0f;
+
+                // look-back: push all the way down to swing the view to the rear bumper (hysteresis so it doesn't flicker)
+                float at = FM.Clamp(Plugin.LookBackAt.Value, 0.2f, 1f);
+                if (!Plugin.Enabled.Value || !Plugin.LookBack.Value || Time.timeScale <= 0f) _backOn = false;
+                else if (_downDemand >= at) _backOn = true;
+                else if (_downDemand < at - 0.12f) _backOn = false;
+                _back += ((_backOn ? 1f : 0f) - _back) * k;
+                if (_back < 0.001f) _back = 0f; else if (_back > 0.999f) _back = 1f;
+                BackShared[0] = _back;
             }
             catch (Exception e) { Fault(e); }
         }
 
         private void ReadInput(out float yaw, out float pitch)
         {
-            yaw = 0f; pitch = 0f;
+            yaw = 0f; pitch = 0f; _downDemand = 0f;
             if (!Plugin.Enabled.Value) { _mouseYaw = _mousePitch = 0f; return; }
             float maxYaw = FM.Clamp(Plugin.MaxYaw.Value, 10f, 170f);
             float maxUp = FM.Clamp(Plugin.MaxUp.Value, 0f, 80f), maxDown = FM.Clamp(Plugin.MaxDown.Value, 0f, 80f);
@@ -109,6 +125,7 @@ namespace HeadLook
                     yaw = s.x * maxYaw;
                     float y = s.y * inv;
                     pitch = y >= 0f ? y * maxUp : y * maxDown;
+                    _downDemand = y < 0f ? FM.Clamp01(-y) : 0f;   // how far the stick is pushed down (raw, before the maxDown clamp)
                     _mouseYaw = _mousePitch = 0f;
                     return;
                 }
@@ -122,6 +139,7 @@ namespace HeadLook
                 _mouseYaw = FM.Clamp(_mouseYaw + d.x * sens, -maxYaw, maxYaw);
                 _mousePitch = FM.Clamp(_mousePitch + d.y * sens * inv, -maxDown, maxUp);
                 yaw = _mouseYaw; pitch = _mousePitch;
+                _downDemand = (_mousePitch < 0f && maxDown > 0.01f) ? FM.Clamp01(-_mousePitch / maxDown) : 0f;
             }
             else { _mouseYaw = 0f; _mousePitch = 0f; }
         }
@@ -133,7 +151,7 @@ namespace HeadLook
             try
             {
                 Restore();   // a camera the game didn't update since our last frame: start from its real pose, never stack offsets
-                if (!Plugin.Enabled.Value || (_yaw == 0f && _pitch == 0f) || Time.timeScale <= 0f) return;
+                if (!Plugin.Enabled.Value || (_yaw == 0f && _pitch == 0f && _back == 0f) || Time.timeScale <= 0f) return;
                 if (!GameApi.Camera(out var cam, out var view, out var body)) return;
                 if (view == GameApi.View.Driver || view == GameApi.View.Other) return;
 
@@ -156,6 +174,16 @@ namespace HeadLook
                     rot = Quaternion.AngleAxis(_yaw, up) * rot;
                     rot = Quaternion.AngleAxis(-_pitch, rot * Vector3.right) * rot;
                 }
+                // look-back: blend the pose toward a rear-bumper view facing backwards (GTA-style). Needs the car body.
+                if (_back > 0.001f && body != null)
+                {
+                    float dist = FM.Clamp(Plugin.LookBackDist.Value, 0.5f, 6f), hgt = FM.Clamp(Plugin.LookBackHeight.Value, 0f, 3f);
+                    Vector3 rearPos = body.position - body.forward * dist + up * hgt;
+                    Quaternion rearRot = Quaternion.LookRotation(-body.forward, up);
+                    if (Plugin.LookBackPan.Value && _yaw != 0f) rearRot = Quaternion.AngleAxis(_yaw, up) * rearRot;   // glance left / right while looking back
+                    pos = Vector3.Lerp(pos, rearPos, _back);
+                    rot = Quaternion.Slerp(rot, rearRot, _back);
+                }
                 cam.SetPositionAndRotation(pos, rot);
             }
             catch (Exception e) { Fault(e); }
@@ -177,7 +205,7 @@ namespace HeadLook
                 if (_subscribed && _beforeRenderAction != null) Application.remove_onBeforeRender(_beforeRenderAction);
             }
             catch { /* shutting down */ }
-            Shared[0] = Shared[1] = Shared[2] = 0f;
+            Shared[0] = Shared[1] = Shared[2] = 0f; BackShared[0] = _back = 0f; _backOn = false;
         }
 
         private void Fault(Exception e)
@@ -188,7 +216,7 @@ namespace HeadLook
             _broken = true;
             try { Restore(); } catch { /* gone */ }
             _yaw = _pitch = 0f;
-            Shared[0] = Shared[1] = Shared[2] = 0f;
+            Shared[0] = Shared[1] = Shared[2] = 0f; BackShared[0] = _back = 0f; _backOn = false;
             Plugin.Log.LogError($"[HeadLook] switched off for this session; the camera is the game's again. Last error: {e}");
         }
     }

@@ -60,8 +60,8 @@ namespace Bikes
                        Speed = 0.85f, Accel = 0.95f, Handling = 0.85f, Durability = 0.35f,
                        Rider = new[] { 0f, 0.90f, -0.35f, 0.33f, 0.92f, 0.40f, 0.18f, 0.38f, -0.55f, 0.10f, 0.20f } },   // seat and pegs 15 cm further back (0.2.5)
             new Bike { Key = "M2G87", Model = "BMW_M2_G87", Title = "M2 G87", Id = "rogue.bikes.m2g87", IntId = 9003,
-                       // top speed 200 on the HUD (mph; 322 km/h), every other stat at the game's maximum
-                       Speed = 1f, TopMph = 200f, Accel = 1f, Handling = 1f, Durability = 1f, Car = true,
+                       // top speed 180 on the HUD (mph; 290 km/h; 200 until 0.3.2), every other stat at the game's maximum
+                       Speed = 1f, TopMph = 180f, Accel = 1f, Handling = 1f, Durability = 1f, Car = true,
                        // left-hand drive: steering wheel centre about (-0.375, 0.85, 0.19), seat cushion 0.42, headrest z -0.56
                        Eye = new[] { -0.37f, 1.12f, -0.40f },
                        // measured from BMW_M2_G87.csm (the mirrors' glass faces, the curved display's cluster half), 3-4 mm

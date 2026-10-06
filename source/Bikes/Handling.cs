@@ -10,7 +10,7 @@ using UnityEngine;
 namespace Bikes
 {
     /// <summary>
-    /// Real handling for the player's Bikes vehicle (bikes: [Handling] Bikes, the M2: [Handling] Car). The game's own
+    /// Real handling for the player's bike ([Handling] Bikes; the M2 keeps the game's handling since 0.3.2). The game's own
     /// model (verified in GameAssembly.dll) is arcade: HandleCarRotation adds steer x CurrentTurnSpeed x dt to the
     /// heading and MoveRotations the body onto the ground; ApplyMovement sets the velocity to a direction blended from the
     /// velocity towards the heading (TractionStat) times TargetSpeed x the speed modifiers, plus extraVelocity and the
@@ -30,17 +30,13 @@ namespace Bikes
     ///   speed; the turn follows from the lean (yaw rate = g tan(lean) / speed, a coordinated turn), so a bike turns
     ///   because it leans; the largest lean is what the remaining grip holds (brake hard and it can't lean as far) and
     ///   [Look] MaxLean; at walking pace it steers by the bars instead;
-    /// - car (the M2): the steer input turns the front wheels (less lock at speed), the yaw rate follows the bicycle
-    ///   model (speed x tan(steer) / wheelbase) until the grip runs out: then it understeers, so speed carried into a
-    ///   corner widens the line; throttle at low speed allows some power oversteer; the course follows the heading at
-    ///   the grip limit, so the car slides (slip angle) and scrubs speed when the heading outruns it.
     /// It stands aside (the game's own handling) while the Reverse plugin reverses, off a Bikes vehicle, switched off, or
     /// for the session after 3 errors. State follows reality: a collision that slows or turns the car, or the game's own
     /// path-angle limit, resets the model to what the body really does.
     /// </summary>
     internal static class Handling
     {
-        internal static ConfigEntry<bool> BikeOn, CarOn;
+        internal static ConfigEntry<bool> BikeOn;
         internal static bool Ok;
 
         // published for the Runner (and the FX): the model's lean and fork angle, slides
@@ -53,7 +49,7 @@ namespace Bikes
         // hooks run for every car each physics step and compare this pointer before touching anything else
         private static IntPtr s_ptr, s_vehPtr, s_vm;
         private static Rigidbody s_rb;
-        private static bool s_bike, s_init, s_swapped, s_off, s_loggedBike, s_loggedCar;
+        private static bool s_init, s_swapped, s_off, s_loggedBike;
         private static float s_checkedAt;
         private static float s_savedTurn;
         private static float s_psi, s_chi, s_v, s_phi, s_r;
@@ -65,8 +61,6 @@ namespace Bikes
         {
             BikeOn = cfg.Bind("Handling", "Bikes", true,
                 "Bikes turn by leaning (RIDE 4 / 5 style): steer = lean, the lean makes the turn, braking takes grip from cornering. Off = the game's car handling.");
-            CarOn = cfg.Bind("Handling", "Car", true,
-                "The M2 G87 handles like a real car: tyre grip limits cornering (too fast into a corner = it runs wide), braking and acceleration share that grip, power and traction limit acceleration. Off = the game's handling.");
         }
 
         /// <summary>The handling hooks, separate from the Bikes guards: a failure only leaves the game's own handling.</summary>
@@ -127,7 +121,7 @@ namespace Bikes
             if (veh.Pointer == s_vehPtr && now < s_checkedAt) return;
             s_vehPtr = veh.Pointer; s_checkedAt = now + 0.5f;
             var b = Garage.Of(veh.VehicleSO);
-            bool on = b != null && (b.Car ? CarOn.Value : BikeOn.Value);
+            bool on = b != null && !b.Car && BikeOn.Value;   // bikes only (0.3.2: the M2 is back on the game's handling)
             var move = on ? veh.VehicleMovement : null;
             var rb = on ? veh.Rigidbody : null;
             IntPtr p = move == null || rb == null ? IntPtr.Zero : move.Pointer;
@@ -137,7 +131,7 @@ namespace Bikes
                 s_ptr = IntPtr.Zero; s_rb = null;
                 return;
             }
-            if (p != s_vm || s_bike == b.Car) { s_vm = p; s_bike = !b.Car; s_init = false; }
+            if (p != s_vm) { s_vm = p; s_init = false; }
             s_rb = rb;
             s_ptr = p;
         }
@@ -250,7 +244,7 @@ namespace Bikes
             if (!s_init)
             {
                 s_init = true; s_psi = psiAct; s_chi = chiMeas; s_v = vMeas; s_phi = 0f; s_r = 0f;
-                if (s_bike ? !s_loggedBike : !s_loggedCar) { if (s_bike) s_loggedBike = true; else s_loggedCar = true; Plugin.Log.LogInfo($"[Bikes] handling: {(s_bike ? "bike (steer = lean, turn from the lean)" : "car (tyre grip, understeer, slip)")} on the player's vehicle"); }
+                if (!s_loggedBike) { s_loggedBike = true; Plugin.Log.LogInfo("[Bikes] handling: bike (steer = lean, turn from the lean) on the player's vehicle"); }
             }
             // follow reality: the game's path-angle limit or a collision turned the body; an impact slowed or pushed it
             if (Math.Abs(Wrap(psiAct - s_psi)) > 0.03f) s_psi = psiAct;
@@ -277,46 +271,19 @@ namespace Bikes
 
             // longitudinal: traction, then power over speed, minus drag; braking by grip
             bool boost = mult > 1.05f;
-            // 0.3.1 car: sporty-tyre grip that rises with speed (downforce); 1.1 g left it unable to make the game's corners
-            float mu = s_bike ? 1.25f : Math.Min(1.8f, 1.45f + 0.004f * s_v), muBrake = s_bike ? 1.1f : 1.2f;
-            float launch = s_bike ? 9.5f : 7.5f, power = (s_bike ? 420f : 210f) * (boost ? 1.8f : 1f), drag = s_bike ? 0.00022f : 0.00026f;
+            const float mu = 1.25f, muBrake = 1.1f, launch = 9.5f, drag = 0.00022f;
+            float power = 420f * (boost ? 1.8f : 1f);
             float aUp = Math.Min(launch, power / Math.Max(s_v, 4f)) - drag * s_v * s_v;
             float aDown = muBrake * G;
             float want = demand - s_v;
-            float steerCar = 0f, rCmdCar = 0f;
-            if (!s_bike)
-            {
-                const float wb = 2.75f;
-                steerCar = steer * 0.6f / (1f + s_v / 30f);   // less lock at speed (0.3.1: falls off half as fast)
-                rCmdCar = s_v * (float)Math.Tan(steerCar) / wb;
-            }
-            float aLong, latAvail;
-            if (want < 0f)
-            {
-                // braking: takes grip from cornering (trail braking)
-                aLong = Math.Max(want / dt, -aDown);
-                latAvail = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - aLong * aLong));
-            }
-            else if (!s_bike)
-            {
-                // 0.3.1 car on the throttle: cornering first, the throttle only gets the grip the corner leaves (traction
-                // control); 0.3.0 let the game's ever-rising speed demand eat the grip, so the car couldn't turn
-                float latUse = Math.Min(Math.Abs(s_v * rCmdCar), mu * G);
-                float longLeft = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - latUse * latUse));
-                aLong = Math.Min(want / dt, Math.Min(Math.Max(0f, aUp), longLeft));
-                latAvail = mu * G;
-            }
-            else
-            {
-                aLong = Math.Min(want / dt, Math.Max(0f, aUp));
-                latAvail = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - aLong * aLong));
-            }
+            // braking takes grip from leaning (trail braking), so does accelerating
+            float aLong = want >= 0f ? Math.Min(want / dt, Math.Max(0f, aUp)) : Math.Max(want / dt, -aDown);
+            float latAvail = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - aLong * aLong));
             s_v = Math.Max(0f, s_v + aLong * dt);
             Braking = aLong < -0.35f * G;
             float spd = Math.Max(s_v, 0.5f);
             float rGrip = latAvail / spd;
 
-            if (s_bike)
             {
                 // RIDE-style: steer asks for a lean; the lean rate falls with speed; the lean makes the turn
                 float maxLean = Math.Max(5f, Math.Min(65f, Plugin.MaxLean.Value)) * Mathf.Deg2Rad;
@@ -340,32 +307,6 @@ namespace Bikes
                 SlipDeg = beta * Mathf.Rad2Deg;
                 RearSlide = Math.Abs(beta) > 0.06f || (aLong > 0.85f * aUp && aUp > 3f && Math.Abs(s_phi) > 0.5f);
                 FrontSkid = aLong < -0.97f * aDown;
-            }
-            else
-            {
-                // bicycle model with a grip limit: understeer past the limit, the course follows the heading at the limit
-                float delta = steerCar;
-                float rCmd = rCmdCar;
-                // asking for more turn than the grip holds: the front tyres scrub (like lifting off), so the car slows
-                // into the corner and the line tightens instead of ploughing on at full speed
-                if (want >= 0f && Math.Abs(rCmd) > rGrip && Math.Abs(rCmd) > 1e-3f)   // not on top of your own braking
-                {
-                    float excess = Clamp01((Math.Abs(rCmd) - rGrip) / Math.Abs(rCmd));
-                    s_v = Math.Max(0f, s_v - excess * 0.7f * G * dt);
-                    spd = Math.Max(s_v, 0.5f); rGrip = latAvail / spd;
-                }
-                float throttle = want > 0.5f ? 1f : 0f;
-                float over = throttle * Clamp01(1f - s_v / 40f) * 0.35f;   // power oversteer at low and middle speed
-                float beta = Wrap(s_psi - s_chi);
-                float rT = Clamp(rCmd, -rGrip * (1f + over), rGrip * (1f + over));
-                rT -= beta * (Math.Sign(beta) == Math.Sign(rCmd) ? 0.6f : 1.8f);   // the tyres pull the car straight again
-                s_r += (rT - s_r) * (1f - (float)Math.Exp(-dt / 0.07f));
-                s_psi = Wrap(s_psi + s_r * dt);
-                s_chi = Approach(s_chi, s_psi, rGrip * dt);
-                beta = Wrap(s_psi - s_chi);
-                s_v *= 1f - Math.Min(0.6f * Math.Abs((float)Math.Sin(beta)) * dt, 0.05f);   // a slide scrubs speed
-                SteerDeg = delta * Mathf.Rad2Deg; LeanDeg = 0f; SlipDeg = beta * Mathf.Rad2Deg;
-                RearSlide = Math.Abs(beta) > 0.1f; FrontSkid = aLong < -0.97f * aDown;
             }
 
             // write back: the heading (yaw only) and the real speed for the game's own speed logic

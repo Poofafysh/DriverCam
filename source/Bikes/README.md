@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.3.1** (the M2 turns: grip 1.45-1.8 g, cornering before throttle, speed scrubs in a corner taken too fast; 0.3.0: real handling: bikes turn by leaning, RIDE 4 / 5 style, and the M2 has tyre grip, so speed carried into a corner matters; the bike rocking up and down is gone; bike tyre marks and smoke; 0.2.6: bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.3.2** (the M2 is back on the game's own handling, top speed 180 mph; the `Handling.Car` setting is gone, a leftover line in an old `rogue.bikes.cfg` does nothing; 0.3.0: real handling: bikes turn by leaning, RIDE 4 / 5 style, and the M2 has tyre grip, so speed carried into a corner matters; the bike rocking up and down is gone; bike tyre marks and smoke; 0.2.6: bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -15,10 +15,10 @@ Lean, Grip and Braking")
   |---|---|---|---|---|
   | BMW S1000RR | 0.95 | 0.90 | 0.75 | 0.30 |
   | Sport Bike | 0.85 | 0.95 | 0.85 | 0.35 |
-  | M2 G87 (car) | 1.00 (200 mph) | 1.00 | 1.00 | 1.00 |
+  | M2 G87 (car) | 1.00 (180 mph) | 1.00 | 1.00 | 1.00 |
 
   They're always unlocked and cost nothing.
-- **M2 top speed (0.2.4): 200 mph on the HUD** (322 km/h with the game set to km/h). How the game gets there (IDA, GameAssembly.dll):
+- **M2 top speed (0.2.4; 180 mph since 0.3.2) on the HUD** (290 km/h with the game set to km/h). How the game gets there (IDA, GameAssembly.dll):
   - the HUD (`VehicleVisuals.Update`, 0x76F370) shows `floor(VehicleMovement.CurrentSpeed x 2.237 x 1.1)` mph
     (`x 3.6 x 1.1` km/h: `MetricEnumExtensions.GetMultiplierNonLogical`, 0x7C2C60);
   - with no boost, the speed settles on `VehicleMovement.OriginalMaxSpeed` (`UpdateSpeed`, 0x74FFF0, caps `TargetSpeed`
@@ -26,9 +26,9 @@ Lean, Grip and Braking")
   - `MaxSpeedKph` = `VehicleStatsRange.GetMaxSpeed(clamp01(base + card/upgrade factor))` (0x6B9DE0: `max(50, x + (y - x) f)`),
     the range being `VehicleContainerSO.StatsRange`, 130-200 in the shipped data. The factor is clamped to 0..1, so the
     stats alone top out at 200 "km/h" = 136 mph on the HUD.
-  - So the M2's speed factor is 1.0 (the plugin bisects the game's `GetMaxSpeed` for 200.5 mph and finds it out of
-    range) and a `LoadVehicleAttributes` postfix multiplies the M2's `OriginalMaxSpeed` by 293.3 / 200 = 1.4667: 81.48 m/s,
-    200.5 mph on the meter, shown as 200 (322 km/h). The postfix runs every time the game reloads the stats, which set the
+  - So the M2's speed factor is 1.0 (the plugin bisects the game's `GetMaxSpeed` for 180.5 mph and finds it out of
+    range) and a `LoadVehicleAttributes` postfix multiplies the M2's `OriginalMaxSpeed` by 264.1 / 200 = 1.3204: 73.35 m/s,
+    180.5 mph on the meter, shown as 180 (290 km/h); 200 mph (x1.4667) until 0.3.2. The postfix runs every time the game reloads the stats, which set the
     value fresh, so it never compounds. Boost pads, slipstream and drift-exit boosts still raise the speed above it for a
     while (`totalSpeedModifier`); speed cards can't (the factor is already at 1). Any speed-lowering card scales with it.
   - The garage bars use `(factor + 0.2) / 1.4` clamped to 0..1 (`GetStatVisualFactor`, 0x6BAB00): full bars at 1.0.
@@ -77,7 +77,7 @@ Lean, Grip and Braking")
     pixel along the car's speed except a mask drawn from the vehicle layer; on the Default layer the M2's cabin, screen and
     wheel were smeared diagonally across DriverCam's driver view.
 
-## Handling (0.3.0, `Handling.cs`)
+## Handling (0.3.0, `Handling.cs`; bikes only since 0.3.2)
 
 The game's own handling is arcade: each physics step it turns the car by steer x turn speed and sets the velocity to
 its target speed along a direction that follows the nose. For the player's Bikes vehicle a model takes over the turn
@@ -89,21 +89,13 @@ and the velocity (the game's speed logic, boosts, collisions, gravity, downforce
   braking and cornering), and never past `Look.MaxLean`. At walking pace it steers by the bars instead. The visible
   lean is this lean, a smooth physics state (0.2.6 measured it from the game's turning frame by frame, which rocked the
   bike and the first-person camera up and down).
-- **The M2 G87:** sporty tyre grip of about 1.45 g, rising with speed like downforce (to 1.8 g), 1.2 g braking.
-  Cornering comes first: on the throttle the engine only gets the grip the corner leaves (0.3.0 gave it to the
-  throttle, and the car couldn't turn). Asking for more turn than the grip holds scrubs speed at the front tyres, as
-  if you lifted, so the car slows into the corner and the line tightens. Braking still takes grip from cornering. The steering
-  turns the front wheels (less lock at speed) and the turn follows the wheelbase until the grip runs out: past that it
-  **understeers**, so speed carried into a corner widens the line and you have to brake before it. Acceleration is
-  traction-limited at low speed, then power over speed, minus drag (boosts add power). On the throttle at low and
-  middle speed the rear can step out (power oversteer); the car slides when its nose outruns its course, and a slide
-  scrubs speed.
+- **The M2 G87** keeps the game's own handling (0.3.2: the 0.3.0 / 0.3.1 car model was taken out).
 - **Speed:** the game's target speed (with its boosts and slowdowns) is your throttle / brake; the model follows it
   within real acceleration and braking, and writes the real speed back, so the HUD, the engine sound and the game's
   logic see it.
 - **When the game's handling is used instead:** in multiplayer (the handling is single-player only), while reversing (the Reverse plugin), in the air (the game's own turn and
   velocity; the model then picks up from what the body does on landing), off a Bikes vehicle,
-  with `Handling.Bikes` / `Handling.Car` off, or for the session after 3 errors. A collision or the game's own
+  with `Handling.Bikes` off, or for the session after 3 errors. A collision or the game's own
   path-angle limit resets the model to what the body really does.
 
 ## Bike effects (0.3.0, `BikeFx.cs`)
@@ -166,15 +158,13 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 | `General.Enabled` | true | The bikes are in the garage (single-player). Off = they leave the garage at once |
 | `General.DonorCar` | Saber | The car each bike drives on underneath (speed class, handling, parts, trait). Applies at the next game start |
 | `Handling.Bikes` | true | Bikes turn by leaning (RIDE 4 / 5 style); off = the game's car handling |
-| `Handling.Car` | true | The M2 handles like a real car (tyre grip, understeer, slip); off = the game's handling |
 | `Look.MaxLean` | 50 | Largest lean in corners, degrees (0-65); with the handling on, also the most the bike leans to turn |
 | `Look.LeanScale` | 1 | Lean strength (1 = physical lean) |
 | `State.RodeBikeThisRun` | false | Written by the plugin: the current run used a bike (leaderboard uploads skipped). Not a setting |
 
 ## Log (`/game-log Bikes`)
 
-- `[Bikes] handling: bike (steer = lean, turn from the lean) on the player's vehicle` (or `car (tyre grip, understeer,
-  slip)`), once; `[Bikes] handling: the game's own handling again (...)` when it stands aside.
+- `[Bikes] handling: bike (steer = lean, turn from the lean) on the player's vehicle`, once; `[Bikes] handling: the game's own handling again (...)` when it stands aside.
 
 - `Bikes x.y.z loaded: 13 hooks (11 without the handling hooks); the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
 - `[Bikes] model SportBike loaded (bike): N triangles, wheelbase 1.41 m` (the same for BMW_S1000RR, and
@@ -182,7 +172,7 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 - `[Bikes] Sport Bike body: N car meshes to hide, bike at real size (...)` and
   `[Bikes] Sport Bike built on the Saber (id rogue.bikes.sportbike, stats ...)`; for the M2 first
   `[Bikes] M2 G87: stat range 130-200 km/h; speed factor 1.0000 (the game's GetMaxSpeed), the range tops out at 200.0 so top
-  speed x1.4667 -> 200 mph / 322 km/h on the HUD (target 200 mph)`, then `stats 1.000/1.00/1.00/1.00`, and:
+  speed xK -> 180 mph / 290 km/h on the HUD (target 180 mph)`, then `stats 1.000/1.00/1.00/1.00`, and:
   `[Bikes] M2 G87 body: N car meshes to hide, car model at scale S (wheelbase G vs M); steering wheel turns; on the car's
   layer L` (`part of the body (static)` with a model from before 0.2.3).
 - Only if the game's transparent shader is missing: `[Bikes] no transparent shader: BMW_M2_G87 glass glass drawn opaque`.

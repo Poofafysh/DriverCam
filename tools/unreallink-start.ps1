@@ -85,6 +85,14 @@ if ($Setup) {
         Copy-Item -Force $f.FullName $to
     }
     Write-Output "code stub -> $(Join-Path $projDir 'Source')"
+    # 2b. helper scripts (build_anim_test.py etc.), if any
+    $scriptSrc = Join-Path $src "Project\Scripts"
+    if (Test-Path $scriptSrc) {
+        $scriptDst = Join-Path $projDir "Scripts"
+        New-Item -ItemType Directory -Force $scriptDst | Out-Null
+        foreach ($f in @(Get-ChildItem $scriptSrc -File)) { Copy-Item -Force $f.FullName (Join-Path $scriptDst $f.Name) }
+        Write-Output "scripts -> $scriptDst"
+    }
     # 3. DefaultEngine.ini block
     $ini = Join-Path $projDir "Config\DefaultEngine.ini"
     $block = [IO.File]::ReadAllText((Join-Path $src "Project\Config\DefaultEngine.RogueLink.ini"), $utf8)

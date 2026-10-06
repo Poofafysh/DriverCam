@@ -59,6 +59,7 @@ namespace CurbFeel
         private void Scan(Transform player)
         {
             var caps = UnityEngine.Object.FindObjectsByType<CapsuleCollider>(FindObjectsSortMode.None);
+            _bikesRoot.Clear();
 
             for (int i = 0; i < caps.Length; i++)
             {
@@ -72,6 +73,10 @@ namespace CurbFeel
                 if (root == null) continue;
                 if (!Settings.HullAllVehicles.Value && (player == null || root != player)) continue;
 
+                // cooperates with Bikes: a Bikes motorcycle squeezes this car's colliders to its own size (Bikes' Hitbox) and
+                // puts them back when the rider gets off; trimming (or recording a squeezed size as stock) would fight it.
+                // Not recorded, so the capsule is trimmed on a later scan once the vehicle is a car again.
+                if (IsBikesVehicle(root)) continue;
                 float target = TargetHalfWidth(root);
                 _original[id] = new CapsuleState { Collider = cap, Radius = cap.radius, Height = cap.height, Center = cap.center };
                 if (Settings.HullEnabled.Value && Trim(cap, root, target)) Stats.HullCapsules++;
@@ -83,6 +88,20 @@ namespace CurbFeel
         }
 
         private readonly HashSet<int> _roots = new();
+        private readonly Dictionary<int, bool> _bikesRoot = new();   // per scan: does this vehicle carry a Bikes motorcycle body?
+
+        /// <summary>The vehicle carries a Bikes motorcycle (a "Bikes.Lean" node under it), checked once per vehicle per scan.</summary>
+        private bool IsBikesVehicle(Transform root)
+        {
+            int id = root.GetInstanceID();
+            if (_bikesRoot.TryGetValue(id, out bool b)) return b;
+            b = false;
+            var all = root.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < all.Length && !b; i++)
+                if (all[i] != null && all[i].gameObject.name == "Bikes.Lean") b = true;
+            _bikesRoot[id] = b;
+            return b;
+        }
 
         public void Revert()
         {

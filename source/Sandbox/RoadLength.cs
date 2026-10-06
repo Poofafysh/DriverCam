@@ -61,8 +61,10 @@ namespace Sandbox
             try { WideRoads.Apply(Plugin.TilePickNow()); } catch (Exception e) { Plugin.Log.LogWarning($"[Sandbox] maps: {e.Message}"); }
             try
             {
-                Restore();   // never stack on a value a failed call left behind
+                Restore();   // never stack on a value a failed call left behind (also puts a road-shape swap back)
                 if (currentRace == null || !Plugin.TilePickNow()) return;   // also the first race of a run, picked in the main menu
+                try { RoadShape.Begin(WideRoads.Container()); }   // the preset's tiles for this pick only (AfterTiles puts them back)
+                catch (Exception e) { RoadShape.End(); Plugin.Log.LogWarning($"[Sandbox] road shape: {e.Message} (the game's mix this race)"); }
                 float mult = Multiplayer.Length(Plugin.LengthMultiplier.Value);   // the multiplayer run's (host's) when one is on
                 if (float.IsNaN(mult)) mult = 1f;
                 mult = Math.Max(1f, Math.Min(5f, mult));
@@ -79,6 +81,7 @@ namespace Sandbox
 
         private static void AfterTiles(RunRaceSO currentRace, Il2CppSystem.Collections.Generic.List<RoadTileSO> __result)
         {
+            RoadShape.End();
             if (!_pending) return;
             float target = 0f;
             try { target = _race == null ? 0f : _race.desiredDurationSeconds; } catch { }
@@ -116,6 +119,7 @@ namespace Sandbox
         /// <summary>Puts the race asset's own duration back (postfix, next frame from the Runner, plugin shutdown).</summary>
         internal static void Restore()
         {
+            RoadShape.End();
             if (!_pending) return;
             _pending = false;
             try { if (_race != null) _race.desiredDurationSeconds = _original; }

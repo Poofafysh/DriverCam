@@ -100,10 +100,16 @@ mirrors were drawn around the bike, with the eye at the car's seat. Now, with `B
   its `Driver_Helmet` node under `Bikes.Lean`, looked up at most once a second while missing). So the camera follows the
   tuck, the hang-off and the head. Without Driver's rider, it's an estimate in the bike frame: the seat point from Bikes'
   AppDomain data `rogue.bikes.rider.<Key>` (else the S1000RR's 0.82 m seat), plus 0.58 m up and 0.45 m forward for a
-  sport-bike tuck. `Bike.EyeUp` and `Bike.EyeForward` (metres, default 0) shift it.
+  sport-bike tuck. `Bike.EyeUp` and `Bike.EyeForward` (metres, default 0) shift it. 0.11.5: whichever source, the eye
+  is then kept at least 0.55 m behind and 0.30 m above Bikes' `Bikes.Bars` along the bike's own axes (a tucked
+  rider's helmet sits almost over the bars, which hid them below the view), and a motorcycle looks 8 degrees further
+  down than `Driver.Pitch`, so the bars, tank and clocks are in view.
 - **The horizon:** `Bike.CameraLean` (0-1, default 0) is how much the view rolls with the bike's lean, like RIDE's
   level-horizon option: 0 keeps the horizon level, 0.5 rolls by half the lean, 1 locks the view to the bike. Pitch,
   look-into-turn, HeadFollowsShake and HeadLook work as in a car; the car's seat offsets and Edit mode don't apply.
+  0.11.5: while on a Bikes vehicle (bike or M2) the car-setup file is never written (`CarPresets.Save`): the car being
+  "driven" is the hidden donor (the Saber), so seat / eye / part edits made there went into the Saber's own setup and
+  broke its cockpit view.
 - **Leaving the bike** (car change, death, restart, level end, F6 off, `Bike.DriverView` off): the next car body
   goes through the normal car path, which builds its cockpit as before. A car's driver view is unchanged.
 - **Cost:** on a bike, less than in a car (no cockpit, gauges or mirror cameras). Per frame: the head bone's pose and

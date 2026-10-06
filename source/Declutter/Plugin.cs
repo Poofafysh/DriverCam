@@ -16,7 +16,7 @@ namespace Declutter
     /// - it's more than FarDistance (120 m) from the road.
     /// "From the road" is the gap between the renderer's bounds and the tile's road path (its PathWaypoints).
     /// Never hidden: anything on the Street / Guardrail / weather layers, and road, sidewalk, curb, barrier, wall, tunnel
-    /// and bridge parts. Switched off, it shows everything again. It stands aside in Sandbox races (Sandbox strips those
+    /// and bridge parts. Switched off, it shows everything again. The scenery rules stand aside in Sandbox races (Sandbox strips those
     /// maps itself).
     /// </summary>
     [BepInPlugin(Guid, "Declutter", Version)]

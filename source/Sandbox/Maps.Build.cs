@@ -857,11 +857,20 @@ namespace Sandbox
             return _mats;
         }
 
-        /// <summary>A URP Simple Lit material; glow &gt; 0 = emission of that strength (lane lines readable at night, lamp heads lit).</summary>
+        /// <summary>A matte URP Simple Lit material; glow &gt; 0 = emission of that strength (lane lines readable at night, lamp heads lit).</summary>
         private static Material Mat(Shader sh, string name, float r, float g, float b, float glow)
         {
             var m = new Material(sh) { name = "Sandbox.WideRoad." + name, hideFlags = HideFlags.DontUnloadUnusedAsset };
             m.SetColor("_BaseColor", new Color(r, g, b, 1f));
+            // matte: Simple Lit's defaults are a grey specular colour and smoothness 0.5, which made the road look wet and
+            // mirror-like; no highlights, no environment reflections (Lit fallback: no metal either)
+            if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", 0f);
+            if (m.HasProperty("_SpecColor")) m.SetColor("_SpecColor", new Color(0f, 0f, 0f, 1f));
+            if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", 0f);
+            if (m.HasProperty("_SpecularHighlights")) m.SetFloat("_SpecularHighlights", 0f);
+            if (m.HasProperty("_EnvironmentReflections")) m.SetFloat("_EnvironmentReflections", 0f);
+            m.DisableKeyword("_SPECULAR_COLOR");
+            m.DisableKeyword("_SPECGLOSSMAP");
             if (glow > 0f)
             {
                 m.EnableKeyword("_EMISSION");

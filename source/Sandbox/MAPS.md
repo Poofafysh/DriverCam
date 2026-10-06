@@ -83,8 +83,8 @@ the runtime build replaced it because it covers all 54 tiles, needs no tile-choi
 ## Other plugins
 
 - **RacingLine** and **TrafficDensity** read the live road width and lane list: they follow.
-- **Police daredevils** follow RacingLine's line. **Police patrols** use a fixed `DriveLimit = 7.5` (Police's
-  `Runner.cs`): on a 30 m road they keep to the middle lanes until Police reads `CurrentRoadWidth / 2 - 2.5`.
+- **Police daredevils** follow RacingLine's line. **Police patrols** read the live road width since Police 0.8.2
+  (`RunWorldManager.CurrentRoadWidth`: 12.5 m either side on a 30 m road), so they use every lane.
 - **CurbFeel**: `WallShifter` only touches `*Guardrail*` colliders, so `fx_WideWall` is safe; its `CurbFeel_Ramp`
   colliders (built at a tile's first scan, +1 s, +4 s) under the old road collider are switched off by the near-car
   check within 0.25 s on the camera's tile and the next, elsewhere by the round-robin re-check. Optional (CurbFeel's file): skip a tile
@@ -109,6 +109,7 @@ blender -b --factory-startup --python build_tile.py -- straight300.json <out dir
 ## Clean content
 
 The runtime road ships nothing from the game: it is built in the player's own game from the tiles' waypoints at run
-time. Only the generator scripts (`build_tile.py`, `extract_waypoints.py`) are in the repo. The `.wtl` meshes they make
-follow stock tile paths read from the export, so they stay local (`Assets/maps/.gitignore`), like the waypoint JSON.
+time. The generator scripts of the superseded carrier-tile design (`build_tile.py`, `extract_waypoints.py`) and the
+`.wtl` meshes they make stay local (`source/Sandbox/Assets/` is gitignored): the meshes follow stock tile paths read from
+the export, like the waypoint JSON.
 No game meshes, textures, paths or scene data are committed.

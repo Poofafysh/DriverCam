@@ -149,7 +149,7 @@ namespace Sandbox
 
         // ------------------------------------------------------------------ width and lanes
 
-        private static RoadTileContainerSO Container()
+        internal static RoadTileContainerSO Container()
         {
             if (_container != null) return _container;
             try

@@ -17,11 +17,25 @@ namespace Declutter
         private static readonly List<Renderer> s_hidden = new List<Renderer>();
         private static readonly HashSet<int> s_ids = new HashSet<int>();
         private static float s_next;
-        private static bool s_logged;
+        private static bool s_logged, s_broken;   // s_broken: a game change broke the lookup; only this feature stops
 
         internal static int Hidden => s_hidden.Count;
 
+        /// <summary>Its own error handling: a failure switches off only the damage-ghost hiding (logged once), never
+        /// Declutter's scenery rules.</summary>
         internal static void Tick(float now)
+        {
+            if (s_broken) return;
+            try { TickInner(now); }
+            catch (Exception e)
+            {
+                s_broken = true;
+                try { Restore("errors"); } catch { /* car gone */ }
+                Plugin.Log.LogWarning($"[Declutter] damage ghost hiding switched off for this session (the game's glitch effect changed?): {e.Message}");
+            }
+        }
+
+        private static void TickInner(float now)
         {
             if (!(Plugin.Enabled.Value && Plugin.HideDamageGhost.Value)) { if (s_hidden.Count > 0) Restore("switched off"); return; }
             if (Time.timeScale <= 0f || now < s_next) return;

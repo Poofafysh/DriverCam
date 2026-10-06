@@ -41,6 +41,7 @@ namespace Bikes
         private static bool s_logged;
         private static readonly List<Collider> s_detached = new List<Collider>();   // barrier capsules the game moved off the car
         private static float s_nextDetached;
+        private static bool s_glitchBroken, s_detachedBroken;   // a game change broke that lookup: only that part stops (not Bikes)
 
         internal static int Squeezed => s_saved.Count;
         /// <summary>Anything to put back (cheap: checked every frame off the bike).</summary>
@@ -51,7 +52,11 @@ namespace Bikes
         {
             if (root == null) return;
             if (root.Pointer != s_root) { Restore("vehicle changed"); s_root = root.Pointer; }
-            HideGlitch(root);
+            if (!s_glitchBroken)
+            {
+                try { HideGlitch(root); }
+                catch (Exception e) { s_glitchBroken = true; Plugin.Log.LogWarning($"[Bikes] glitch-copy hiding switched off for this session: {e.Message}"); }
+            }
             if (!bike) return;
             if (s_rb == null && rb != null)
             {
@@ -60,7 +65,12 @@ namespace Bikes
             float cz = 0f;
             if (spinF != null && spinR != null) cz = (root.InverseTransformPoint(spinF.position).z + root.InverseTransformPoint(spinR.position).z) * 0.5f;
             float now = Time.unscaledTime;
-            if (now >= s_nextDetached) { s_nextDetached = now + 5f; FindDetached(root); }   // a scene scan: every 5 s at most
+            if (now >= s_nextDetached && !s_detachedBroken)
+            {
+                s_nextDetached = now + 5f;   // a scene scan: every 5 s at most
+                try { FindDetached(root); }
+                catch (Exception e) { s_detachedBroken = true; s_detached.Clear(); Plugin.Log.LogWarning($"[Bikes] detached barrier capsule lookup switched off for this session: {e.Message}"); }
+            }
             var cols = new List<Collider>(root.GetComponentsInChildren<Collider>(true));
             cols.AddRange(s_detached);
             int changed = 0;

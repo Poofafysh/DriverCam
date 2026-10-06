@@ -1,6 +1,6 @@
 # Sandbox
 
-Current version: 0.2.0
+Current version: 0.3.0
 
 A separate run mode for trying builds: a **SANDBOX** button on the main menu (right under Singleplayer) starts a run
 in which every card is free and you can have 20 mods. Sandbox runs stay off your records (except the known gaps under Risks and limits).
@@ -26,6 +26,11 @@ as usual. While that run lasts:
   When you hold more than 10 mods, the Current Mods row is laid out in 2 rows.
 - **Road length** x2 by default, x1 to x5 (`LengthMultiplier`): each race asks the game's road generator for that many
   times its usual length. The race timer follows the real road length by itself; the score target does not (longer = easier).
+- **Road shape** (`RoadShape`, 0.3.0): Mixed (the game's own mix, default), Straight (straight-ahead tiles only), Gentle
+  (the less curvy half of the road tiles), Curvy (the curvier half) or Twisty (the curviest quarter), by each tile's
+  curvature rating from the game. Only the tile list the game picks from changes, for that one pick; the game's own
+  rules (difficulty, no repeats) still apply. Curvy sets always keep a left and a right corner. The host's choice shapes
+  a multiplayer road (clients load the host's tiles).
 - **Sandbox maps**: every sandbox race is on a **6-lane, 30 m road** (the game's are 4 lanes, 20 m) with all buildings
   and props removed; only the road and what is built around it stays (curbs, sidewalks, guardrails, street lights). See below.
 - A **SANDBOX** tag top-left on the HUD; on the results screens it reads **"Not uploaded (sandbox)"**.
@@ -62,7 +67,7 @@ timer, Racing Line and Police keep working on it; only the width does. Together 
   loading screen), the tiles' waypoints are joined into one centre line, resampled every 2.5 m, with max(40 m, 1.5 x
   width) of straight road added before the start and after the end (if the waypoint line is more than 0.5 m off the
   race spline, the spline is sampled instead). Every tile is then built at once, under `fx_WideRoad` in its Road Network
-  (it unloads with the tile): one mesh with 9 materials (asphalt; white lane dashes 3 m on / 9 m off; a double yellow
+  (it unloads with the tile): one mesh with 9 matte materials (0.3.0: no gloss or reflections; asphalt; white lane dashes 3 m on / 9 m off; a double yellow
   centre line when the lane count is even; solid edge lines; 0.15 m curbs; 4 m sidewalks; a ground band out to 80 m that
   slopes gently down; a **guardrail** 0.45-0.8 m high with posts every 5 m on the wall line; **street lights**: a pole every
   40 m, alternating sides, 8 m tall with an arm and a lit lamp head over the road), a Street-layer collider (flat, with a
@@ -119,6 +124,7 @@ stripped down to the road and what is built around it:
 - **Lights** (`HideLights`): lights under "Biomes" are switched off except street lights (a parent named light / lamp /
   pole, or the light's own object named lamp / pole / streetlight) and tunnel / bridge lights.
 - No stand-in blocks any more (0.1.x put a grey block where each building stood); a leftover `fx_SandboxBlocks` is removed.
+  The `[Scenery] SimpleBlocks` setting went with them in 0.2.0: the key can be deleted from `rogue.sandbox.cfg`.
 - Work is spread over frames (`BudgetMs`), one tile opened per poll; renderers, colliders and lights all come back when the
   sandbox race ends, `StripBuildings` is switched off, after repeated errors, or when the maps take a tile over.
 
@@ -184,6 +190,7 @@ Not patched on purpose: `ACardSO.IncreaseCardAcquiredStat` (see Risks and limits
 | `[General] Enabled` | true | Adds the SANDBOX button to the main menu (takes effect on the next main menu). |
 | `[Mods] ExtraSlots` | 10 | Mod slots added in sandbox runs (0-15; 10 = 20 slots). Applies at once. |
 | `[Mods] AllCardsPicker` | true | Show the game's all-cards picker in the shop during sandbox runs. |
+| `[Run] RoadShape` | Mixed | Mixed / Straight / Gentle / Curvy / Twisty: which road tiles a sandbox race picks from (next race; the host's in multiplayer). |
 | `[Run] LengthMultiplier` | 2 | Road length of each sandbox race, x1-x5 (next race; the host's in multiplayer). A config from 0.1.x still at x1 is moved to x2 once. |
 | `[Maps] WideRoads` | true | Sandbox races on the sandbox map (wide road, scenery hidden); off = the game's own road, where Scenery strips the buildings (next race; the host's in multiplayer). |
 | `[Maps] Width` | 30 | Width of the sandbox road, 20-40 m (next race; the host's in multiplayer). |

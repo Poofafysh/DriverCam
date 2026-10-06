@@ -34,7 +34,7 @@ namespace Sandbox
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.sandbox";
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, AllCardsPicker;
@@ -81,6 +81,7 @@ namespace Sandbox
                 "Written by the plugin: which default changes were applied to this config. Not a setting.",
                 null, HubLink.Meta(hidden: true)));
             WideRoads.Bind(Config);
+            RoadShape.Bind(Config);
             MigrateDefaults();
 
             var harmony = new Harmony(Guid);

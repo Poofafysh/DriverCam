@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.3.0** (real handling: bikes turn by leaning, RIDE 4 / 5 style, and the M2 has tyre grip, so speed carried into a corner matters; the bike rocking up and down is gone; bike tyre marks and smoke; 0.2.6: bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.3.1** (the M2 turns: grip 1.45-1.8 g, cornering before throttle, speed scrubs in a corner taken too fast; 0.3.0: real handling: bikes turn by leaning, RIDE 4 / 5 style, and the M2 has tyre grip, so speed carried into a corner matters; the bike rocking up and down is gone; bike tyre marks and smoke; 0.2.6: bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -89,7 +89,10 @@ and the velocity (the game's speed logic, boosts, collisions, gravity, downforce
   braking and cornering), and never past `Look.MaxLean`. At walking pace it steers by the bars instead. The visible
   lean is this lean, a smooth physics state (0.2.6 measured it from the game's turning frame by frame, which rocked the
   bike and the first-person camera up and down).
-- **The M2 G87:** tyre grip of about 1.1 g sideways and 1.15 g braking, shared in one friction circle. The steering
+- **The M2 G87:** sporty tyre grip of about 1.45 g, rising with speed like downforce (to 1.8 g), 1.2 g braking.
+  Cornering comes first: on the throttle the engine only gets the grip the corner leaves (0.3.0 gave it to the
+  throttle, and the car couldn't turn). Asking for more turn than the grip holds scrubs speed at the front tyres, as
+  if you lifted, so the car slows into the corner and the line tightens. Braking still takes grip from cornering. The steering
   turns the front wheels (less lock at speed) and the turn follows the wheelbase until the grip runs out: past that it
   **understeers**, so speed carried into a corner widens the line and you have to brake before it. Acceleration is
   traction-limited at low speed, then power over speed, minus drag (boosts add power). On the throttle at low and

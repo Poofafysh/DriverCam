@@ -53,7 +53,7 @@ namespace Bikes
         // hooks run for every car each physics step and compare this pointer before touching anything else
         private static IntPtr s_ptr, s_vehPtr, s_vm;
         private static Rigidbody s_rb;
-        private static bool s_bike, s_init, s_swapped, s_off, s_logged;
+        private static bool s_bike, s_init, s_swapped, s_off, s_loggedBike, s_loggedCar;
         private static float s_checkedAt;
         private static float s_savedTurn;
         private static float s_psi, s_chi, s_v, s_phi, s_r;
@@ -250,7 +250,7 @@ namespace Bikes
             if (!s_init)
             {
                 s_init = true; s_psi = psiAct; s_chi = chiMeas; s_v = vMeas; s_phi = 0f; s_r = 0f;
-                if (!s_logged) { s_logged = true; Plugin.Log.LogInfo($"[Bikes] handling: {(s_bike ? "bike (steer = lean, turn from the lean)" : "car (tyre grip, understeer, slip)")} on the player's vehicle"); }
+                if (s_bike ? !s_loggedBike : !s_loggedCar) { if (s_bike) s_loggedBike = true; else s_loggedCar = true; Plugin.Log.LogInfo($"[Bikes] handling: {(s_bike ? "bike (steer = lean, turn from the lean)" : "car (tyre grip, understeer, slip)")} on the player's vehicle"); }
             }
             // follow reality: the game's path-angle limit or a collision turned the body; an impact slowed or pushed it
             if (Math.Abs(Wrap(psiAct - s_psi)) > 0.03f) s_psi = psiAct;
@@ -277,13 +277,40 @@ namespace Bikes
 
             // longitudinal: traction, then power over speed, minus drag; braking by grip
             bool boost = mult > 1.05f;
-            float mu = s_bike ? 1.25f : 1.1f, muBrake = s_bike ? 1.1f : 1.15f;
+            // 0.3.1 car: sporty-tyre grip that rises with speed (downforce); 1.1 g left it unable to make the game's corners
+            float mu = s_bike ? 1.25f : Math.Min(1.8f, 1.45f + 0.004f * s_v), muBrake = s_bike ? 1.1f : 1.2f;
             float launch = s_bike ? 9.5f : 7.5f, power = (s_bike ? 420f : 210f) * (boost ? 1.8f : 1f), drag = s_bike ? 0.00022f : 0.00026f;
             float aUp = Math.Min(launch, power / Math.Max(s_v, 4f)) - drag * s_v * s_v;
             float aDown = muBrake * G;
             float want = demand - s_v;
-            float aLong = want >= 0f ? Math.Min(want / dt, Math.Max(0f, aUp)) : Math.Max(want / dt, -aDown);
-            float latAvail = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - aLong * aLong));
+            float steerCar = 0f, rCmdCar = 0f;
+            if (!s_bike)
+            {
+                const float wb = 2.75f;
+                steerCar = steer * 0.6f / (1f + s_v / 30f);   // less lock at speed (0.3.1: falls off half as fast)
+                rCmdCar = s_v * (float)Math.Tan(steerCar) / wb;
+            }
+            float aLong, latAvail;
+            if (want < 0f)
+            {
+                // braking: takes grip from cornering (trail braking)
+                aLong = Math.Max(want / dt, -aDown);
+                latAvail = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - aLong * aLong));
+            }
+            else if (!s_bike)
+            {
+                // 0.3.1 car on the throttle: cornering first, the throttle only gets the grip the corner leaves (traction
+                // control); 0.3.0 let the game's ever-rising speed demand eat the grip, so the car couldn't turn
+                float latUse = Math.Min(Math.Abs(s_v * rCmdCar), mu * G);
+                float longLeft = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - latUse * latUse));
+                aLong = Math.Min(want / dt, Math.Min(Math.Max(0f, aUp), longLeft));
+                latAvail = mu * G;
+            }
+            else
+            {
+                aLong = Math.Min(want / dt, Math.Max(0f, aUp));
+                latAvail = (float)Math.Sqrt(Math.Max(0f, mu * mu * G * G - aLong * aLong));
+            }
             s_v = Math.Max(0f, s_v + aLong * dt);
             Braking = aLong < -0.35f * G;
             float spd = Math.Max(s_v, 0.5f);
@@ -317,16 +344,22 @@ namespace Bikes
             else
             {
                 // bicycle model with a grip limit: understeer past the limit, the course follows the heading at the limit
-                const float wheelbase = 2.75f;
-                float lockMax = 0.6f / (1f + s_v / 18f);
-                float delta = steer * lockMax;
-                float rCmd = s_v * (float)Math.Tan(delta) / wheelbase;
+                float delta = steerCar;
+                float rCmd = rCmdCar;
+                // asking for more turn than the grip holds: the front tyres scrub (like lifting off), so the car slows
+                // into the corner and the line tightens instead of ploughing on at full speed
+                if (want >= 0f && Math.Abs(rCmd) > rGrip && Math.Abs(rCmd) > 1e-3f)   // not on top of your own braking
+                {
+                    float excess = Clamp01((Math.Abs(rCmd) - rGrip) / Math.Abs(rCmd));
+                    s_v = Math.Max(0f, s_v - excess * 0.7f * G * dt);
+                    spd = Math.Max(s_v, 0.5f); rGrip = latAvail / spd;
+                }
                 float throttle = want > 0.5f ? 1f : 0f;
                 float over = throttle * Clamp01(1f - s_v / 40f) * 0.35f;   // power oversteer at low and middle speed
                 float beta = Wrap(s_psi - s_chi);
                 float rT = Clamp(rCmd, -rGrip * (1f + over), rGrip * (1f + over));
                 rT -= beta * (Math.Sign(beta) == Math.Sign(rCmd) ? 0.6f : 1.8f);   // the tyres pull the car straight again
-                s_r += (rT - s_r) * (1f - (float)Math.Exp(-dt / 0.12f));
+                s_r += (rT - s_r) * (1f - (float)Math.Exp(-dt / 0.07f));
                 s_psi = Wrap(s_psi + s_r * dt);
                 s_chi = Approach(s_chi, s_psi, rGrip * dt);
                 beta = Wrap(s_psi - s_chi);

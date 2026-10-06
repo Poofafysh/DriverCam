@@ -26,7 +26,7 @@ namespace Bikes
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.bikes";
-        public const string Version = "0.2.6";
+        public const string Version = "0.3.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, RodeBikeThisRun;
@@ -45,6 +45,7 @@ namespace Bikes
             LeanScale = Config.Bind("Look", "LeanScale", 1f, new ConfigDescription(
                 "Lean strength (1 = the physical lean for the corner's speed and turn rate).", new AcceptableValueRange<float>(0f, 2f)));
 
+            Handling.Bind(Config);
             RodeBikeThisRun = Config.Bind("State", "RodeBikeThisRun", false,
                 "Written by the plugin: true while the current run has used a bike (its leaderboard uploads are skipped, also after a resume). Not a setting.");
 
@@ -55,6 +56,8 @@ namespace Bikes
                 Log.LogError($"[Bikes] hooks failed to install, so the bikes stay out of the garage (they would reach saves or leaderboards otherwise): {e.Message}");
                 return;
             }
+            try { hooks += Handling.Install(new Harmony(Guid + ".handling")); }
+            catch (Exception e) { Log.LogWarning($"[Bikes] handling hooks not installed (the game's own handling): {e.Message}"); }
             // rider sockets for the Driver plugin (bike frame, metres): AppDomain "rogue.bikes.rider.<Key>" = float[11]
             // { seat xyz, right grip xyz, right peg xyz, hip height above the seat, knee half-width }
             foreach (var b in Garage.All) if (b.Rider != null) AppDomain.CurrentDomain.SetData("rogue.bikes.rider." + b.Key, (float[])b.Rider.Clone());

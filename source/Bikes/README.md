@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: new vehicles in the garage, after the game's cars. Two sport motorcycles,
 the **BMW S1000RR** and the blue **Sport Bike**, and a car, the **M2 G87** widebody (0.2.0).
 
-Current version: **0.2.6** (bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
+Current version: **0.3.0** (real handling: bikes turn by leaning, RIDE 4 / 5 style, and the M2 has tyre grip, so speed carried into a corner matters; the bike rocking up and down is gone; bike tyre marks and smoke; 0.2.6: bike-sized hitbox: the donor car's colliders squeezed to 0.8 x 2.2 m while you ride; bikes really lean now (the lean follows the heading's change, the game's angular velocity stays near 0); the game's glitch copy of the donor car hidden on Bikes vehicles; 0.2.5: the rider sits 15 cm further back on both bikes: seat and pegs moved, grips unchanged; 0.2.4: the M2 tops out at 200 mph on the HUD with every other stat at the maximum; 0.2.3: see-through glass and a cabin for the M2, with a clean drawn cluster face and navigation screen and cabin sockets for DriverCam's mirrors and cluster readout; bikes phase 1: selectable, look right, spin their wheels and lean into corners;
 the rider comes from the Driver plugin; bike handling and a narrow body come later; see the design doc "Sport Bikes:
 Lean, Grip and Braking")
 
@@ -77,6 +77,41 @@ Lean, Grip and Braking")
     pixel along the car's speed except a mask drawn from the vehicle layer; on the Default layer the M2's cabin, screen and
     wheel were smeared diagonally across DriverCam's driver view.
 
+## Handling (0.3.0, `Handling.cs`)
+
+The game's own handling is arcade: each physics step it turns the car by steer x turn speed and sets the velocity to
+its target speed along a direction that follows the nose. For the player's Bikes vehicle a model takes over the turn
+and the velocity (the game's speed logic, boosts, collisions, gravity, downforce and the HUD keep working through it):
+
+- **Bikes (after RIDE 4 / 5):** the stick asks for a **lean angle**, the lean builds at a lean rate that is quick at
+  town speeds and slow at 250 km/h, and the **lean makes the turn** (yaw rate = g x tan(lean) / speed, a coordinated
+  turn). How far it can lean is what the tyres can hold: brake hard and it can't lean as far (one grip budget for
+  braking and cornering), and never past `Look.MaxLean`. At walking pace it steers by the bars instead. The visible
+  lean is this lean, a smooth physics state (0.2.6 measured it from the game's turning frame by frame, which rocked the
+  bike and the first-person camera up and down).
+- **The M2 G87:** tyre grip of about 1.1 g sideways and 1.15 g braking, shared in one friction circle. The steering
+  turns the front wheels (less lock at speed) and the turn follows the wheelbase until the grip runs out: past that it
+  **understeers**, so speed carried into a corner widens the line and you have to brake before it. Acceleration is
+  traction-limited at low speed, then power over speed, minus drag (boosts add power). On the throttle at low and
+  middle speed the rear can step out (power oversteer); the car slides when its nose outruns its course, and a slide
+  scrubs speed.
+- **Speed:** the game's target speed (with its boosts and slowdowns) is your throttle / brake; the model follows it
+  within real acceleration and braking, and writes the real speed back, so the HUD, the engine sound and the game's
+  logic see it.
+- **When the game's handling is used instead:** in multiplayer (the handling is single-player only), while reversing (the Reverse plugin), in the air (the game's own turn and
+  velocity; the model then picks up from what the body does on landing), off a Bikes vehicle,
+  with `Handling.Bikes` / `Handling.Car` off, or for the session after 3 errors. A collision or the game's own
+  path-angle limit resets the model to what the body really does.
+
+## Bike effects (0.3.0, `BikeFx.cs`)
+
+The donor car's body brings the game's car effects, placed for four wheels: skid marks at each wheel, drift / brake /
+launch smoke, wall-ride sparks. On a bike they are hidden and replaced: one tyre mark under the front tyre (12 cm) and
+one under the rear (19 cm), and smoke from the rear tyre. They follow the handling model: the front marks when you brake
+at the grip limit, the rear marks and smoke in a rear slide, a burnout or very hard braking. The wall-ride sparks move
+in to the pegs. Log: `[Bikes] bike effects: N car effect(s) hidden; tyre marks front / rear, rear smoke yes, 2 wall-ride
+spark(s) moved to the pegs`.
+
 ## For the rider (Driver plugin)
 
 - **Stable names:** the bike body copy is named `Bikes.<Key>_Body` (Key = `S1000RR` / `SportBike`). Under the car's
@@ -127,13 +162,18 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
 |---|---|---|
 | `General.Enabled` | true | The bikes are in the garage (single-player). Off = they leave the garage at once |
 | `General.DonorCar` | Saber | The car each bike drives on underneath (speed class, handling, parts, trait). Applies at the next game start |
-| `Look.MaxLean` | 50 | Largest lean in corners, degrees (0-65) |
+| `Handling.Bikes` | true | Bikes turn by leaning (RIDE 4 / 5 style); off = the game's car handling |
+| `Handling.Car` | true | The M2 handles like a real car (tyre grip, understeer, slip); off = the game's handling |
+| `Look.MaxLean` | 50 | Largest lean in corners, degrees (0-65); with the handling on, also the most the bike leans to turn |
 | `Look.LeanScale` | 1 | Lean strength (1 = physical lean) |
 | `State.RodeBikeThisRun` | false | Written by the plugin: the current run used a bike (leaderboard uploads skipped). Not a setting |
 
 ## Log (`/game-log Bikes`)
 
-- `Bikes x.y.z loaded: 11 hooks; the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
+- `[Bikes] handling: bike (steer = lean, turn from the lean) on the player's vehicle` (or `car (tyre grip, understeer,
+  slip)`), once; `[Bikes] handling: the game's own handling again (...)` when it stands aside.
+
+- `Bikes x.y.z loaded: 13 hooks (11 without the handling hooks); the bikes are built when the garage opens (donor car Saber; single-player, off the leaderboards).`
 - `[Bikes] model SportBike loaded (bike): N triangles, wheelbase 1.41 m` (the same for BMW_S1000RR, and
   `loaded (car)` for BMW_M2_G87).
 - `[Bikes] Sport Bike body: N car meshes to hide, bike at real size (...)` and
@@ -157,11 +197,11 @@ How we know the save clean-up works (IDA, GameAssembly.dll):
   - `[Bikes] error (n/5)`, then `[Bikes] switched off for this session after repeated errors (the bikes leave the
     garage)`: the error breaker.
 
-## Limits (phase 1)
+## Limits
 
-- **Handling is the donor car's.** No lean steering, stoppies or wheelies yet (design doc phases 2-3).
-- **The hit box is car-sized**, so you can't filter through traffic yet.
-- **No rider yet.** It will come from the Driver plugin with a sport-bike pose.
+- **No stoppies, wheelies or crashes (falling off) yet**; the bike can't lowside or highside: past the grip it runs wide.
+- **The handling numbers are first guesses** (grip, lean rate, power): not tuned in game yet.
+- The donor car's own stats still set the target speed it chases and its boosts.
 - **Not tested in game yet.** Not tested:
   - how the bike sits on each donor car;
   - the garage turntable;

@@ -19,13 +19,14 @@ namespace EngineAudio
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.engineaudio";
-        public const string Version = "0.3.0";
+        public const string Version = "0.4.0";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, Limiter, TrafficEnabled, Overlay, DriftFlare, TiresEnabled;
         internal static ConfigEntry<Key> ToggleKey;
         internal static ConfigEntry<float> IdleRpm, RedlineRpm, Volume, TopSpeedRpm, TiresVolume, TiresPitch, PitchLow, PitchHigh, PopMinRpm;
-        internal static ConfigEntry<bool> Pops;
+        internal static ConfigEntry<bool> Pops, MatchPitch;
+        internal static ConfigEntry<float> Tone;
 
         public override void Load()
         {
@@ -44,6 +45,10 @@ namespace EngineAudio
             PitchHigh = Config.Bind("Engine", "PitchAtRedline", 1.3f, new ConfigDescription(
                 "Engine pitch at the redline (and so at top speed, where the engine sits near the redline). Higher = a higher scream.",
                 new AcceptableValueRange<float>(0.8f, 2f)));
+            MatchPitch = Config.Bind("Engine", "MatchPitch", true,
+                "0.4.0: play each recording at the moment whose measured pitch matches the RPM, and pitch the rest exactly, so the note always follows the RPM (gears 2-4 of the game's recordings barely change pitch on their own). Off = the old straight mapping with PitchAtIdle / PitchAtRedline.");
+            Tone = Config.Bind("Engine", "Tone", 1f, new ConfigDescription(
+                "With MatchPitch: the whole engine note up or down (1 = as measured; 0.85 deeper, 1.15 higher).", new AcceptableValueRange<float>(0.7f, 1.4f)));
             Pops = Config.Bind("Exhaust", "Pops", true, "Exhaust pops and crackles when you lift off the gas at high RPM (synthesized: a first pop 70-150 ms after the lift, then up to 4 crackles while the revs fall; never on throttle).");
             PopMinRpm = Config.Bind("Exhaust", "PopMinRpm", 0.6f, new ConfigDescription(
                 "Pops only when you lift off above this share of the redline (0.3-0.95).", new AcceptableValueRange<float>(0.3f, 0.95f)));

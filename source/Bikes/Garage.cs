@@ -87,6 +87,15 @@ namespace Bikes
             return false;
         }
 
+        /// <summary>The Bikes entry for this vehicle data (bike or car model), else null.</summary>
+        internal static Bike Of(Vehicle_SO so)
+        {
+            if (so == null) return null;
+            IntPtr p = so.Pointer;
+            foreach (var b in All) if (b.So != null && b.So.Pointer == p) return b;
+            return null;
+        }
+
         /// <summary>The top-speed scale of a bike's vehicle data, 1 for anything else.</summary>
         internal static float TopSpeedScaleOf(Vehicle_SO so)
         {

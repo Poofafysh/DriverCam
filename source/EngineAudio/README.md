@@ -3,7 +3,7 @@
 BepInEx 6 IL2CPP plugin for **Driving Rogue**: a realistic engine sound made from the game's own engine recordings,
 played from a simulated RPM that follows the game's gearbox and your throttle.
 
-Current version: **0.3.0**
+Current version: **0.4.0**
 
 Design doc (claude.ai): "Engine Audio - Realistic Engine Sound" (`391e5ae4-7e88-410a-a632-30b562d13148`).
 
@@ -27,7 +27,15 @@ near-silence.
   ten times a second, so a held note keeps its texture instead of buzzing. Steady mode starts when the RPM's spot moves
   slower than 0.25 s of recording per second and only ends above 0.55, so the top-speed wander practically never flips
   it back (and the pitch eases if it does).
-- **Pitch follows the RPM:** besides where in the recording it plays, the pitch itself rises from `PitchAtIdle` (0.85)
+- **Measured pitch matching (0.4.0, `MatchPitch`, default on):** every rev-up / rev-down recording of the game was
+  pitch-tracked offline, and the measured pitch curve of each (33 points, `PitchCurves.cs`: numbers, not sound) is used
+  to play it. The sweeps are far from straight: the first gear's spans 2.8-6.7x in pitch, gears 2-4 only 1.04-1.5x
+  (the RX-7 and V12 top gears about 4%), while the simulated RPM swings from 58% to 100% of the redline in every gear.
+  Played by a straight position (before 0.4.0) the note stood nearly still while the tachometer climbed. Now the RPM's
+  share of the redline picks the moment in the recording with that pitch, and the rest is an exact pitch ratio, so the
+  note follows the RPM in every gear (a recording's top is taken as the redline). `Tone` moves the whole note.
+  `PitchAtIdle` / `PitchAtRedline` below only apply with `MatchPitch` off.
+- **Pitch follows the RPM (with `MatchPitch` off):** besides where in the recording it plays, the pitch itself rises from `PitchAtIdle` (0.85)
   at idle to `PitchAtRedline` (1.3) at the redline, so holding the redline (or top speed, where the engine sits near it)
   sounds high, not low.
 - **Exhaust pops on lift-off only:** letting go of the gas above `PopMinRpm` (60%) of the redline starts a sequence
@@ -104,6 +112,8 @@ near-silence.
 | `Tires.Enabled` | true | tyre squeal when drifting / cornering hard (read live) |
 | `Tires.Volume` | 0.5 | tyre squeal volume (0-2); the game's sound-effects volume applies on top |
 | `Tires.Pitch` | 1 | tyre squeal pitch (0.5-1.5; lower = deeper; read live) |
+| `Engine.MatchPitch` | true | play each recording where its measured pitch matches the RPM, pitch the rest exactly (0.4.0) |
+| `Engine.Tone` | 1 | with MatchPitch: the whole engine note up or down (0.7-1.4) |
 | `Engine.PitchAtIdle` | 0.85 | engine pitch at idle, on top of the recording (0.5-1.5; read live) |
 | `Engine.PitchAtRedline` | 1.3 | engine pitch at the redline (0.8-2; read live). The pitch rises smoothly with the RPM between the two, so a held redline / top speed sounds high |
 | `Exhaust.Pops` | true | synthesized pops and crackles when you lift off the gas at high RPM; never on throttle or upshifts |
@@ -114,9 +124,10 @@ near-silence.
 
 ## Log (`/game-log EngineAudio`)
 
-- `[EngineAudio] game check OK: player engine, gearbox, tyres, traffic engines`, `[EngineAudio] traffic engines patched (AIVehicleSoundHandler.HandleSFXs, SetupEngineSound)` and `EngineAudio 0.3.0 loaded. F1 switches between EngineAudio and the game's own engine sound.`
+- `[EngineAudio] game check OK: player engine, gearbox, tyres, traffic engines`, `[EngineAudio] traffic engines patched (AIVehicleSoundHandler.HandleSFXs, SetupEngineSound)` and `EngineAudio x.y.z loaded. F1 switches between EngineAudio and the game's own engine sound.`
 - `[EngineAudio] engine voices ready: rev-up <clips>; rev-down <clips>; blow-offs N; the game's gearbox, mixer group
-  'Engine', clip load type ...; tyre squeal on (mixer group '<the drift sound's group>')` once per car (or `tyre squeal
+  'Engine', clip load type ...; tyre squeal on (mixer group '<the drift sound's group>'); pitch matching on (N of M recordings
+  measured)` once per car (or `tyre squeal
   off (<why>)`, or `clips still being made` followed a moment later by `[EngineAudio] tyre squeal on (...)`).
 - `[EngineAudio] engine sound handed back to the game (<why>)` when it lets go.
 

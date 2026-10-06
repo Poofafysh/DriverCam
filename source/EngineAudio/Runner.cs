@@ -27,6 +27,8 @@ namespace EngineAudio
 
         private readonly EngineModel _engine = new EngineModel();
         private float _load;   // eased throttle
+        private IntPtr _onClipPtr, _offClipPtr;      // clip name cache (an Il2Cpp string read allocates)
+        private string _onClipName, _offClipName;
         private CarRead _car;
         private IntPtr _builtFor;
         private GameObject _voices;
@@ -155,8 +157,21 @@ namespace EngineAudio
             var onClip = Helpers.Pick(_accel, Math.Min(_engine.Gear, 3));
             var offClip = Helpers.Pick(_decel, FM.Clamp(_engine.Gear, 1, 3));
             var idleClip = Helpers.Pick(_decel, 0);
-            _on.Update(onClip, onClip == null ? 0f : onClip.length * (0.04f + 0.9f * span), onW * master, layerPitch, false, dt);
-            _off.Update(offClip, offClip == null ? 0f : offClip.length * (0.04f + 0.9f * (1f - span)), offW * master, layerPitch, false, dt);
+            float onPos = onClip == null ? 0f : onClip.length * (0.04f + 0.9f * span), onPitch = layerPitch;
+            float offPos = offClip == null ? 0f : offClip.length * (0.04f + 0.9f * (1f - span)), offPitch = layerPitch;
+            if (Plugin.MatchPitch.Value)
+            {
+                // 0.4.0: the RPM's share of the redline picks the moment of the recording with that measured pitch, and
+                // the rest is an exact pitch ratio (PitchCurves): the note follows the RPM in every gear
+                float rho = FM.Clamp(_engine.Rpm / FM.Max(1f, _engine.Redline), 0.1f, 1.1f);
+                float tone = FM.Clamp(Plugin.Tone.Value, 0.7f, 1.4f);
+                if (onClip != null && PitchCurves.Find(PitchCurves.NameOf(onClip, ref _onClipPtr, ref _onClipName), onClip.length, rho, true, out float p1, out float r1))
+                { onPos = p1; onPitch = FM.Clamp(pitch * r1 * tone, 0.5f, 2f); }
+                if (offClip != null && PitchCurves.Find(PitchCurves.NameOf(offClip, ref _offClipPtr, ref _offClipName), offClip.length, rho, false, out float p2, out float r2))
+                { offPos = p2; offPitch = FM.Clamp(pitch * r2 * tone, 0.5f, 2f); }
+            }
+            _on.Update(onClip, onPos, onW * master, onPitch, false, dt);
+            _off.Update(offClip, offPos, offW * master, offPitch, false, dt);
             float idlePitch = FM.Clamp(_engine.Rpm / _engine.Idle, 0.85f, 1.6f) * pitch;
             _idle.Update(idleClip, 0f, idleW * master, idlePitch, true, dt);
 
@@ -230,7 +245,8 @@ namespace EngineAudio
             _pops = null; _nextPopsTry = 0f;
             Plugin.Log.LogInfo($"[EngineAudio] engine voices ready: rev-up {Helpers.Names(_accel)}; rev-down {Helpers.Names(_decel)}; blow-offs {_blow.Length}; " +
                                $"{(_car.HasGearbox ? "the game's gearbox" : "simulated gears")}, mixer group '{(mixer != null ? mixer.name : "none")}', " +
-                               $"clip load type {(_accel.Length > 0 && _accel[0] != null ? _accel[0].loadType.ToString() : "?")}; {tires}");
+                               $"clip load type {(_accel.Length > 0 && _accel[0] != null ? _accel[0].loadType.ToString() : "?")}; {tires}; " +
+                               $"pitch matching {(Plugin.MatchPitch.Value ? $"on ({PitchCurves.Measured(_accel, _decel)} recordings measured)" : "off")}");
             return true;
         }
 

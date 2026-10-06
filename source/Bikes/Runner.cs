@@ -28,6 +28,7 @@ namespace Bikes
         private IntPtr _skinPtr;
         private Transform _skin, _lean, _steerF, _bars, _wheelF, _wheelR, _carSpinF, _carSteerF, _carSpinR;
         private Rigidbody _rb;
+        private BikeFx _fx;   // 0.3.0: the bike's own tyre marks / smoke (the car's are hidden on its body)
         private float _leanDeg;
         private int _errors;
         internal static bool Broken;
@@ -89,6 +90,7 @@ namespace Bikes
 
         private void LateUpdate()
         {
+            if (Handling.Ok && !Handling.Off) { try { Handling.Track(); } catch (Exception e) { Handling.Fault(e); } }   // its own 3-error breaker
             if (Broken) return;
             try { Animate(); }
             catch (Exception e) { Fault(e); }
@@ -110,6 +112,8 @@ namespace Bikes
         private void OnDestroy()
         {
             try { Hitbox.Restore("plugin unloaded"); } catch { /* shutting down */ }
+            try { Handling.Shutdown(); } catch { /* shutting down */ }
+            try { Clear(); } catch { /* shutting down: the bike effects go with Clear */ }
             try { Garage.Remove("plugin unloaded", force: true); } catch { /* shutting down */ }
             Garage.DestroyAll();
             BikeModel.DestroyAll();
@@ -118,6 +122,7 @@ namespace Bikes
         private void Clear()
         {
             _skinPtr = IntPtr.Zero; _skin = null; _lean = null; _steerF = null; _bars = null; _wheelF = null; _wheelR = null;
+            if (_fx != null) { try { _fx.Destroy(); } catch { /* body gone */ } _fx = null; }
             _carSpinF = null; _carSteerF = null; _carSpinR = null; _rb = null; _leanDeg = 0f; _hasYaw = false; _yawRate = 0f;
         }
 
@@ -142,17 +147,36 @@ namespace Bikes
                 if (Plugin.Enabled.Value) Hitbox.Apply(veh.transform, _rb, _carSpinF, _carSpinR, bike: _lean != null);
             }
             if (_lean == null) return;   // a car model: its wheels ride on the donor's pivots, no lean
+            if (_fx != null) _fx.Update();
 
             // wheels: copy the game's own spin and steer
             if (_wheelF != null && _carSpinF != null) _wheelF.localRotation = _carSpinF.localRotation;
-            if (_steerF != null && _carSteerF != null) _steerF.localRotation = _carSteerF.localRotation;
-            if (_bars != null && _carSteerF != null) _bars.localRotation = _carSteerF.localRotation;
+            if (Handling.Active)
+            {
+                // 0.3.0: the handling model steers (the game's own steer input no longer turns the car)
+                var steer = Quaternion.Euler(0f, Handling.SteerDeg, 0f);
+                if (_steerF != null) _steerF.localRotation = _steerBase * steer;
+                if (_bars != null) _bars.localRotation = _barsBase * steer;
+            }
+            else
+            {
+                if (_steerF != null && _carSteerF != null) _steerF.localRotation = _carSteerF.localRotation;
+                if (_bars != null && _carSteerF != null) _bars.localRotation = _carSteerF.localRotation;
+            }
             if (_wheelR != null && _carSpinR != null) _wheelR.localRotation = _carSpinR.localRotation;
 
             // lean into the corner: tan(lean) = v x yaw rate / g
             float target = 0f;
             float dt = Time.deltaTime;
-            if (_rb != null && dt > 0f)
+            float max = Math.Max(0f, Math.Min(65f, Plugin.MaxLean.Value));
+            if (Handling.Active)
+            {
+                // 0.3.0: the handling model's lean (it makes the turn), smooth by construction (physics-step state)
+                target = -Handling.LeanDeg * Plugin.LeanScale.Value;
+                if (target > max) target = max; else if (target < -max) target = -max;
+                _hasYaw = false;
+            }
+            else if (_rb != null && dt > 0f)
             {
                 Vector3 v = _rb.linearVelocity;
                 Vector3 fwd = _rb.transform.forward;
@@ -161,20 +185,21 @@ namespace Bikes
                 if (dYaw > Math.PI) dYaw -= (float)(2 * Math.PI); else if (dYaw < -Math.PI) dYaw += (float)(2 * Math.PI);
                 _prevYaw = yaw; _hasYaw = true;
                 float rate = dYaw / dt;                                  // rad/s, + = turning right
-                _yawRate += (rate - _yawRate) * (1f - (float)Math.Exp(-12f * dt));   // per-frame heading is noisy
+                // a frame holds 0, 1 or 2 physics steps, so the per-frame heading change jumps: smooth it hard (0.2.6 rocked
+                // the bike up and down on its ground pivot with 12/s)
+                _yawRate += (rate - _yawRate) * (1f - (float)Math.Exp(-2.5f * dt));
                 float speed = (float)Math.Sqrt(v.x * v.x + v.z * v.z);
                 float lat = speed * _yawRate;
-                float max = Math.Max(0f, Math.Min(65f, Plugin.MaxLean.Value));
                 target = -(float)(Math.Atan2(lat, 9.81) * 180.0 / Math.PI) * Plugin.LeanScale.Value;
                 if (speed < 3f) target *= speed / 3f;   // upright at a crawl
                 if (target > max) target = max; else if (target < -max) target = -max;
             }
-            float k = dt > 0f ? 1f - (float)Math.Exp(-8f * dt) : 0f;
+            float k = dt > 0f ? 1f - (float)Math.Exp((Handling.Active ? -20f : -8f) * dt) : 0f;
             _leanDeg += (target - _leanDeg) * k;
             _lean.localRotation = _leanBase * Quaternion.Euler(0f, 0f, _leanDeg);
         }
 
-        private Quaternion _leanBase = Quaternion.identity;
+        private Quaternion _leanBase = Quaternion.identity, _steerBase = Quaternion.identity, _barsBase = Quaternion.identity;
         private float _prevYaw, _yawRate;
         private bool _hasYaw;
 
@@ -202,6 +227,13 @@ namespace Bikes
                 }
             }
             _leanBase = _lean != null ? _lean.localRotation : Quaternion.identity;
+            _steerBase = _steerF != null ? _steerF.localRotation : Quaternion.identity;
+            _barsBase = _bars != null ? _bars.localRotation : Quaternion.identity;
+            if (_lean != null && _steerF != null && _wheelR != null)
+            {
+                try { _fx = BikeFx.Build(skin, _lean, _steerF.localPosition, _wheelR.localPosition); }
+                catch (Exception e) { _fx = null; Plugin.Log.LogWarning($"[Bikes] bike effects not built (the car's stay): {e.Message}"); }
+            }
             int layer = Garage.MatchLayer(skin);   // 0.2.3: on the car's layer, so the game's velocity blur skips it (Garage.MatchLayer)
             if (!_loggedRide)
             {

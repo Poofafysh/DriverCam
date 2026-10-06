@@ -85,6 +85,10 @@ namespace RogueHub
             ["drivingrogue.drivercam"] = "CAMERA", ["rogue.headlook"] = "CAMERA",
             ["rogue.trafficdensity"] = "WORLD", ["rogue.police"] = "WORLD",
             ["rogue.racingline"] = "SCORE", ["rogue.engineaudio"] = "AUDIO",
+            // newer plugins (were falling into SYSTEM, where their settings were hard to find)
+            ["rogue.sandbox"] = "WORLD", ["rogue.declutter"] = "WORLD",
+            ["rogue.bikes"] = "DRIVING", ["rogue.carskins"] = "DRIVING", ["rogue.reverse"] = "DRIVING",
+            ["rogue.driver"] = "CAMERA", ["rogue.unreallink"] = "CAMERA",
         };
 
         /// <summary>Entries a plugin writes itself (never shown). Plugins with HubLink tags mark these with hidden=1.</summary>

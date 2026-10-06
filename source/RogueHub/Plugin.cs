@@ -25,7 +25,7 @@ namespace RogueHub
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.hub";
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.1";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, Chord, PauseButton, Toasts;

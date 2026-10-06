@@ -95,6 +95,7 @@ namespace Sandbox
 
         private void Update()
         {
+            SsrGuard.Apply(Plugin.Active);   // SSR off for the whole run (independent of StripBuildings); has its own breaker
             if (_broken) return;
             try
             {
@@ -123,6 +124,7 @@ namespace Sandbox
         private void OnDestroy()
         {
             try { RestoreAll("plugin unloaded"); } catch { /* shutting down */ }
+            try { SsrGuard.RestoreNow("plugin unloaded"); } catch { /* shutting down */ }
             if (_instance == this) _instance = null;
         }
 

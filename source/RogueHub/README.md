@@ -4,7 +4,7 @@ BepInEx 6 IL2CPP plugin for **Driving Rogue**: one menu for every mod. Every ins
 automatically (read from BepInEx, no change to the plugin needed), drawn in the game's own style: toggles, sliders with
 a number box, lists, key binds and buttons, with a description of each setting.
 
-Current version: **0.1.0**
+Current version: **0.1.1**
 
 Design doc: "Rogue Hub: one menu for every mod" (claude.ai doc 99d98c4b-7b01-4f2a-bf9f-12982034b3a3), version 1.
 

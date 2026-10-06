@@ -42,6 +42,7 @@
     <Reference Include="UnityEngine.UIModule"><HintPath>$(GameDir)\BepInEx\interop\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.TextMeshPro"><HintPath>$(GameDir)\BepInEx\interop\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.InputSystem"><HintPath>$(GameDir)\BepInEx\interop\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime"><HintPath>$(GameDir)\BepInEx\interop\Unity.RenderPipelines.Universal.Runtime.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
   <ItemGroup>

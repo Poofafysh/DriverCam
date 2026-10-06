@@ -34,7 +34,7 @@ namespace Sandbox
     public class Plugin : BasePlugin
     {
         public const string Guid = "rogue.sandbox";
-        public const string Version = "0.3.0";
+        public const string Version = "0.3.1";
 
         internal static new ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled, AllCardsPicker;

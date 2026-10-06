@@ -1,6 +1,6 @@
 # Sandbox
 
-Current version: 0.3.0
+Current version: 0.3.1
 
 A separate run mode for trying builds: a **SANDBOX** button on the main menu (right under Singleplayer) starts a run
 in which every card is free and you can have 20 mods. Sandbox runs stay off your records (except the known gaps under Risks and limits).
